@@ -911,7 +911,10 @@ if(CONFIG_BOARD_TYPE_XIAO_ESP32S3_SENSE OR CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROB
         "boards/common/desk_robot/motor_controller.cc"
         "boards/common/desk_robot/robot_web_control_server.cc"
     )
-    list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/desk_robot")
+    list(APPEND INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/desk_robot"
+        "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}"
+    )
 endif()
 
 # Select one audio engine for each chip family
