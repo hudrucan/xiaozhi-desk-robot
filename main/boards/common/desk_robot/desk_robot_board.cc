@@ -464,15 +464,18 @@ public:
     DeskRobotBoard() : boot_button_(BOOT_BUTTON_GPIO, BUTTON_ACTIVE_HIGH, 3000) {
         InitializeSpi();
         InitializeDisplay();
+        // Bring up the panel backlight before camera/audio initialization. A
+        // peripheral failure later in boot must not leave the display looking
+        // completely unpowered and hide the splash or diagnostic state.
+        if (GetBacklight() != nullptr) {
+            GetBacklight()->RestoreBrightness();
+        }
         InitializeButtons();
         InitializeCamera();
         InitializeAudioSettings();
         InitializeLiveCamera();
         InitializeTools();
         InitializeWebControl();
-        if (GetBacklight() != nullptr) {
-            GetBacklight()->RestoreBrightness();
-        }
         ESP_LOGI(TAG, "Desk robot board initialized");
     }
 
