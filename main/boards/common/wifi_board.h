@@ -19,7 +19,7 @@ protected:
      * @param event The network event type
      * @param data Additional data (e.g., SSID for Connecting/Connected events)
      */
-    void OnNetworkEvent(NetworkEvent event, const std::string& data = "");
+    virtual void OnNetworkEvent(NetworkEvent event, const std::string& data = "");
 
     /**
      * Start WiFi connection attempt

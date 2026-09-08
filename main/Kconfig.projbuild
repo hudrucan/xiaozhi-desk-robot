@@ -419,6 +419,12 @@ choice BOARD_TYPE
     config BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER
         bool "Seeed Studio SenseCAP Watcher"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_XIAO_ESP32S3_SENSE
+        bool "Seeed Studio XIAO ESP32-S3 Sense"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
+        bool "ESP32-S3 Camera Robot"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_SPOTPEAR_ESP32_S3_1_28_BOX
         bool "Spotpear ESP32-S3 1.28 Box"
         depends on IDF_TARGET_ESP32S3

@@ -288,6 +288,16 @@ elseif(CONFIG_BOARD_TYPE_ESP_SPARKBOT)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
+elseif(CONFIG_BOARD_TYPE_XIAO_ESP32S3_SENSE)
+    set(BOARD_DIR "seeed/xiao-esp32s3-sense")
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
+    set(BUILTIN_ICON_FONT font_material_symbols_20_4)
+    set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
+elseif(CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT)
+    set(BOARD_DIR "generic/esp32-s3-camera-robot")
+    set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
+    set(BUILTIN_ICON_FONT font_material_symbols_20_4)
+    set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
 elseif(CONFIG_BOARD_TYPE_ESP_SPOT_S3)
     set(BOARD_DIR "espressif/esp-spot")
 elseif(CONFIG_BOARD_TYPE_ESP_SPOT_C5)
@@ -894,6 +904,16 @@ file(GLOB BOARD_SOURCES
 )
 list(APPEND SOURCES ${BOARD_SOURCES})
 
+if(CONFIG_BOARD_TYPE_XIAO_ESP32S3_SENSE OR CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT)
+    list(APPEND SOURCES
+        "boards/common/desk_robot/desk_robot_board.cc"
+        "boards/common/desk_robot/mochan_display.cc"
+        "boards/common/desk_robot/motor_controller.cc"
+        "boards/common/desk_robot/robot_web_control_server.cc"
+    )
+    list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/desk_robot")
+endif()
+
 # Select one audio engine for each chip family
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
     list(APPEND SOURCES "audio/engines/afe_audio_engine.cc")
@@ -1073,6 +1093,11 @@ if(CONFIG_BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD)
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA
         esp_driver_sdmmc
         sdmmc
+    )
+endif()
+if(CONFIG_BOARD_TYPE_XIAO_ESP32S3_SENSE OR CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA
+        esp_http_server
     )
 endif()
 idf_component_register(SRCS ${SOURCES}
