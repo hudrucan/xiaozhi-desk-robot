@@ -17,9 +17,9 @@
 #define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_40
 #define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_39
 
-// TTP223 touch output is active high. The onboard BOOT switch shares GPIO0.
+// Use the onboard BOOT switch on GPIO0. It is active low.
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
-#define BUTTON_ACTIVE_HIGH true
+#define BUTTON_ACTIVE_HIGH false
 
 // Eight-pixel WS2812 strip shown in the wiring diagram.
 #define BUILTIN_LED_GPIO GPIO_NUM_14

@@ -1,7 +1,7 @@
 # ESP32-S3 Camera Robot
 
 Generic ESP32-S3 WROOM camera board wired to an INMP441 microphone, an I2S amplifier,
-an ST7789 240x240 display, an L298N Mini motor driver, a TTP223 touch button, and an
+an ST7789 240x240 display, an L298N Mini motor driver, the onboard BOOT button, and an
 eight-pixel WS2812 strip.
 
 The board uses the shared desk-robot implementation, including the Mochan-style UI,
