@@ -262,7 +262,14 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
         }
 
         auto write_part = [&http](const char* name, const char* data, size_t length) {
-            const int written = http->Write(data, length);
+            auto write_result = http->Write(data, length);
+            if (!write_result) {
+                ESP_LOGE(TAG, "JPEG upload %s failed: %s", name,
+                         write_result.error().ToString().c_str());
+                return false;
+            }
+
+            const int written = *write_result;
             if (written != static_cast<int>(length)) {
                 ESP_LOGE(TAG, "JPEG upload %s failed: wrote %d/%zu bytes", name, written,
                          length);
@@ -284,9 +291,15 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
         }
 
         ESP_LOGI(TAG, "JPEG upload complete; waiting for response");
-        const int status_code = http->GetStatusCode();
-        if (status_code != 200) {
-            ESP_LOGE(TAG, "Failed to upload photo, status code: %d", status_code);
+        auto status_code = http->GetStatusCode();
+        if (!status_code) {
+            ESP_LOGE(TAG, "Failed to read HTTP status: %s",
+                     status_code.error().ToString().c_str());
+            http->Close();
+            return std::unexpected("Failed to upload photo");
+        }
+        if (*status_code != 200) {
+            ESP_LOGE(TAG, "Failed to upload photo, status code: %d", *status_code);
             http->Close();
             return std::unexpected("Failed to upload photo");
         }

@@ -1277,12 +1277,11 @@ private:
                 const auto direction = properties["direction"].value<std::string>();
                 MotorController::Direction command;
                 if (!ParseDirection(direction, command)) {
-                    return std::unexpected(
-                        "direction must be forward, backward, left, or right");
+                    return std::string("direction must be forward, backward, left, or right");
                 }
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
                 if (IsDirectionBlockedByCliff(command)) {
-                    return std::unexpected(
+                    return std::string(
                         "Movement blocked: table edge detected; reverse remains available");
                 }
 #endif
@@ -1316,7 +1315,7 @@ private:
             [this](const PropertyList& properties) -> ReturnValue {
                 const std::string emotion = properties["emotion"].value<std::string>();
                 if (!QueueTemporaryEmotion(emotion, properties["duration_ms"].value<int>())) {
-                    return std::unexpected("Unsupported face emotion");
+                    return std::string("Unsupported face emotion");
                 }
                 return true;
             });
@@ -1334,7 +1333,7 @@ private:
                     direction = "neutral";
                 }
                 if (!QueueTemporaryEmotion(direction, properties["duration_ms"].value<int>())) {
-                    return std::unexpected("Unsupported look direction");
+                    return std::string("Unsupported look direction");
                 }
                 return true;
             });
@@ -1350,7 +1349,7 @@ private:
             [this](const PropertyList& properties) -> ReturnValue {
                 if (!QueueTemporaryOledText(properties["text"].value<std::string>(),
                                             properties["duration_ms"].value<int>())) {
-                    return std::unexpected("OLED is unavailable or text is empty");
+                    return std::string("OLED is unavailable or text is empty");
                 }
                 return true;
             });
@@ -1368,7 +1367,7 @@ private:
             [this](const PropertyList& properties) -> ReturnValue {
                 if (!QueueStatusLightEffect(properties["effect"].value<std::string>(),
                                             properties["duration_ms"].value<int>())) {
-                    return std::unexpected("Unsupported status-light effect");
+                    return std::string("Unsupported status-light effect");
                 }
                 return true;
             });
