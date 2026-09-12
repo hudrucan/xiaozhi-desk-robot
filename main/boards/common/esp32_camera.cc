@@ -11,6 +11,7 @@
 #include "esp32_camera.h"
 #include "esp_timer.h"
 #include "jpg/image_to_jpeg.h"
+#include "jpg/jpeg_to_image.h"
 #include "lvgl_display.h"
 #include "mcp_server.h"
 #include "system_info.h"
@@ -73,7 +74,22 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
     explain_token_ = token;
 }
 
-bool Esp32Camera::Capture() {
+bool Esp32Camera::Capture() { return CaptureInternal(true); }
+
+bool Esp32Camera::CaptureForWeb() { return CaptureInternal(false); }
+
+bool Esp32Camera::GetCurrentJpeg(const uint8_t*& data, size_t& length) const {
+    if (current_fb_ == nullptr || current_fb_->format != PIXFORMAT_JPEG) {
+        data = nullptr;
+        length = 0;
+        return false;
+    }
+    data = current_fb_->buf;
+    length = current_fb_->len;
+    return data != nullptr && length > 0;
+}
+
+bool Esp32Camera::CaptureInternal(bool update_preview) {
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -95,7 +111,7 @@ bool Esp32Camera::Capture() {
     }
 
     // Prepare encode buffer for RGB565 format (with optional byte swapping)
-    if (current_fb_->format == PIXFORMAT_RGB565) {
+    if (update_preview && current_fb_->format == PIXFORMAT_RGB565) {
         size_t pixel_count = current_fb_->width * current_fb_->height;
         size_t data_size = pixel_count * 2;
 
@@ -139,10 +155,27 @@ bool Esp32Camera::Capture() {
                 heap_caps_free(preview_data);
             }
         }
-    } else if (current_fb_->format == PIXFORMAT_JPEG) {
-        // JPEG format preview usually requires decoding, skip preview display for now, just log
-        ESP_LOGW(TAG, "JPEG capture success, len=%zu, but not supported for preview",
-                 current_fb_->len);
+    } else if (update_preview && current_fb_->format == PIXFORMAT_JPEG) {
+        uint8_t* preview_data = nullptr;
+        size_t preview_len = 0;
+        size_t preview_width = 0;
+        size_t preview_height = 0;
+        size_t preview_stride = 0;
+        esp_err_t decode_result =
+            jpeg_to_image(current_fb_->buf, current_fb_->len, &preview_data, &preview_len,
+                          &preview_width, &preview_height, &preview_stride);
+        if (decode_result == ESP_OK) {
+            auto display = Board::GetInstance().GetDisplay();
+            if (display != nullptr) {
+                display->SetPreviewImage(std::make_unique<LvglAllocatedImage>(
+                    preview_data, preview_len, preview_width, preview_height, preview_stride,
+                    LV_COLOR_FORMAT_RGB565));
+            } else {
+                heap_caps_free(preview_data);
+            }
+        } else {
+            ESP_LOGE(TAG, "JPEG preview decode failed: %s", esp_err_to_name(decode_result));
+        }
     }
 
     ESP_LOGI(TAG, "Captured frame: %dx%d, len=%zu, format=%d", current_fb_->width,
@@ -181,6 +214,92 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
 
     if (current_fb_ == nullptr) {
         return std::unexpected("No camera frame captured");
+    }
+
+    // DVP sensors on this board produce JPEG directly. Send that frame with a
+    // fixed Content-Length instead of chunked transfer encoding: some image
+    // explain endpoints accept the TCP connection but never consume a chunked
+    // multipart request, leaving the MCP call pending indefinitely.
+    if (current_fb_->format == PIXFORMAT_JPEG) {
+        auto network = Board::GetInstance().GetNetwork();
+        auto http = network->CreateHttp(3);
+        http->SetTimeout(20000);
+
+        const std::string boundary = "----ESP32_CAMERA_BOUNDARY";
+        std::string question_field;
+        question_field += "--" + boundary + "\r\n";
+        question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
+        question_field += "\r\n";
+        question_field += question + "\r\n";
+
+        std::string file_header;
+        file_header += "--" + boundary + "\r\n";
+        file_header +=
+            "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
+        file_header += "Content-Type: image/jpeg\r\n";
+        file_header += "\r\n";
+
+        const std::string multipart_footer = "\r\n--" + boundary + "--\r\n";
+        const size_t content_length = question_field.size() + file_header.size() +
+                                      current_fb_->len + multipart_footer.size();
+
+        http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+        http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+        if (!explain_token_.empty()) {
+            http->SetHeader("Authorization", "Bearer " + explain_token_);
+        }
+        http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+        http->SetHeader("Content-Length", std::to_string(content_length));
+
+        // An engaged but empty content value makes HttpClient use raw writes
+        // after Open(), while the explicit Content-Length describes the body.
+        http->SetContent(std::string{});
+        ESP_LOGI(TAG, "JPEG upload begin: image=%zu bytes, body=%zu bytes", current_fb_->len,
+                 content_length);
+        if (!http->Open("POST", explain_url_)) {
+            ESP_LOGE(TAG, "Failed to connect to explain URL");
+            return std::unexpected("Failed to connect to explain URL");
+        }
+
+        auto write_part = [&http](const char* name, const char* data, size_t length) {
+            const int written = http->Write(data, length);
+            if (written != static_cast<int>(length)) {
+                ESP_LOGE(TAG, "JPEG upload %s failed: wrote %d/%zu bytes", name, written,
+                         length);
+                return false;
+            }
+            ESP_LOGD(TAG, "JPEG upload %s: %zu bytes", name, length);
+            return true;
+        };
+
+        const bool uploaded =
+            write_part("question", question_field.data(), question_field.size()) &&
+            write_part("header", file_header.data(), file_header.size()) &&
+            write_part("image", reinterpret_cast<const char*>(current_fb_->buf),
+                       current_fb_->len) &&
+            write_part("footer", multipart_footer.data(), multipart_footer.size());
+        if (!uploaded) {
+            http->Close();
+            return std::unexpected("Failed to upload photo");
+        }
+
+        ESP_LOGI(TAG, "JPEG upload complete; waiting for response");
+        const int status_code = http->GetStatusCode();
+        if (status_code != 200) {
+            ESP_LOGE(TAG, "Failed to upload photo, status code: %d", status_code);
+            http->Close();
+            return std::unexpected("Failed to upload photo");
+        }
+
+        std::string result = http->ReadAll();
+        http->Close();
+        if (result.empty()) {
+            ESP_LOGE(TAG, "Image explain returned an empty response");
+            return std::unexpected("Image explain returned an empty response");
+        }
+        ESP_LOGI(TAG, "Explain image size=%zu, question=%s\n%s", current_fb_->len,
+                 question.c_str(), result.c_str());
+        return result;
     }
 
     // Create local JPEG queue
@@ -260,6 +379,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(3);
+    http->SetTimeout(20000);
     std::string boundary = "----ESP32_CAMERA_BOUNDARY";
 
     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());

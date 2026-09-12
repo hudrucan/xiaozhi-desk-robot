@@ -17,13 +17,19 @@
 #define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_40
 #define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_39
 
-// Use the onboard BOOT switch on GPIO0. It is active low.
+// TTP223 with jumper A: idle high (LED on), touched low, connected to GPIO0.
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
 #define BUTTON_ACTIVE_HIGH false
 
-// Eight-pixel WS2812 strip shown in the wiring diagram.
-#define BUILTIN_LED_GPIO GPIO_NUM_14
-#define BUILTIN_LED_COUNT 8
+// Small Edison/status LED. It originally shared GPIO14 with the optional
+// WS2812 strip; the strip is omitted and the LED is driven by PWM on GPIO48.
+#define BUILTIN_LED_GPIO GPIO_NUM_48
+#define BUILTIN_LED_COUNT 1
+#define BUILTIN_LED_OUTPUT_INVERT false
+#define BUILTIN_LED_LEDC_TIMER LEDC_TIMER_2
+#define BUILTIN_LED_LEDC_CHANNEL LEDC_CHANNEL_2
+#define BUILTIN_LED_STATUS_PROFILE_EDISON true
+#define STATUS_LIGHT_DEFAULT_BRIGHTNESS 100
 
 // ST7789 1.5-inch IPS, 240x240, eight-pin SPI module.
 #define DISPLAY_SPI_HOST SPI3_HOST
@@ -31,21 +37,26 @@
 #define DISPLAY_MOSI_PIN GPIO_NUM_20
 #define DISPLAY_RST_PIN GPIO_NUM_21
 #define DISPLAY_DC_PIN GPIO_NUM_47
-#define DISPLAY_CS_PIN GPIO_NUM_45
-#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_38
+#define DISPLAY_CS_PIN GPIO_NUM_NC
+#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_45
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 #define HAS_DISPLAY_BACKLIGHT 1
 #define DISPLAY_SPI_MODE 3
+#define DISPLAY_SPI_CLOCK_HZ (10 * 1000 * 1000)
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 240
 #define DISPLAY_OFFSET_X 0
 #define DISPLAY_OFFSET_Y 0
+#define DISPLAY_PANEL_GAP_X 80
+#define DISPLAY_PANEL_GAP_Y 0
 #define DISPLAY_MIRROR_X false
-#define DISPLAY_MIRROR_Y false
-#define DISPLAY_SWAP_XY false
+#define DISPLAY_MIRROR_Y true
+#define DISPLAY_SWAP_XY true
 #define DISPLAY_INVERT_COLOR true
 
-// L298N Mini: motor B is left and motor A is right in the diagram.
+// L298N Mini: motor B is left and motor A is right in the wiring diagram.
+// GPIO43/GPIO44 normally carry UART0, so this board build disables the
+// application console and exposes logs through the local web UI instead.
 #define MOTOR_LEFT_IN1 GPIO_NUM_43
 #define MOTOR_LEFT_IN2 GPIO_NUM_44
 #define MOTOR_RIGHT_IN1 GPIO_NUM_3
@@ -69,9 +80,22 @@
 #define CAMERA_PIN_PWDN GPIO_NUM_NC
 #define CAMERA_PIN_RESET GPIO_NUM_NC
 #define CAMERA_XCLK_FREQ_HZ 20000000
+#define DESK_ROBOT_USE_ESP32_CAMERA 1
 
-// Optional VL53L0X shares the camera SCCB/I2C bus on GPIO4/GPIO5.
+// Downward-facing VL53L0X cliff sensor sharing the camera SCCB/I2C bus.
 #define DISTANCE_SENSOR_SDA_PIN GPIO_NUM_4
 #define DISTANCE_SENSOR_SCL_PIN GPIO_NUM_5
+#define DISTANCE_SENSOR_I2C_ADDRESS 0x29
+#define CLIFF_EDGE_DISTANCE_MM 150
+#define CLIFF_CONFIRM_SAMPLES 2
+#define DISTANCE_SENSOR_PERIOD_MS 80
+
+// Secondary 0.91-inch SSD1306 OLED on a dedicated I2C controller.
+#define SECONDARY_OLED_SDA_PIN GPIO_NUM_38
+#define SECONDARY_OLED_SCL_PIN GPIO_NUM_14
+#define SECONDARY_OLED_I2C_ADDRESS 0x3C
+#define SECONDARY_OLED_WIDTH 128
+#define SECONDARY_OLED_HEIGHT 32
+#define SECONDARY_OLED_FLIP_180 true
 
 #endif  // ESP32_S3_CAMERA_ROBOT_CONFIG_H_

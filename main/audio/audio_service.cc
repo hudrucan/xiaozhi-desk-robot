@@ -1,5 +1,7 @@
 #include "audio_service.h"
 #include <esp_log.h>
+#include <esp_timer.h>
+#include <algorithm>
 #include <cstring>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -228,6 +230,26 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     last_input_time_ = std::chrono::steady_clock::now();
     debug_statistics_.input_count++;
 
+    uint32_t peak = 0;
+    for (const int16_t sample : data) {
+        const int32_t value = sample;
+        peak = std::max<uint32_t>(peak, static_cast<uint32_t>(value < 0 ? -value : value));
+    }
+    const uint8_t measured_level =
+        static_cast<uint8_t>(std::min<uint32_t>(100, peak * 100 / 32767));
+    const uint8_t previous_level = input_level_.load(std::memory_order_relaxed);
+    const uint8_t smoothed_level =
+        measured_level >= previous_level
+            ? measured_level
+            : static_cast<uint8_t>((static_cast<uint16_t>(previous_level) * 7 + measured_level) /
+                                   8);
+    const int64_t now = esp_timer_get_time();
+    input_level_.store(smoothed_level, std::memory_order_relaxed);
+    last_input_level_us_.store(now, std::memory_order_relaxed);
+    if (peak >= 32000) {
+        last_input_clip_us_.store(now, std::memory_order_relaxed);
+    }
+
 #if CONFIG_USE_AUDIO_DEBUGGER
     // 音频调试：发送原始音频数据
     if (audio_debugger_ == nullptr) {
@@ -237,6 +259,17 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 #endif
 
     return true;
+}
+
+uint8_t AudioService::GetInputLevel() const {
+    if (esp_timer_get_time() - last_input_level_us_.load(std::memory_order_relaxed) > 750000) {
+        return 0;
+    }
+    return input_level_.load(std::memory_order_relaxed);
+}
+
+bool AudioService::IsInputClipping() const {
+    return esp_timer_get_time() - last_input_clip_us_.load(std::memory_order_relaxed) < 1000000;
 }
 
 void AudioService::AudioInputTask() {

@@ -2,7 +2,9 @@
 
 #include "display/lcd_display.h"
 
+#include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
 
 class MochanDisplay : public SpiLcdDisplay {
@@ -21,6 +23,9 @@ public:
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
     void SetTheme(Theme* theme) override;
     void SetWifiConnected(bool connected);
+    bool SetPanelMirror(bool mirror_x, bool mirror_y);
+    std::string GetCurrentEmotion() const;
+    static bool IsSupportedEmotion(const std::string& emotion);
 
     void ShowBootSplash();
     void HideBootSplash();
@@ -32,18 +37,62 @@ private:
         kSpeaking,
         kThinking,
         kHappy,
+        kLaughing,
+        kFunny,
         kAngry,
         kSad,
+        kCrying,
+        kLoving,
+        kEmbarrassed,
+        kSurprised,
+        kShocked,
+        kWinking,
+        kCool,
+        kRelaxed,
+        kDelicious,
+        kKissy,
+        kConfident,
+        kSleepy,
+        kSilly,
+        kConfused,
         kSuspicious,
         kShake,
+        kLookLeft,
+        kLookRight,
+        kLookUp,
+        kLookDown,
         kLookUpLeft,
         kLookUpRight,
         kLookDownLeft,
         kLookDownRight,
     };
 
+    enum class EyeShape {
+        kRounded,
+        kSmileArc,
+        kDroopArc,
+        kFlat,
+        kHeart,
+    };
+
+    static constexpr size_t kEyeLinePointCount = 19;
+
+    struct EyeGeometry {
+        int width;
+        int height;
+        int x;
+        int y;
+        int rotation;
+    };
+
     void SetFaceState(FaceState state);
-    void UpdateEyes(bool blink);
+    void AdvanceEyeAnimation();
+    void UpdateEyes(uint8_t blink_amount);
+    void ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
+                         uint8_t blink_amount);
+    void ApplyLineEye(lv_obj_t* line, lv_obj_t* shadow, lv_point_precise_t* points,
+                      const EyeGeometry& geometry, EyeShape shape, int stroke_width);
+    static bool AllowsNaturalBlink(FaceState state);
     void UpdateStatusDot();
     void ShowResponseBox();
     void HidePreview();
@@ -59,6 +108,12 @@ private:
     lv_obj_t* right_eye_ = nullptr;
     lv_obj_t* left_eyelid_ = nullptr;
     lv_obj_t* right_eyelid_ = nullptr;
+    lv_obj_t* left_eye_line_ = nullptr;
+    lv_obj_t* right_eye_line_ = nullptr;
+    lv_obj_t* left_eye_line_shadow_ = nullptr;
+    lv_obj_t* right_eye_line_shadow_ = nullptr;
+    lv_obj_t* left_eye_accent_ = nullptr;
+    lv_obj_t* right_eye_accent_ = nullptr;
     lv_obj_t* response_box_ = nullptr;
     lv_obj_t* subtitle_ = nullptr;
     lv_obj_t* notification_ = nullptr;
@@ -73,6 +128,7 @@ private:
     std::unique_ptr<LvglImage> camera_image_cached_;
     std::string typing_text_;
     size_t typing_position_ = 0;
+    int32_t response_scroll_target_ = 0;
     uint8_t typing_cursor_phase_ = 0;
     bool typing_cursor_visible_ = false;
     bool typing_active_ = false;
@@ -80,15 +136,15 @@ private:
     FaceState face_state_ = FaceState::kIdle;
     FaceState activity_state_ = FaceState::kIdle;
     bool emotion_active_ = false;
-    bool blink_closed_ = false;
-    uint8_t blink_phase_ = 0;
+    uint16_t animation_phase_ = 0;
+    uint16_t blink_countdown_ = 90;
+    uint8_t blink_step_ = 0;
     bool eye_geometry_initialized_ = false;
-    int eye_width_ = 74;
-    int eye_height_ = 54;
-    int eye_gap_ = 22;
-    int eye_gaze_x_ = 0;
-    int eye_gaze_y_ = -59;
-    int left_eye_rotation_ = 0;
-    int right_eye_rotation_ = 0;
+    EyeGeometry left_eye_geometry_{74, 54, -48, -59, 0};
+    EyeGeometry right_eye_geometry_{74, 54, 48, -59, 0};
+    lv_point_precise_t left_eye_line_points_[kEyeLinePointCount]{};
+    lv_point_precise_t right_eye_line_points_[kEyeLinePointCount]{};
     bool wifi_connected_ = false;
+    mutable std::mutex emotion_mutex_;
+    std::string current_emotion_ = "neutral";
 };

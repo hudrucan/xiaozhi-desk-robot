@@ -4,7 +4,11 @@
 #include "display/lvgl_display/lvgl_theme.h"
 
 #include <esp_err.h>
+#include <esp_log.h>
+#include <esp_random.h>
 #include <material_symbols.h>
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 
@@ -17,6 +21,16 @@ const lv_color_t kSpinnerTrack = LV_COLOR_MAKE(0x4b, 0x3b, 0x25);
 constexpr int kPreviewDurationMs = 5000;
 constexpr int kTypingPeriodMs = 42;
 constexpr int kTypingFinishPeriodMs = 20;
+constexpr int kResponseTextScale = 210;
+constexpr char kTag[] = "MochanDisplay";
+
+constexpr std::array<const char*, 33> kSupportedEmotions = {
+    "neutral",    "happy",       "laughing",  "funny",     "sad",        "angry",   "crying",
+    "loving",     "embarrassed", "surprised", "shocked",   "thinking",   "winking", "cool",
+    "relaxed",    "delicious",   "kissy",     "confident", "sleepy",     "silly",   "confused",
+    "suspicious", "shake",       "speaking",  "listening", "left",       "right",   "up",
+    "down",       "up_left",     "up_right",  "down_left", "down_right",
+};
 
 bool EndsWithSentencePunctuation(const std::string& text) {
     if (text.empty()) {
@@ -108,6 +122,38 @@ void MochanDisplay::SetupUI() {
         lv_obj_move_to_index(eyelid, 0);
     }
 
+    left_eye_line_shadow_ = lv_line_create(face_);
+    right_eye_line_shadow_ = lv_line_create(face_);
+    left_eye_line_ = lv_line_create(face_);
+    right_eye_line_ = lv_line_create(face_);
+    lv_line_set_points_mutable(left_eye_line_shadow_, left_eye_line_points_, kEyeLinePointCount);
+    lv_line_set_points_mutable(left_eye_line_, left_eye_line_points_, kEyeLinePointCount);
+    lv_line_set_points_mutable(right_eye_line_shadow_, right_eye_line_points_, kEyeLinePointCount);
+    lv_line_set_points_mutable(right_eye_line_, right_eye_line_points_, kEyeLinePointCount);
+    for (auto* line : {left_eye_line_shadow_, right_eye_line_shadow_}) {
+        lv_obj_set_style_line_color(line, kEyelidShadow, 0);
+        lv_obj_set_style_line_width(line, 11, 0);
+        lv_obj_set_style_line_rounded(line, true, 0);
+        lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    left_eye_accent_ = lv_obj_create(face_);
+    right_eye_accent_ = lv_obj_create(face_);
+    for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
+        lv_obj_set_style_bg_color(accent, kBrassHighlight, 0);
+        lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(accent, 0, 0);
+        lv_obj_set_style_radius(accent, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_shadow_width(accent, 0, 0);
+        lv_obj_add_flag(accent, LV_OBJ_FLAG_HIDDEN);
+    }
+    for (auto* line : {left_eye_line_, right_eye_line_}) {
+        lv_obj_set_style_line_color(line, kBrass, 0);
+        lv_obj_set_style_line_width(line, 8, 0);
+        lv_obj_set_style_line_rounded(line, true, 0);
+        lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
+    }
+
     wifi_icon_ = lv_label_create(container_);
     lv_label_set_text(wifi_icon_, MATERIAL_SYMBOLS_WIFI_OFF);
     lv_obj_set_style_text_color(wifi_icon_, kSpinnerTrack, 0);
@@ -136,16 +182,24 @@ void MochanDisplay::SetupUI() {
     lv_obj_set_style_border_color(response_box_, kSpinnerTrack, 0);
     lv_obj_set_style_border_width(response_box_, 1, 0);
     lv_obj_set_style_radius(response_box_, 8, 0);
-    lv_obj_set_style_pad_all(response_box_, 9, 0);
+    lv_obj_set_style_pad_left(response_box_, 9, 0);
+    lv_obj_set_style_pad_right(response_box_, 9, 0);
+    lv_obj_set_style_pad_top(response_box_, 11, 0);
+    lv_obj_set_style_pad_bottom(response_box_, 7, 0);
+    lv_obj_set_scroll_dir(response_box_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(response_box_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_add_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
 
     subtitle_ = lv_label_create(response_box_);
-    lv_obj_set_width(subtitle_, width_ - 38);
-    lv_obj_set_height(subtitle_, 94);
+    // Transforms do not participate in LVGL layout. Compensate the logical
+    // width so the visually scaled label still fills the response viewport.
+    const int response_text_width =
+        ((width_ - 38) * LV_SCALE_NONE + kResponseTextScale - 1) / kResponseTextScale;
+    lv_obj_set_width(subtitle_, response_text_width);
+    lv_obj_set_height(subtitle_, LV_SIZE_CONTENT);
     lv_obj_set_style_text_color(subtitle_, kBrassHighlight, 0);
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_transform_scale(subtitle_, 210, 0);
+    lv_obj_set_style_transform_scale(subtitle_, kResponseTextScale, 0);
     lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
     lv_obj_set_style_transform_pivot_y(subtitle_, 0, 0);
     lv_label_set_long_mode(subtitle_, LV_LABEL_LONG_WRAP);
@@ -153,7 +207,7 @@ void MochanDisplay::SetupUI() {
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
 
     notification_ = lv_label_create(response_box_);
-    lv_obj_set_width(notification_, width_ - 38);
+    lv_obj_set_width(notification_, response_text_width);
     lv_obj_set_style_text_color(notification_, kBrassHighlight, 0);
     lv_obj_set_style_text_align(notification_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_transform_scale(notification_, 210, 0);
@@ -171,9 +225,7 @@ void MochanDisplay::SetupUI() {
     eye_timer_ = lv_timer_create(
         [](lv_timer_t* timer) {
             auto* display = static_cast<MochanDisplay*>(lv_timer_get_user_data(timer));
-            display->blink_phase_ = static_cast<uint8_t>((display->blink_phase_ + 1) % 60);
-            const bool blink = display->blink_phase_ < 7;
-            display->UpdateEyes(blink);
+            display->AdvanceEyeAnimation();
         },
         50, this);
 
@@ -186,9 +238,14 @@ void MochanDisplay::SetupUI() {
 }
 
 void MochanDisplay::SetFaceState(FaceState state) {
+    if (face_state_ != state) {
+        animation_phase_ = 0;
+        blink_step_ = 0;
+        blink_countdown_ = static_cast<uint16_t>(80 + esp_random() % 61);
+    }
     face_state_ = state;
     UpdateStatusDot();
-    UpdateEyes(false);
+    UpdateEyes(0);
 }
 
 void MochanDisplay::UpdateStatusDot() {
@@ -228,99 +285,307 @@ void MochanDisplay::ShowResponseBox() {
     lv_anim_start(&animation);
 }
 
-void MochanDisplay::UpdateEyes(bool blink) {
+bool MochanDisplay::AllowsNaturalBlink(FaceState state) {
+    switch (state) {
+        case FaceState::kHappy:
+        case FaceState::kLaughing:
+        case FaceState::kCrying:
+        case FaceState::kLoving:
+        case FaceState::kSurprised:
+        case FaceState::kShocked:
+        case FaceState::kWinking:
+        case FaceState::kRelaxed:
+        case FaceState::kDelicious:
+        case FaceState::kKissy:
+        case FaceState::kSleepy:
+        case FaceState::kShake:
+            return false;
+        default:
+            return true;
+    }
+}
+
+void MochanDisplay::AdvanceEyeAnimation() {
+    ++animation_phase_;
+    uint8_t blink_amount = 0;
+    if (AllowsNaturalBlink(face_state_)) {
+        static constexpr uint8_t kBlinkCurve[] = {35, 75, 100, 70, 30};
+        if (blink_step_ != 0) {
+            blink_amount = kBlinkCurve[blink_step_ - 1];
+            ++blink_step_;
+            if (blink_step_ > sizeof(kBlinkCurve)) {
+                blink_step_ = 0;
+                blink_countdown_ = static_cast<uint16_t>(80 + esp_random() % 61);
+            }
+        } else if (blink_countdown_ > 0) {
+            --blink_countdown_;
+        } else {
+            blink_step_ = 1;
+        }
+    }
+    UpdateEyes(blink_amount);
+}
+
+void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
+                                    uint8_t blink_amount) {
+    const int height = std::max(7, geometry.height - (geometry.height - 7) * blink_amount / 100);
+    const int inset_x = std::min(4, std::max(2, geometry.width / 8));
+    const int inset_y = std::min(6, std::max(2, height / 4));
+
+    lv_obj_remove_flag(shadow, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(eye, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(shadow, geometry.width, height);
+    lv_obj_set_style_transform_pivot_x(shadow, geometry.width / 2, 0);
+    lv_obj_set_style_transform_pivot_y(shadow, height / 2, 0);
+    lv_obj_set_style_transform_rotation(shadow, geometry.rotation, 0);
+    lv_obj_align(shadow, LV_ALIGN_CENTER, geometry.x, geometry.y);
+
+    const int bright_width = std::max(8, geometry.width - inset_x);
+    const int bright_height = std::max(4, height - inset_y);
+    lv_obj_set_size(eye, bright_width, bright_height);
+    lv_obj_set_style_transform_pivot_x(eye, bright_width / 2, 0);
+    lv_obj_set_style_transform_pivot_y(eye, bright_height / 2, 0);
+    lv_obj_set_style_transform_rotation(eye, geometry.rotation, 0);
+    lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x - inset_x / 2, geometry.y - inset_y / 2);
+}
+
+void MochanDisplay::ApplyLineEye(lv_obj_t* line, lv_obj_t* shadow, lv_point_precise_t* points,
+                                 const EyeGeometry& geometry, EyeShape shape, int stroke_width) {
+    const int width = std::max(20, geometry.width);
+    const int height = std::max(12, geometry.height);
+    if (shape == EyeShape::kHeart) {
+        static constexpr int kHeartX[kEyeLinePointCount] = {
+            500, 400, 270, 140, 40,  10,  70,  190, 350, 500,
+            650, 810, 930, 990, 960, 860, 730, 600, 500,
+        };
+        static constexpr int kHeartY[kEyeLinePointCount] = {
+            260, 90, 20, 80, 230, 410, 560, 690, 820, 980, 820, 690, 560, 410, 230, 80, 20, 90, 260,
+        };
+        for (size_t index = 0; index < kEyeLinePointCount; ++index) {
+            points[index] = {width * kHeartX[index] / 1000, height * kHeartY[index] / 1000};
+        }
+    } else {
+        constexpr int kSpan = static_cast<int>(kEyeLinePointCount - 1);
+        for (int index = 0; index <= kSpan; ++index) {
+            const int x = 2 + index * (width - 4) / kSpan;
+            const int centered = index * 2 - kSpan;
+            const int curve = (height - 6) * centered * centered / (kSpan * kSpan);
+            int y = height / 2;
+            if (shape == EyeShape::kSmileArc) {
+                y = 3 + curve;
+            } else if (shape == EyeShape::kDroopArc) {
+                y = height - 3 - curve;
+            } else {
+                y += centered * centered / (kSpan * kSpan / 2) - 1;
+            }
+            points[index] = {x, y};
+        }
+    }
+
+    lv_obj_set_style_line_width(shadow, stroke_width + 4, 0);
+    lv_obj_set_style_line_width(line, stroke_width, 0);
+    for (auto* object : {shadow, line}) {
+        lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(object, width, height);
+        lv_obj_set_style_transform_pivot_x(object, width / 2, 0);
+        lv_obj_set_style_transform_pivot_y(object, height / 2, 0);
+        lv_obj_set_style_transform_rotation(object, geometry.rotation, 0);
+        lv_obj_invalidate(object);
+    }
+    lv_obj_align(shadow, LV_ALIGN_CENTER, geometry.x + 3, geometry.y + 4);
+    lv_obj_align(line, LV_ALIGN_CENTER, geometry.x, geometry.y);
+}
+
+void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
     if (left_eye_ == nullptr || right_eye_ == nullptr) {
         return;
     }
 
-    blink_closed_ = blink;
-    int eye_width = 74;
-    int eye_height = 54;
-    int gap = 22;
-    int left_rotation = 0;
-    int right_rotation = 0;
-    if (face_state_ == FaceState::kListening) {
-        eye_width = 78;
-        eye_height = 62;
-        gap = 18;
-    } else if (face_state_ == FaceState::kSpeaking) {
-        eye_width = 66;
-        eye_height = 48;
-        gap = 28;
-    } else if (face_state_ == FaceState::kThinking) {
-        eye_width = 70;
-        eye_height = 58;
-        gap = 30;
-    } else if (face_state_ == FaceState::kHappy) {
-        eye_width = 68;
-        eye_height = 28;
-        gap = 20;
-    } else if (face_state_ == FaceState::kAngry) {
-        eye_width = 72;
-        eye_height = 48;
-        gap = 18;
-        left_rotation = 120;
-        right_rotation = -120;
-    } else if (face_state_ == FaceState::kSad) {
-        eye_width = 62;
-        eye_height = 42;
-        gap = 30;
-        left_rotation = -80;
-        right_rotation = 80;
-    } else if (face_state_ == FaceState::kSuspicious) {
-        eye_width = 64;
-        eye_height = 50;
-        gap = 26;
-        left_rotation = -55;
-        right_rotation = -15;
-    }
-    if (blink_closed_) {
-        eye_height = 7;
-    } else if (face_state_ == FaceState::kSpeaking) {
-        // A restrained 600 ms "breathing" beat makes speech feel alive
-        // without tying animation timing to the audio task.
-        eye_height += (blink_phase_ / 6) % 2 == 0 ? -4 : 4;
-    }
+    struct EyeTarget {
+        EyeGeometry geometry;
+        EyeShape shape;
+        int stroke_width = 12;
+    };
+    EyeTarget left{{74, 54, -48, -59, 0}, EyeShape::kRounded};
+    EyeTarget right{{74, 54, 48, -59, 0}, EyeShape::kRounded};
 
-    int gaze_x = 0;
-    int gaze_y = -59;
-    if (face_state_ == FaceState::kIdle) {
-        if (blink_phase_ >= 12 && blink_phase_ <= 26) {
-            gaze_x = -9;
-            gaze_y = -56;
-        } else if (blink_phase_ >= 35 && blink_phase_ <= 50) {
-            gaze_x = 9;
-            gaze_y = -52;
+    const auto triangle = [](uint16_t phase, int period, int amplitude) {
+        const int position = phase % period;
+        const int half = period / 2;
+        const int ramp = position < half ? position : period - position;
+        return ramp * amplitude * 2 / half - amplitude;
+    };
+    const int gentle = triangle(animation_phase_, 32, 2);
+
+    switch (face_state_) {
+        case FaceState::kListening:
+            left.geometry = {78, 58 + gentle, -48, -60, 0};
+            right.geometry = {78, 58 + gentle, 48, -60, 0};
+            break;
+        case FaceState::kSpeaking:
+            left.geometry = {68, 46 + triangle(animation_phase_, 20, 3), -48, -59, 0};
+            right.geometry = {68, 46 + triangle(animation_phase_, 20, 3), 48, -59, 0};
+            break;
+        case FaceState::kThinking:
+            left.geometry = {68, 48, -57, -66, -20};
+            right.geometry = {68, 48, 39, -66, -20};
+            break;
+        case FaceState::kHappy:
+            left = {{64, 32, -45, -58 + gentle, 0}, EyeShape::kSmileArc};
+            right = {{64, 32, 45, -58 + gentle, 0}, EyeShape::kSmileArc};
+            break;
+        case FaceState::kLaughing:
+            left = {
+                {70, 38, -46, -57 + triangle(animation_phase_, 18, 4), 0}, EyeShape::kSmileArc, 14};
+            right = {
+                {70, 38, 46, -57 + triangle(animation_phase_, 18, 4), 0}, EyeShape::kSmileArc, 14};
+            break;
+        case FaceState::kFunny: {
+            const int sway = triangle(animation_phase_, 36, 5);
+            left = {{56, 48, -48 + sway, -59, -60}, EyeShape::kRounded};
+            right = {{64, 30, 49 + sway, -55, 30}, EyeShape::kSmileArc};
+            break;
         }
-    } else if (face_state_ == FaceState::kHappy) {
-        gaze_y = blink_phase_ < 30 ? -62 : -57;
-    } else if (face_state_ == FaceState::kAngry) {
-        gaze_y = -53;
-    } else if (face_state_ == FaceState::kSad) {
-        gaze_y = -49;
-    } else if (face_state_ == FaceState::kSuspicious) {
-        gaze_x = blink_phase_ < 30 ? -5 : 5;
-        gaze_y = -54;
-    } else if (face_state_ == FaceState::kThinking) {
-        gaze_x = blink_phase_ < 30 ? -12 : 12;
-        gaze_y = -50;
-    } else if (face_state_ == FaceState::kShake) {
-        gaze_x = (blink_phase_ / 3) % 2 == 0 ? -14 : 14;
-    } else if (face_state_ == FaceState::kLookUpLeft) {
-        gaze_x = -14;
-        gaze_y = -56;
-    } else if (face_state_ == FaceState::kLookUpRight) {
-        gaze_x = 14;
-        gaze_y = -56;
-    } else if (face_state_ == FaceState::kLookDownLeft) {
-        gaze_x = -14;
-        gaze_y = -28;
-    } else if (face_state_ == FaceState::kLookDownRight) {
-        gaze_x = 14;
-        gaze_y = -28;
+        case FaceState::kAngry:
+            left.geometry = {70, 42, -45, -56, 130};
+            right.geometry = {70, 42, 45, -56, -130};
+            break;
+        case FaceState::kSad:
+            left.geometry = {62, 40, -47, -50, -100};
+            right.geometry = {62, 40, 47, -50, 100};
+            break;
+        case FaceState::kCrying:
+            left = {{62, 31, -46, -49 + gentle, -20}, EyeShape::kDroopArc, 11};
+            right = {{62, 31, 46, -49 + gentle, 20}, EyeShape::kDroopArc, 11};
+            break;
+        case FaceState::kLoving: {
+            const int pulse = triangle(animation_phase_, 24, 3);
+            left = {{50 + pulse, 44 + pulse, -42, -58, 0}, EyeShape::kHeart, 8};
+            right = {{50 + pulse, 44 + pulse, 42, -58, 0}, EyeShape::kHeart, 8};
+            break;
+        }
+        case FaceState::kEmbarrassed:
+            left.geometry = {56, 36, -55, -48, -30};
+            right.geometry = {56, 36, 41, -48, 30};
+            break;
+        case FaceState::kSurprised:
+            left.geometry = {50, 66, -44, -57, 0};
+            right.geometry = {50, 66, 44, -57, 0};
+            break;
+        case FaceState::kShocked: {
+            const int jitter = (animation_phase_ / 2) % 2 == 0 ? -2 : 2;
+            left.geometry = {62, 70, -43 + jitter, -56, 0};
+            right.geometry = {62, 70, 43 + jitter, -56, 0};
+            break;
+        }
+        case FaceState::kWinking:
+            left = {{62, 20, -47, -55, -40}, EyeShape::kFlat, 12};
+            right.geometry = {66, 50, 47, -58, 0};
+            break;
+        case FaceState::kCool:
+            left = {{74, 22, -45, -56, 45}, EyeShape::kFlat, 13};
+            right = {{74, 22, 45, -56, -45}, EyeShape::kFlat, 13};
+            break;
+        case FaceState::kRelaxed:
+            left = {{66, 22, -46, -51, 0}, EyeShape::kFlat};
+            right = {{66, 22, 46, -51, 0}, EyeShape::kFlat};
+            break;
+        case FaceState::kDelicious: {
+            const int sway = triangle(animation_phase_, 30, 3);
+            left = {{64, 30, -46 + sway, -57, 0}, EyeShape::kSmileArc};
+            right.geometry = {58, 44, 46 + sway, -55, 20};
+            break;
+        }
+        case FaceState::kKissy:
+            left = {{56, 20, -49, -54, -70}, EyeShape::kFlat};
+            right = {{56, 20, 49, -54, 70}, EyeShape::kFlat};
+            break;
+        case FaceState::kConfident:
+            left.geometry = {74, 34, -44, -56, 70};
+            right.geometry = {74, 34, 44, -56, -70};
+            break;
+        case FaceState::kSleepy:
+            left = {{66, 22, -46, -48 + gentle, 0}, EyeShape::kDroopArc, 11};
+            right = {{66, 22, 46, -48 + gentle, 0}, EyeShape::kDroopArc, 11};
+            break;
+        case FaceState::kSilly: {
+            const int sway = triangle(animation_phase_, 26, 4);
+            left.geometry = {52, 58, -49 + sway, -59, 70};
+            right.geometry = {64, 38, 49 + sway, -52, -30};
+            break;
+        }
+        case FaceState::kConfused:
+            left.geometry = {62, 32, -48, -47, -80};
+            right.geometry = {68, 48, 48, -61, -20};
+            break;
+        case FaceState::kSuspicious:
+            left.geometry = {66, 24, -43, -52, -40};
+            right.geometry = {64, 46, 51, -59, -10};
+            break;
+        case FaceState::kShake: {
+            const int shake = (animation_phase_ / 2) % 2 == 0 ? -12 : 12;
+            left.geometry.x += shake;
+            right.geometry.x += shake;
+            break;
+        }
+        case FaceState::kLookLeft:
+            left.geometry.x -= 18;
+            right.geometry.x -= 18;
+            break;
+        case FaceState::kLookRight:
+            left.geometry.x += 18;
+            right.geometry.x += 18;
+            break;
+        case FaceState::kLookUp:
+            left.geometry.y = -72;
+            right.geometry.y = -72;
+            break;
+        case FaceState::kLookDown:
+            left.geometry.y = -34;
+            right.geometry.y = -34;
+            break;
+        case FaceState::kLookUpLeft:
+            left.geometry.x -= 14;
+            right.geometry.x -= 14;
+            left.geometry.y = -70;
+            right.geometry.y = -70;
+            break;
+        case FaceState::kLookUpRight:
+            left.geometry.x += 14;
+            right.geometry.x += 14;
+            left.geometry.y = -70;
+            right.geometry.y = -70;
+            break;
+        case FaceState::kLookDownLeft:
+            left.geometry.x -= 14;
+            right.geometry.x -= 14;
+            left.geometry.y = -35;
+            right.geometry.y = -35;
+            break;
+        case FaceState::kLookDownRight:
+            left.geometry.x += 14;
+            right.geometry.x += 14;
+            left.geometry.y = -35;
+            right.geometry.y = -35;
+            break;
+        case FaceState::kIdle: {
+            const int idle_phase = animation_phase_ % 160;
+            if (idle_phase >= 35 && idle_phase < 65) {
+                left.geometry.x -= 8;
+                right.geometry.x -= 8;
+                left.geometry.y += 2;
+                right.geometry.y += 2;
+            } else if (idle_phase >= 95 && idle_phase < 125) {
+                left.geometry.x += 8;
+                right.geometry.x += 8;
+                left.geometry.y += 5;
+                right.geometry.y += 5;
+            }
+            break;
+        }
     }
 
-    auto smooth = [](int current, int target) {
+    const auto smooth = [](int current, int target) {
         const int delta = target - current;
         if (delta >= -1 && delta <= 1) {
             return target;
@@ -328,49 +593,62 @@ void MochanDisplay::UpdateEyes(bool blink) {
         const int step = delta / 3;
         return current + (step != 0 ? step : (delta > 0 ? 1 : -1));
     };
+    const auto approach = [&smooth](EyeGeometry& current, const EyeGeometry& target) {
+        current.width = smooth(current.width, target.width);
+        current.height = smooth(current.height, target.height);
+        current.x = smooth(current.x, target.x);
+        current.y = smooth(current.y, target.y);
+        current.rotation = smooth(current.rotation, target.rotation);
+    };
     if (!eye_geometry_initialized_) {
-        eye_width_ = eye_width;
-        eye_height_ = eye_height;
-        eye_gap_ = gap;
-        eye_gaze_x_ = gaze_x;
-        eye_gaze_y_ = gaze_y;
-        left_eye_rotation_ = left_rotation;
-        right_eye_rotation_ = right_rotation;
+        left_eye_geometry_ = left.geometry;
+        right_eye_geometry_ = right.geometry;
         eye_geometry_initialized_ = true;
     } else {
-        eye_width_ = smooth(eye_width_, eye_width);
-        eye_height_ = smooth(eye_height_, eye_height);
-        eye_gap_ = smooth(eye_gap_, gap);
-        eye_gaze_x_ = smooth(eye_gaze_x_, gaze_x);
-        eye_gaze_y_ = smooth(eye_gaze_y_, gaze_y);
-        left_eye_rotation_ = smooth(left_eye_rotation_, left_rotation);
-        right_eye_rotation_ = smooth(right_eye_rotation_, right_rotation);
+        approach(left_eye_geometry_, left.geometry);
+        approach(right_eye_geometry_, right.geometry);
     }
 
-    lv_obj_set_size(left_eye_, eye_width_, eye_height_);
-    lv_obj_set_size(right_eye_, eye_width_, eye_height_);
-    lv_obj_set_style_transform_pivot_x(left_eye_, eye_width_ / 2, 0);
-    lv_obj_set_style_transform_pivot_y(left_eye_, eye_height_ / 2, 0);
-    lv_obj_set_style_transform_pivot_x(right_eye_, eye_width_ / 2, 0);
-    lv_obj_set_style_transform_pivot_y(right_eye_, eye_height_ / 2, 0);
-    lv_obj_set_style_transform_rotation(left_eye_, left_eye_rotation_, 0);
-    lv_obj_set_style_transform_rotation(right_eye_, right_eye_rotation_, 0);
-    lv_obj_align(left_eye_, LV_ALIGN_CENTER, eye_gaze_x_ - (eye_width_ / 2 + eye_gap_ / 2),
-                 eye_gaze_y_);
-    lv_obj_align(right_eye_, LV_ALIGN_CENTER, eye_gaze_x_ + eye_width_ / 2 + eye_gap_ / 2,
-                 eye_gaze_y_);
+    const auto apply_eye = [this, blink_amount](lv_obj_t* eye, lv_obj_t* eye_shadow, lv_obj_t* line,
+                                                lv_obj_t* line_shadow, lv_point_precise_t* points,
+                                                const EyeGeometry& geometry, EyeShape shape,
+                                                int stroke_width) {
+        if (shape == EyeShape::kRounded) {
+            lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(line_shadow, LV_OBJ_FLAG_HIDDEN);
+            ApplyRoundedEye(eye, eye_shadow, geometry, blink_amount);
+        } else {
+            lv_obj_add_flag(eye, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(eye_shadow, LV_OBJ_FLAG_HIDDEN);
+            ApplyLineEye(line, line_shadow, points, geometry, shape, stroke_width);
+        }
+    };
+    apply_eye(left_eye_, left_eyelid_, left_eye_line_, left_eye_line_shadow_, left_eye_line_points_,
+              left_eye_geometry_, left.shape, left.stroke_width);
+    apply_eye(right_eye_, right_eyelid_, right_eye_line_, right_eye_line_shadow_,
+              right_eye_line_points_, right_eye_geometry_, right.shape, right.stroke_width);
 
-    const int eyelid_width = eye_width_;
-    const int eyelid_height = eye_height_;
-    const bool show_eyelids = !blink_closed_;
-    for (auto* eyelid : {left_eyelid_, right_eyelid_}) {
-        lv_obj_set_style_bg_opa(eyelid, show_eyelids ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-        lv_obj_set_size(eyelid, eyelid_width, eyelid_height);
+    for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
+        lv_obj_add_flag(accent, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_obj_align(left_eyelid_, LV_ALIGN_CENTER, eye_gaze_x_ - (eye_width_ / 2 + eye_gap_ / 2) + 4,
-                 eye_gaze_y_ + 6);
-    lv_obj_align(right_eyelid_, LV_ALIGN_CENTER, eye_gaze_x_ + eye_width_ / 2 + eye_gap_ / 2 + 4,
-                 eye_gaze_y_ + 6);
+    if (face_state_ == FaceState::kCrying) {
+        const int tear_fall = animation_phase_ % 18 / 3;
+        for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
+            lv_obj_remove_flag(accent, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_bg_color(accent, kBrassHighlight, 0);
+            lv_obj_set_size(accent, 8, 15);
+        }
+        lv_obj_align(left_eye_accent_, LV_ALIGN_CENTER, -47, -18 + tear_fall);
+        lv_obj_align(right_eye_accent_, LV_ALIGN_CENTER, 47, -18 + tear_fall);
+    } else if (face_state_ == FaceState::kEmbarrassed) {
+        for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
+            lv_obj_remove_flag(accent, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_bg_color(accent, kEyelidShadow, 0);
+            lv_obj_set_size(accent, 22, 5);
+        }
+        lv_obj_align(left_eye_accent_, LV_ALIGN_CENTER, -52, -20);
+        lv_obj_align(right_eye_accent_, LV_ALIGN_CENTER, 44, -20);
+    }
 }
 
 void MochanDisplay::SetStatus(const char* status) {
@@ -395,6 +673,18 @@ void MochanDisplay::SetStatus(const char* status) {
     }
     UpdateStatusDot();
     if (!emotion_active_) {
+        const char* activity_emotion = "neutral";
+        if (activity_state_ == FaceState::kListening) {
+            activity_emotion = "listening";
+        } else if (activity_state_ == FaceState::kSpeaking) {
+            activity_emotion = "speaking";
+        } else if (activity_state_ == FaceState::kThinking) {
+            activity_emotion = "thinking";
+        }
+        {
+            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+            current_emotion_ = activity_emotion;
+        }
         SetFaceState(activity_state_);
     }
 }
@@ -410,6 +700,25 @@ void MochanDisplay::RenderTypingText() {
         rendered.push_back('|');
     }
     lv_label_set_text(subtitle_, rendered.c_str());
+    lv_obj_update_layout(response_box_);
+
+    // LVGL calculates scrolling from the label's unscaled height, while the
+    // response font is rendered smaller with a transform. Scrolling to the
+    // normal bottom therefore lifts the final visible line toward the middle
+    // of the panel. Use the transformed visual height so the last line rests
+    // on the bottom edge of the response viewport.
+    const int32_t label_height = lv_obj_get_height(subtitle_);
+    const int32_t visual_height =
+        (label_height * kResponseTextScale + LV_SCALE_NONE - 1) / LV_SCALE_NONE;
+    const int32_t viewport_height = lv_obj_get_content_height(response_box_);
+    const int32_t scroll_target = std::max<int32_t>(0, visual_height - viewport_height);
+    if (scroll_target != response_scroll_target_) {
+        const bool moves_forward = scroll_target > response_scroll_target_;
+        response_scroll_target_ = scroll_target;
+        // A new wrapped line should glide into view. Backward/reset movement
+        // remains immediate so stale content never flashes during a new turn.
+        lv_obj_scroll_to_y(response_box_, scroll_target, moves_forward ? LV_ANIM_ON : LV_ANIM_OFF);
+    }
 }
 
 void MochanDisplay::StartTyping(const char* content) {
@@ -521,6 +830,10 @@ void MochanDisplay::ResetTyping() {
     typing_cursor_visible_ = false;
     typing_active_ = false;
     typing_finishing_ = false;
+    response_scroll_target_ = 0;
+    if (response_box_ != nullptr) {
+        lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
+    }
     if (typing_timer_ != nullptr) {
         lv_timer_set_period(typing_timer_, kTypingPeriodMs);
         lv_timer_pause(typing_timer_);
@@ -575,6 +888,17 @@ void MochanDisplay::SetWifiConnected(bool connected) {
     lv_obj_set_style_text_color(wifi_icon_, connected ? kBrassHighlight : kSpinnerTrack, 0);
 }
 
+bool MochanDisplay::SetPanelMirror(bool mirror_x, bool mirror_y) {
+    DisplayLockGuard lock(this);
+    const esp_err_t error = esp_lcd_panel_mirror(panel_, mirror_x, mirror_y);
+    if (error != ESP_OK) {
+        ESP_LOGW(kTag, "Cannot update display mirror: %s", esp_err_to_name(error));
+        return false;
+    }
+    lv_obj_invalidate(lv_screen_active());
+    return true;
+}
+
 void MochanDisplay::ShowNotification(const char* notification, int duration_ms) {
     if (notification == nullptr || notification_ == nullptr) {
         return;
@@ -599,45 +923,134 @@ void MochanDisplay::SetEmotion(const char* emotion) {
     if (emotion == nullptr) {
         return;
     }
+    const std::string requested(emotion);
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        current_emotion_ = requested;
+    }
     DisplayLockGuard lock(this);
-    if (std::strstr(emotion, "happy") != nullptr) {
+    if (requested == "happy") {
         emotion_active_ = true;
         SetFaceState(FaceState::kHappy);
-    } else if (std::strstr(emotion, "angry") != nullptr) {
+    } else if (requested == "laughing") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kLaughing);
+    } else if (requested == "funny") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kFunny);
+    } else if (requested == "angry") {
         emotion_active_ = true;
         SetFaceState(FaceState::kAngry);
-    } else if (std::strstr(emotion, "sad") != nullptr ||
-               std::strstr(emotion, "sleepy") != nullptr) {
+    } else if (requested == "sad") {
         emotion_active_ = true;
         SetFaceState(FaceState::kSad);
-    } else if (std::strstr(emotion, "suspicious") != nullptr) {
+    } else if (requested == "crying") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kCrying);
+    } else if (requested == "loving") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kLoving);
+    } else if (requested == "embarrassed") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kEmbarrassed);
+    } else if (requested == "surprised") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kSurprised);
+    } else if (requested == "shocked") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kShocked);
+    } else if (requested == "winking") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kWinking);
+    } else if (requested == "cool") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kCool);
+    } else if (requested == "relaxed") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kRelaxed);
+    } else if (requested == "delicious") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kDelicious);
+    } else if (requested == "kissy") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kKissy);
+    } else if (requested == "confident") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kConfident);
+    } else if (requested == "sleepy") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kSleepy);
+    } else if (requested == "silly") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kSilly);
+    } else if (requested == "confused") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kConfused);
+    } else if (requested == "suspicious") {
         emotion_active_ = true;
         SetFaceState(FaceState::kSuspicious);
-    } else if (std::strstr(emotion, "shake") != nullptr) {
+    } else if (requested == "shake") {
         emotion_active_ = true;
         SetFaceState(FaceState::kShake);
-    } else if (std::strstr(emotion, "up_left") != nullptr) {
+    } else if (requested == "left") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kLookLeft);
+    } else if (requested == "right") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kLookRight);
+    } else if (requested == "up") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kLookUp);
+    } else if (requested == "down") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kLookDown);
+    } else if (requested == "up_left") {
         emotion_active_ = true;
         SetFaceState(FaceState::kLookUpLeft);
-    } else if (std::strstr(emotion, "up_right") != nullptr) {
+    } else if (requested == "up_right") {
         emotion_active_ = true;
         SetFaceState(FaceState::kLookUpRight);
-    } else if (std::strstr(emotion, "down_left") != nullptr) {
+    } else if (requested == "down_left") {
         emotion_active_ = true;
         SetFaceState(FaceState::kLookDownLeft);
-    } else if (std::strstr(emotion, "down_right") != nullptr) {
+    } else if (requested == "down_right") {
         emotion_active_ = true;
         SetFaceState(FaceState::kLookDownRight);
-    } else if (std::strstr(emotion, "thinking") != nullptr) {
+    } else if (requested == "thinking") {
         emotion_active_ = true;
         SetFaceState(FaceState::kThinking);
-    } else if (std::strstr(emotion, "speaking") != nullptr) {
+    } else if (requested == "speaking") {
         emotion_active_ = true;
         SetFaceState(FaceState::kSpeaking);
-    } else if (std::strstr(emotion, "neutral") != nullptr) {
+    } else if (requested == "listening") {
+        emotion_active_ = true;
+        SetFaceState(FaceState::kListening);
+    } else if (requested == "neutral" || requested == "robot_2") {
+        {
+            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+            current_emotion_ = "neutral";
+        }
+        emotion_active_ = false;
+        SetFaceState(activity_state_);
+    } else {
+        ESP_LOGW(kTag, "Unsupported emotion: %s", emotion);
+        {
+            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+            current_emotion_ = "neutral";
+        }
         emotion_active_ = false;
         SetFaceState(activity_state_);
     }
+}
+
+std::string MochanDisplay::GetCurrentEmotion() const {
+    std::lock_guard<std::mutex> lock(emotion_mutex_);
+    return current_emotion_;
+}
+
+bool MochanDisplay::IsSupportedEmotion(const std::string& emotion) {
+    return std::find(kSupportedEmotions.begin(), kSupportedEmotions.end(), emotion) !=
+           kSupportedEmotions.end();
 }
 
 void MochanDisplay::SetChatMessage(const char* role, const char* content) {
@@ -680,6 +1093,7 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
         camera_image_cached_.reset();
         lv_obj_add_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
         if (lv_label_get_text(subtitle_)[0] != '\0') {
+            RenderTypingText();
             ShowResponseBox();
             lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
         } else if (lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) {
@@ -692,16 +1106,23 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     const auto* descriptor = camera_image_cached_->image_dsc();
     lv_image_set_src(camera_image_, descriptor);
     if (descriptor->header.w > 0 && descriptor->header.h > 0) {
-        // Fill the wide response panel and let its bounds crop the top and bottom.
-        // This preserves the original UI's cinematic preview rather than shrinking
-        // a 4:3 frame into a tiny letterboxed thumbnail.
-        const auto scale_x = 256 * (width_ - 38) / descriptor->header.w;
-        lv_image_set_scale(camera_image_, scale_x);
+        // Cover the response panel and let its rounded bounds crop the excess.
+        const int content_width = width_ - 38;
+        const int content_height = 94;
+        const int scale_x = 256 * content_width / descriptor->header.w;
+        const int scale_y = 256 * content_height / descriptor->header.h;
+        lv_image_set_scale(camera_image_, std::max(scale_x, scale_y));
+        ESP_LOGI(kTag, "Showing camera preview: %ux%u", descriptor->header.w, descriptor->header.h);
     }
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
+    response_scroll_target_ = 0;
+    lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
     ShowResponseBox();
+    lv_obj_set_style_opa(response_box_, LV_OPA_COVER, 0);
     lv_obj_remove_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(camera_image_);
+    lv_obj_invalidate(response_box_);
     esp_timer_stop(preview_timer_);
     ESP_ERROR_CHECK(esp_timer_start_once(preview_timer_, kPreviewDurationMs * 1000));
 }

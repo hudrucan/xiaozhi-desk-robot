@@ -35,8 +35,14 @@ public:
 
     virtual void SetExplainUrl(const std::string& url, const std::string& token) override;
     virtual bool Capture() override;
+    bool CaptureForWeb();
+    bool GetCurrentJpeg(const uint8_t*& data, size_t& length) const;
+    bool IsAvailable() const { return streaming_on_; }
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual bool SetSwapBytes(bool enabled) override;
     virtual std::expected<std::string, std::string> Explain(const std::string& question) override;
+
+private:
+    bool CaptureInternal(bool update_preview);
 };

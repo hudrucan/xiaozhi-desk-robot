@@ -3,31 +3,61 @@
 #include <driver/gpio.h>
 #include <esp_timer.h>
 
+#include <atomic>
 #include <deque>
+#include <functional>
 #include <string>
+#include <vector>
 
 class MotorController {
 public:
     enum class Direction { kForward, kBackward, kLeft, kRight };
+
+    struct Movement {
+        Direction direction;
+        uint32_t duration_ms;
+    };
 
     MotorController(gpio_num_t left_in1, gpio_num_t left_in2, gpio_num_t right_in1,
                     gpio_num_t right_in2);
     ~MotorController();
 
     void Drive(Direction direction, uint32_t duration_ms);
+    bool PlaySequence(const std::vector<Movement>& movements);
     void Stop();
+    void EmergencyStop();
+    void SetMotionGuard(std::function<bool(Direction)> guard);
+    void SetMovementStateCallback(std::function<void(bool)> callback);
+    bool IsMoving(Direction direction) const;
     std::string StatusJson() const;
 
 private:
+    enum class Phase { kIdle, kDeadTime, kDriving };
+
     struct Command {
         Direction direction;
         uint32_t duration_ms;
     };
 
-    static constexpr size_t kMaxQueuedCommands = 16;
+    // Keep every movement bounded. The dead time guarantees that the bridge
+    // sees LOW/LOW before either motor is driven in the opposite direction.
+    static constexpr size_t kMaxQueuedCommands = 12;
+    static constexpr uint32_t kMinDurationMs = 50;
+    static constexpr uint32_t kMaxDurationMs = 2000;
+    static constexpr uint32_t kMaxQueuedRuntimeMs = 3600;
+    static constexpr size_t kMaxSequenceCommands = 50;
+    static constexpr uint32_t kMaxSequenceRuntimeMs = 30000;
+    static constexpr uint32_t kDirectionDeadTimeMs = 80;
+    static constexpr uint32_t kStartupArmDelayMs = 1500;
 
     static void StopTimerCallback(void* arg);
-    void StartNextCommand();
+    void BeginDeadTime();
+    void ApplyNextCommand();
+    void HandleTimerExpired(uint32_t generation);
+    bool ArmTimer(uint32_t delay_ms);
+    void EnterFault(const char* reason);
+    void PublishMotionActive(bool active);
+    void AllOff();
     void SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward);
 
     gpio_num_t left_in1_;
@@ -35,7 +65,21 @@ private:
     gpio_num_t right_in1_;
     gpio_num_t right_in2_;
     esp_timer_handle_t stop_timer_ = nullptr;
-    Direction direction_ = Direction::kForward;
-    bool moving_ = false;
+    bool available_ = false;
+    std::atomic<bool> faulted_{false};
+    Phase phase_ = Phase::kIdle;
+    std::atomic<Direction> direction_{Direction::kForward};
+    std::atomic<bool> moving_{false};
+    std::atomic<size_t> queued_count_{0};
+    std::atomic<uint32_t> queued_runtime_ms_{0};
+    std::atomic<bool> sequence_active_{false};
+    std::atomic<size_t> sequence_total_{0};
+    std::atomic<size_t> sequence_completed_{0};
+    std::atomic<int64_t> active_until_us_{0};
+    std::atomic<uint32_t> timer_generation_{0};
+    int64_t arm_at_us_ = 0;
     std::deque<Command> queued_commands_;
+    std::function<bool(Direction)> motion_guard_;
+    std::function<void(bool)> movement_state_callback_;
+    std::atomic_bool motion_active_{false};
 };

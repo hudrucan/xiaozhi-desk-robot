@@ -6,6 +6,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/param.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,7 @@
 #include "esp_imgfx_color_convert.h"
 #include "esp_video_device.h"
 #include "esp_video_init.h"
+#include "esp_video_ioctl.h"
 #include "linux/videodev2.h"
 
 #include "board.h"
@@ -162,6 +164,20 @@ EspVideo::EspVideo(const esp_video_init_config_t& config) {
         return;
     }
 
+    // esp_video defaults DQBUF to portMAX_DELAY. A stalled DVP stream would otherwise
+    // hold the camera mutex forever and leave both live preview and MCP take_photo pending.
+    const struct timeval dequeue_timeout = {
+        .tv_sec = 2,
+        .tv_usec = 0,
+    };
+    if (ioctl(video_fd_, VIDIOC_S_DQBUF_TIMEOUT, &dequeue_timeout) != 0) {
+        ESP_LOGE(TAG, "Failed to set camera dequeue timeout, errno=%d(%s)", errno,
+                 strerror(errno));
+        close(video_fd_);
+        video_fd_ = -1;
+        return;
+    }
+
     struct v4l2_capability cap = {};
     if (ioctl(video_fd_, VIDIOC_QUERYCAP, &cap) != 0) {
         ESP_LOGE(TAG, "VIDIOC_QUERYCAP failed, errno=%d(%s)", errno, strerror(errno));
@@ -286,6 +302,16 @@ EspVideo::EspVideo(const esp_video_init_config_t& config) {
         return;
     }
 
+    char selected_fourcc[5] = {
+        static_cast<char>(setformat.fmt.pix.pixelformat & 0xff),
+        static_cast<char>((setformat.fmt.pix.pixelformat >> 8) & 0xff),
+        static_cast<char>((setformat.fmt.pix.pixelformat >> 16) & 0xff),
+        static_cast<char>((setformat.fmt.pix.pixelformat >> 24) & 0xff),
+        '\0',
+    };
+    ESP_LOGI(TAG, "Camera capture format: %s %lux%lu", selected_fourcc,
+             setformat.fmt.pix.width, setformat.fmt.pix.height);
+
 #if CONFIG_XIAOZHI_CAMERA_MIRROR_CONFIGURED
     SetHMirror(kConfiguredHMirror);
     SetVFlip(kConfiguredVFlip);
@@ -301,7 +327,10 @@ EspVideo::EspVideo(const esp_video_init_config_t& config) {
 
     // 申请缓冲并mmap
     struct v4l2_requestbuffers req = {};
-    req.count = strcmp(video_device_name, ESP_VIDEO_MIPI_CSI_DEVICE_NAME) == 0 ? 2 : 1;
+    req.count = (strcmp(video_device_name, ESP_VIDEO_DVP_DEVICE_NAME) == 0 ||
+                 strcmp(video_device_name, ESP_VIDEO_MIPI_CSI_DEVICE_NAME) == 0)
+                    ? 2
+                    : 1;
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
     if (ioctl(video_fd_, VIDIOC_REQBUFS, &req) != 0) {
@@ -335,6 +364,8 @@ EspVideo::EspVideo(const esp_video_init_config_t& config) {
         }
         mmap_buffers_[i].start = start;
         mmap_buffers_[i].length = buf.length;
+        ESP_LOGI(TAG, "Camera buffer %lu/%lu: %lu bytes", static_cast<unsigned long>(i + 1),
+                 static_cast<unsigned long>(req.count), static_cast<unsigned long>(buf.length));
 
         if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
             ESP_LOGE(TAG, "VIDIOC_QBUF failed");
@@ -427,7 +458,8 @@ bool EspVideo::Capture() {
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
         if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_DQBUF failed");
+            ESP_LOGE(TAG, "Camera frame %d/3 dequeue failed or timed out, errno=%d(%s)", i + 1,
+                     errno, strerror(errno));
             return false;
         }
         if (i == 2) {
@@ -962,10 +994,10 @@ std::expected<std::string, std::string> EspVideo::Explain(const std::string& que
         v4l2_pix_fmt_t enc_fmt = frame_.format;
         bool ok = image_to_jpeg_cb(
             frame_.data, frame_.len, w, h, enc_fmt, 80,
-            [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+            [](void* arg, size_t /*index*/, const void* data, size_t len) -> size_t {
                 auto jpeg_queue = static_cast<QueueHandle_t>(arg);
                 JpegChunk chunk = {.data = nullptr, .len = len};
-                if (index == 0 && data != nullptr && len > 0) {
+                if (data != nullptr && len > 0) {
                     chunk.data = (uint8_t*)heap_caps_aligned_alloc(
                         16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                     if (chunk.data == nullptr) {
@@ -990,6 +1022,7 @@ std::expected<std::string, std::string> EspVideo::Explain(const std::string& que
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(3);
+    http->SetTimeout(20000);
     // 构造multipart/form-data请求体
     std::string boundary = "----ESP32_CAMERA_BOUNDARY";
 
@@ -1016,6 +1049,7 @@ std::expected<std::string, std::string> EspVideo::Explain(const std::string& que
         vQueueDelete(jpeg_queue);
         return std::unexpected("Failed to connect to explain URL");
     }
+    ESP_LOGI(TAG, "Camera explain HTTP connected");
 
     {
         // 第一块：question字段
@@ -1055,6 +1089,7 @@ std::expected<std::string, std::string> EspVideo::Explain(const std::string& que
     }
     // Wait for the encoder thread to finish
     encoder_thread_.join();
+    ESP_LOGI(TAG, "Camera JPEG encoded and queued: %zu bytes", total_sent);
     // 清理队列
     vQueueDelete(jpeg_queue);
 
@@ -1085,6 +1120,7 @@ std::expected<std::string, std::string> EspVideo::Explain(const std::string& que
     }
 
     std::string result = http->ReadAll();
+    ESP_LOGI(TAG, "Camera explain response received: %zu bytes", result.size());
     http->Close();
 
     // Get remain task stack size

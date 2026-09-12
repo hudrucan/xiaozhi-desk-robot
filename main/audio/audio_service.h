@@ -123,6 +123,8 @@ public:
     std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
     bool IsVoiceDetected() const { return voice_detected_; }
+    uint8_t GetInputLevel() const;
+    bool IsInputClipping() const;
     bool IsIdle();
     bool IsPlaybackIdle();
     bool IsWakeWordRunning() const {
@@ -206,6 +208,9 @@ private:
 #endif
     std::atomic<bool> service_stopped_{true};
     std::atomic<bool> audio_input_need_warmup_{false};
+    std::atomic<uint8_t> input_level_{0};
+    std::atomic<int64_t> last_input_level_us_{0};
+    std::atomic<int64_t> last_input_clip_us_{0};
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
