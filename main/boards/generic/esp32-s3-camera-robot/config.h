@@ -107,14 +107,14 @@
 #define INA219_SHUNT_RESISTANCE_OHMS 0.1f
 #define INA219_SAMPLE_PERIOD_MS 1000
 
-// MPU6050 is intentionally disabled until the module is physically installed. Defining its I2C
-// address enables the complete motion-sensing path at compile time.
-// #define MPU6050_I2C_ADDRESS 0x68
-// #define MPU6050_SAMPLE_PERIOD_MS 40
-// #define MPU6050_TILT_THRESHOLD_DEG 28.0f
-// #define MPU6050_SHAKE_THRESHOLD_DPS 180.0f
-// #define MPU6050_IMPACT_THRESHOLD_G 1.75f
-// #define MPU6050_FREEFALL_THRESHOLD_G 0.45f
-// #define MPU6050_GESTURE_COOLDOWN_MS 2500
+// Optional MPU6050 on the shared auxiliary bus. It follows the same probe-first lifecycle as the
+// INA219; the sampling task starts only when at least one auxiliary sensor is detected.
+#define MPU6050_I2C_ADDRESS 0x68
+#define MPU6050_SAMPLE_PERIOD_MS 40
+#define MPU6050_TILT_THRESHOLD_DEG 28.0f
+#define MPU6050_SHAKE_THRESHOLD_DPS 180.0f
+#define MPU6050_IMPACT_THRESHOLD_G 1.75f
+#define MPU6050_FREEFALL_THRESHOLD_G 0.45f
+#define MPU6050_GESTURE_COOLDOWN_MS 2500
 
 #endif  // ESP32_S3_CAMERA_ROBOT_CONFIG_H_

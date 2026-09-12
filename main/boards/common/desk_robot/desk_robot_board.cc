@@ -200,6 +200,21 @@ private:
     std::atomic_bool battery_discharging_{false};
 #endif
 #ifdef MPU6050_I2C_ADDRESS
+    enum class MotionGesture : uint8_t {
+        kCalibrating,
+        kSteady,
+        kLeft,
+        kRight,
+        kUp,
+        kDown,
+        kUpLeft,
+        kUpRight,
+        kDownLeft,
+        kDownRight,
+        kShake,
+        kSurprised,
+        kSleepy,
+    };
     Mpu6050MotionSensor motion_sensor_;
     std::atomic_bool motion_sensor_valid_{false};
     std::atomic_bool motion_emotions_enabled_{true};
@@ -207,8 +222,7 @@ private:
     std::atomic<float> motion_pitch_deg_{0.0f};
     std::atomic<float> motion_acceleration_g_{0.0f};
     std::atomic<float> motion_rotation_dps_{0.0f};
-    std::mutex motion_gesture_mutex_;
-    std::string motion_gesture_ = "calibrating";
+    std::atomic<MotionGesture> motion_gesture_{MotionGesture::kCalibrating};
 #endif
 #if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
     TaskHandle_t auxiliary_sensor_task_ = nullptr;
@@ -267,9 +281,36 @@ private:
 #endif
 
 #ifdef MPU6050_I2C_ADDRESS
-    void SetMotionGesture(const std::string& gesture) {
-        std::lock_guard<std::mutex> lock(motion_gesture_mutex_);
-        motion_gesture_ = gesture;
+    static const char* MotionGestureName(MotionGesture gesture) {
+        switch (gesture) {
+            case MotionGesture::kSteady:
+                return "steady";
+            case MotionGesture::kLeft:
+                return "left";
+            case MotionGesture::kRight:
+                return "right";
+            case MotionGesture::kUp:
+                return "up";
+            case MotionGesture::kDown:
+                return "down";
+            case MotionGesture::kUpLeft:
+                return "up_left";
+            case MotionGesture::kUpRight:
+                return "up_right";
+            case MotionGesture::kDownLeft:
+                return "down_left";
+            case MotionGesture::kDownRight:
+                return "down_right";
+            case MotionGesture::kShake:
+                return "shake";
+            case MotionGesture::kSurprised:
+                return "surprised";
+            case MotionGesture::kSleepy:
+                return "sleepy";
+            case MotionGesture::kCalibrating:
+                return "calibrating";
+        }
+        return "calibrating";
     }
 
     bool AreMotorsMoving() const {
@@ -279,14 +320,55 @@ private:
                motors_.IsMoving(MotorController::Direction::kRight);
     }
 
-    void InitializeMotionSensor() {
+    bool InitializeMotionSensor() {
         Settings settings("desk_robot", false);
         motion_emotions_enabled_.store(settings.GetBool("motion_emotions", true));
         std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
         if (auxiliary_i2c_bus_ == nullptr ||
             !motion_sensor_.Initialize(auxiliary_i2c_bus_, MPU6050_I2C_ADDRESS)) {
             ESP_LOGW(TAG, "MPU6050 not detected at 0x68 or 0x69");
+            return false;
         }
+        return true;
+    }
+
+    void RegisterMotionTools() {
+        auto& mcp_server = McpServer::GetInstance();
+        mcp_server.AddTool(
+            "self.motion.get_orientation",
+            "Get the MPU6050 orientation, acceleration, rotation, and detected gesture.",
+            PropertyList(), [this](const PropertyList&) -> ToolResult {
+                cJSON* result = cJSON_CreateObject();
+                if (result == nullptr) {
+                    return std::unexpected("Out of memory");
+                }
+                cJSON_AddBoolToObject(result, "available", motion_sensor_.IsAvailable());
+                cJSON_AddBoolToObject(result, "valid", motion_sensor_valid_.load());
+                cJSON_AddBoolToObject(result, "emotion_control", motion_emotions_enabled_.load());
+                if (motion_sensor_valid_.load()) {
+                    cJSON_AddNumberToObject(result, "roll_deg", motion_roll_deg_.load());
+                    cJSON_AddNumberToObject(result, "pitch_deg", motion_pitch_deg_.load());
+                    cJSON_AddNumberToObject(result, "acceleration_g",
+                                            motion_acceleration_g_.load());
+                    cJSON_AddNumberToObject(result, "rotation_dps", motion_rotation_dps_.load());
+                    cJSON_AddStringToObject(result, "gesture",
+                                            MotionGestureName(motion_gesture_.load()));
+                }
+                return result;
+            });
+        mcp_server.AddTool("self.motion.set_emotion_control",
+                           "Enable or disable automatic face reactions from MPU6050 movement.",
+                           PropertyList({Property("enabled", kPropertyTypeBoolean, true)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               const bool enabled = properties["enabled"].value<bool>();
+                               motion_emotions_enabled_.store(enabled);
+                               Application::GetInstance().Schedule([enabled]() {
+                                   Settings settings("desk_robot", true);
+                                   settings.SetBool("motion_emotions", enabled);
+                               });
+                               return true;
+                           });
+        ESP_LOGI(TAG, "MPU6050 MCP tools registered");
     }
 #endif
 
@@ -313,7 +395,7 @@ private:
         float calibration_pitch_sum = 0.0f;
         float roll_offset_deg = 0.0f;
         float pitch_offset_deg = 0.0f;
-        std::string candidate_gesture;
+        MotionGesture candidate_gesture = MotionGesture::kCalibrating;
         int candidate_samples = 0;
         int64_t last_gesture_us = 0;
         unsigned motion_failures = 0;
@@ -394,7 +476,7 @@ private:
                             roll_offset_deg = calibration_roll_sum / kCalibrationSamples;
                             pitch_offset_deg = calibration_pitch_sum / kCalibrationSamples;
                             motion_sensor_valid_.store(true);
-                            SetMotionGesture("steady");
+                            motion_gesture_.store(MotionGesture::kSteady);
                             ESP_LOGI(TAG, "MPU6050 orientation calibrated: roll %.1f, pitch %.1f",
                                      roll_offset_deg, pitch_offset_deg);
                         }
@@ -407,33 +489,36 @@ private:
                         motion_rotation_dps_.store(sample.rotation_magnitude_dps);
                         motion_sensor_valid_.store(true);
 
-                        std::string gesture;
+                        MotionGesture gesture = MotionGesture::kSteady;
                         if (sample.acceleration_magnitude_g < MPU6050_FREEFALL_THRESHOLD_G ||
                             sample.acceleration_magnitude_g > MPU6050_IMPACT_THRESHOLD_G) {
-                            gesture = "surprised";
+                            gesture = MotionGesture::kSurprised;
                         } else if (sample.rotation_magnitude_dps > MPU6050_SHAKE_THRESHOLD_DPS) {
-                            gesture = "shake";
+                            gesture = MotionGesture::kShake;
                         } else if (std::fabs(roll) > 75.0f || std::fabs(pitch) > 75.0f) {
-                            gesture = "sleepy";
+                            gesture = MotionGesture::kSleepy;
                         } else if (std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG &&
                                    std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
-                            gesture = pitch < 0.0f ? "up_" : "down_";
-                            gesture += roll < 0.0f ? "left" : "right";
+                            if (pitch < 0.0f) {
+                                gesture =
+                                    roll < 0.0f ? MotionGesture::kUpLeft : MotionGesture::kUpRight;
+                            } else {
+                                gesture = roll < 0.0f ? MotionGesture::kDownLeft
+                                                      : MotionGesture::kDownRight;
+                            }
                         } else if (std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG) {
-                            gesture = roll < 0.0f ? "left" : "right";
+                            gesture = roll < 0.0f ? MotionGesture::kLeft : MotionGesture::kRight;
                         } else if (std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
-                            gesture = pitch < 0.0f ? "up" : "down";
-                        } else {
-                            gesture = "steady";
+                            gesture = pitch < 0.0f ? MotionGesture::kUp : MotionGesture::kDown;
                         }
-                        SetMotionGesture(gesture);
+                        motion_gesture_.store(gesture);
 
                         const bool can_animate =
                             motion_emotions_enabled_.load() &&
                             Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
                             !AreMotorsMoving();
-                        if (!can_animate || gesture == "steady") {
-                            candidate_gesture.clear();
+                        if (!can_animate || gesture == MotionGesture::kSteady) {
+                            candidate_gesture = MotionGesture::kCalibrating;
                             candidate_samples = 0;
                         } else {
                             if (gesture == candidate_gesture) {
@@ -449,9 +534,11 @@ private:
                             }
                             if (candidate_samples >= 3 && !face_busy &&
                                 now_us - last_gesture_us >= MPU6050_GESTURE_COOLDOWN_MS * 1000LL) {
-                                const int duration_ms =
-                                    gesture == "shake" || gesture == "surprised" ? 1400 : 1800;
-                                if (QueueTemporaryEmotion(gesture, duration_ms)) {
+                                const int duration_ms = gesture == MotionGesture::kShake ||
+                                                                gesture == MotionGesture::kSurprised
+                                                            ? 1400
+                                                            : 1800;
+                                if (QueueTemporaryEmotion(MotionGestureName(gesture), duration_ms)) {
                                     last_gesture_us = now_us;
                                 }
                                 candidate_samples = 0;
@@ -1572,10 +1659,8 @@ private:
                 cJSON_AddNumberToObject(root, "motion_acceleration_g",
                                         motion_acceleration_g_.load());
                 cJSON_AddNumberToObject(root, "motion_rotation_dps", motion_rotation_dps_.load());
-                {
-                    std::lock_guard<std::mutex> lock(motion_gesture_mutex_);
-                    cJSON_AddStringToObject(root, "motion_gesture", motion_gesture_.c_str());
-                }
+                cJSON_AddStringToObject(root, "motion_gesture",
+                                        MotionGestureName(motion_gesture_.load()));
 #endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
                 cJSON_AddBoolToObject(root, "oled_available", secondary_oled_.IsAvailable());
@@ -1797,42 +1882,6 @@ private:
                 return result;
             });
 #endif
-#ifdef MPU6050_I2C_ADDRESS
-        mcp_server.AddTool(
-            "self.motion.get_orientation",
-            "Get the MPU6050 orientation, acceleration, rotation, and detected gesture.",
-            PropertyList(), [this](const PropertyList&) -> ToolResult {
-                cJSON* result = cJSON_CreateObject();
-                if (result == nullptr) {
-                    return std::unexpected("Out of memory");
-                }
-                cJSON_AddBoolToObject(result, "available", motion_sensor_.IsAvailable());
-                cJSON_AddBoolToObject(result, "valid", motion_sensor_valid_.load());
-                cJSON_AddBoolToObject(result, "emotion_control", motion_emotions_enabled_.load());
-                if (motion_sensor_valid_.load()) {
-                    cJSON_AddNumberToObject(result, "roll_deg", motion_roll_deg_.load());
-                    cJSON_AddNumberToObject(result, "pitch_deg", motion_pitch_deg_.load());
-                    cJSON_AddNumberToObject(result, "acceleration_g",
-                                            motion_acceleration_g_.load());
-                    cJSON_AddNumberToObject(result, "rotation_dps", motion_rotation_dps_.load());
-                    std::lock_guard<std::mutex> lock(motion_gesture_mutex_);
-                    cJSON_AddStringToObject(result, "gesture", motion_gesture_.c_str());
-                }
-                return result;
-            });
-        mcp_server.AddTool("self.motion.set_emotion_control",
-                           "Enable or disable automatic face reactions from MPU6050 movement.",
-                           PropertyList({Property("enabled", kPropertyTypeBoolean, true)}),
-                           [this](const PropertyList& properties) -> ReturnValue {
-                               const bool enabled = properties["enabled"].value<bool>();
-                               motion_emotions_enabled_.store(enabled);
-                               Application::GetInstance().Schedule([enabled]() {
-                                   Settings settings("desk_robot", true);
-                                   settings.SetBool("motion_emotions", enabled);
-                               });
-                               return true;
-                           });
-#endif
     }
 
 public:
@@ -1881,6 +1930,9 @@ public:
         StartAuxiliarySensorTask();
 #endif
         InitializeTools();
+#ifdef MPU6050_I2C_ADDRESS
+        RegisterMotionTools();
+#endif
         InitializeWebControl();
         ESP_LOGI(TAG, "Desk robot board initialized");
     }
