@@ -397,7 +397,7 @@ void MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
         // A second, offset copy of the same filled shape exposes a soft left/
         // lower layer. Scale the offset down when squinting or blinking.
         const float layer_scale = std::clamp(height / 54.0f, 0.0f, 1.0f);
-        const float inner_x = px - 6.0f * layer_scale;
+        const float inner_x = px - 5.0f * layer_scale;
         const float inner_u = std::clamp(inner_x / half_width, -1.0f, 1.0f);
         const float inner_curve = 1.0f - inner_u * inner_u;
         const float inner_top =
@@ -405,7 +405,7 @@ void MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
             (geometry.top_curve * inner_curve + geometry.slope * inner_u) * openness;
         const float inner_bottom = height * 0.5f + geometry.bottom_curve * inner_curve * openness;
         const float inner_half_height = std::max(3.5f, (inner_bottom - inner_top) * 0.5f);
-        const float inner_center = (inner_top + inner_bottom) * 0.5f - 7.0f * layer_scale;
+        const float inner_center = (inner_top + inner_bottom) * 0.5f - 6.0f * layer_scale;
         const float inner_radius = std::min(18.0f, std::min(half_width, inner_half_height));
         for (int y = 0; y < EyeRaster::kHeight; ++y) {
             const float py = y + 0.5f - EyeRaster::kHeight * 0.5f;
@@ -585,7 +585,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
             right.geometry = {77, 33, 48 + sway, -46, -80, 2, -8};
             break;
         }
-        case FaceState::kConfused:
+        case FaceState::kConfused:333
             left.geometry = {69, 33, -49, -49, 0, 8, 0, -7};
             right.geometry = {54, 57, 48, -63, 0, -3, 0, 3};
             break;

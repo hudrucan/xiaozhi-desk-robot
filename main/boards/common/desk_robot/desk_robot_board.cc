@@ -207,6 +207,10 @@ private:
     std::atomic<float> battery_power_mw_{0.0f};
     std::atomic_bool battery_charging_{false};
     std::atomic_bool battery_discharging_{false};
+    std::atomic_bool battery_capacity_test_active_{false};
+    std::atomic_bool battery_capacity_test_measuring_{false};
+    std::atomic<uint32_t> battery_capacity_test_uah_{0};
+    std::atomic<uint32_t> battery_capacity_test_seconds_{0};
 #endif
 #ifdef MPU6050_I2C_ADDRESS
     enum class MotionGesture : uint8_t {
@@ -278,6 +282,12 @@ private:
 
 #ifdef INA219_I2C_ADDRESS
     void InitializePowerMonitor() {
+        Settings settings("desk_robot", false);
+        battery_capacity_test_active_.store(settings.GetBool("cap_test_on", false));
+        battery_capacity_test_uah_.store(
+            static_cast<uint32_t>(std::max(settings.GetInt("cap_test_uah", 0), int32_t{0})));
+        battery_capacity_test_seconds_.store(
+            static_cast<uint32_t>(std::max(settings.GetInt("cap_test_sec", 0), int32_t{0})));
         std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
         if (auxiliary_i2c_bus_ == nullptr ||
             i2c_master_probe(auxiliary_i2c_bus_, INA219_I2C_ADDRESS, 100) != ESP_OK) {
@@ -288,6 +298,14 @@ private:
                                        INA219_SHUNT_RESISTANCE_OHMS)) {
             ESP_LOGW(TAG, "INA219 initialization failed");
         }
+    }
+
+    void PersistBatteryCapacityTest() {
+        Settings settings("desk_robot", true);
+        settings.SetBool("cap_test_on", battery_capacity_test_active_.load());
+        settings.SetInt("cap_test_uah", static_cast<int32_t>(battery_capacity_test_uah_.load()));
+        settings.SetInt("cap_test_sec",
+                        static_cast<int32_t>(battery_capacity_test_seconds_.load()));
     }
 #endif
 
@@ -408,6 +426,12 @@ private:
         float filtered_power_mw = 0.0f;
         float filtered_percent = 0.0f;
         unsigned power_failures = 0;
+        bool capacity_test_was_active = false;
+        int64_t capacity_previous_sample_us = 0;
+        int64_t capacity_last_save_us = 0;
+        double capacity_fractional_uah = 0.0;
+        int64_t capacity_fractional_time_us = 0;
+        unsigned capacity_low_voltage_samples = 0;
 #endif
 #ifdef MPU6050_I2C_ADDRESS
         constexpr int kCalibrationSamples = 50;
@@ -460,6 +484,56 @@ private:
                     battery_charging_.store(reading.charging);
                     battery_discharging_.store(reading.discharging);
                     battery_valid_.store(true);
+                    const bool capacity_active = battery_capacity_test_active_.load();
+                    if (capacity_active && !capacity_test_was_active) {
+                        capacity_previous_sample_us = now_us;
+                        capacity_last_save_us = now_us;
+                        capacity_fractional_uah = 0.0;
+                        capacity_fractional_time_us = 0;
+                    }
+                    const bool capacity_measuring = capacity_active && reading.discharging;
+                    battery_capacity_test_measuring_.store(capacity_measuring);
+                    if (capacity_measuring && capacity_test_was_active &&
+                        capacity_previous_sample_us > 0) {
+                        const int64_t elapsed_us =
+                            std::clamp(now_us - capacity_previous_sample_us, int64_t{0},
+                                       int64_t{INA219_SAMPLE_PERIOD_MS * 3000LL});
+                        // mA * us / 3,600,000 = uAh.
+                        capacity_fractional_uah +=
+                            std::fabs(static_cast<double>(reading.current_ma)) * elapsed_us /
+                            3600000.0;
+                        const uint32_t whole_uah = static_cast<uint32_t>(capacity_fractional_uah);
+                        if (whole_uah > 0) {
+                            battery_capacity_test_uah_.fetch_add(whole_uah);
+                            capacity_fractional_uah -= whole_uah;
+                        }
+                        capacity_fractional_time_us += elapsed_us;
+                        const uint32_t whole_seconds =
+                            static_cast<uint32_t>(capacity_fractional_time_us / 1000000LL);
+                        if (whole_seconds > 0) {
+                            battery_capacity_test_seconds_.fetch_add(whole_seconds);
+                            capacity_fractional_time_us -=
+                                static_cast<int64_t>(whole_seconds) * 1000000LL;
+                        }
+                    }
+                    if (capacity_measuring && reading.bus_voltage_v <= 3.20f) {
+                        ++capacity_low_voltage_samples;
+                    } else {
+                        capacity_low_voltage_samples = 0;
+                    }
+                    if (capacity_low_voltage_samples >= 10) {
+                        battery_capacity_test_active_.store(false);
+                        battery_capacity_test_measuring_.store(false);
+                        PersistBatteryCapacityTest();
+                        capacity_low_voltage_samples = 0;
+                        ESP_LOGI(TAG, "Battery capacity measurement stopped at low voltage");
+                    }
+                    if (capacity_measuring && now_us - capacity_last_save_us >= 60000000LL) {
+                        PersistBatteryCapacityTest();
+                        capacity_last_save_us = now_us;
+                    }
+                    capacity_previous_sample_us = now_us;
+                    capacity_test_was_active = capacity_active;
                     power_failures = 0;
                     const int percent = battery_percent_.load();
                     const float voltage = battery_voltage_v_.load();
@@ -469,6 +543,7 @@ private:
                     });
                 } else {
                     battery_valid_.store(false);
+                    battery_capacity_test_measuring_.store(false);
                     if (++power_failures == 1 || power_failures % 30 == 0) {
                         ESP_LOGW(TAG, "INA219 read failed (%u consecutive)", power_failures);
                     }
@@ -1666,6 +1741,34 @@ private:
             message = "Status light brightness " + std::to_string(safe_brightness) + "%";
             return true;
         }
+#ifdef INA219_I2C_ADDRESS
+        if (action == "battery_capacity_start") {
+            if (!power_monitor_.IsAvailable()) {
+                message = "INA219 is unavailable";
+                return false;
+            }
+            battery_capacity_test_active_.store(true);
+            PersistBatteryCapacityTest();
+            message = "Battery capacity measurement started";
+            return true;
+        }
+        if (action == "battery_capacity_stop") {
+            battery_capacity_test_active_.store(false);
+            battery_capacity_test_measuring_.store(false);
+            PersistBatteryCapacityTest();
+            message = "Battery capacity measurement stopped";
+            return true;
+        }
+        if (action == "battery_capacity_reset") {
+            battery_capacity_test_active_.store(false);
+            battery_capacity_test_measuring_.store(false);
+            battery_capacity_test_uah_.store(0);
+            battery_capacity_test_seconds_.store(0);
+            PersistBatteryCapacityTest();
+            message = "Battery capacity measurement reset";
+            return true;
+        }
+#endif
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         if (action == "cliff_threshold") {
             const int safe_edge_mm = std::clamp(duration_ms, 50, 500);
@@ -1755,6 +1858,14 @@ private:
                 cJSON_AddNumberToObject(root, "battery_power_mw", battery_power_mw_.load());
                 cJSON_AddBoolToObject(root, "battery_charging", battery_charging_.load());
                 cJSON_AddBoolToObject(root, "battery_discharging", battery_discharging_.load());
+                cJSON_AddBoolToObject(root, "battery_capacity_test_active",
+                                      battery_capacity_test_active_.load());
+                cJSON_AddBoolToObject(root, "battery_capacity_test_measuring",
+                                      battery_capacity_test_measuring_.load());
+                cJSON_AddNumberToObject(root, "battery_capacity_test_mah",
+                                        battery_capacity_test_uah_.load() / 1000.0);
+                cJSON_AddNumberToObject(root, "battery_capacity_test_seconds",
+                                        battery_capacity_test_seconds_.load());
 #endif
 #ifdef MPU6050_I2C_ADDRESS
                 cJSON_AddBoolToObject(root, "motion_sensor_available",
