@@ -73,12 +73,20 @@ extern "C" {
 #define CLIFF_CONFIRM_SAMPLES 2
 #endif
 
+#ifndef CLIFF_AUTO_RETREAT_MS
+#define CLIFF_AUTO_RETREAT_MS 180
+#endif
+
 #ifndef DISTANCE_SENSOR_PERIOD_MS
 #define DISTANCE_SENSOR_PERIOD_MS 80
 #endif
 
 #ifndef MPU6050_SAMPLE_PERIOD_MS
 #define MPU6050_SAMPLE_PERIOD_MS 40
+#endif
+
+#ifndef MPU6050_PRESS_THRESHOLD_G
+#define MPU6050_PRESS_THRESHOLD_G 1.35f
 #endif
 
 #ifdef DESK_ROBOT_USE_ESP32_CAMERA
@@ -177,6 +185,7 @@ private:
     std::atomic_int status_light_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_bool live_camera_enabled_{false};
+    std::atomic_bool motor_activity_active_{false};
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
     esp_timer_handle_t oled_text_reset_timer_ = nullptr;
@@ -223,6 +232,7 @@ private:
     std::atomic<float> motion_acceleration_g_{0.0f};
     std::atomic<float> motion_rotation_dps_{0.0f};
     std::atomic<MotionGesture> motion_gesture_{MotionGesture::kCalibrating};
+    std::atomic_bool press_reaction_pending_{false};
 #endif
 #if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
     TaskHandle_t auxiliary_sensor_task_ = nullptr;
@@ -234,6 +244,7 @@ private:
     std::atomic_int distance_mm_{-1};
     std::atomic_bool distance_valid_{false};
     std::atomic_bool cliff_detected_{false};
+    std::atomic_bool cliff_retreat_pending_{false};
     std::atomic_int cliff_edge_mm_{CLIFF_EDGE_DISTANCE_MM};
 #endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
@@ -281,6 +292,16 @@ private:
 #endif
 
 #ifdef MPU6050_I2C_ADDRESS
+    static float NormalizeMotionAngle(float angle_deg) {
+        while (angle_deg > 180.0f) {
+            angle_deg -= 360.0f;
+        }
+        while (angle_deg < -180.0f) {
+            angle_deg += 360.0f;
+        }
+        return angle_deg;
+    }
+
     static const char* MotionGestureName(MotionGesture gesture) {
         switch (gesture) {
             case MotionGesture::kSteady:
@@ -391,6 +412,8 @@ private:
 #ifdef MPU6050_I2C_ADDRESS
         constexpr int kCalibrationSamples = 50;
         int calibration_samples = 0;
+        float calibration_roll_reference = 0.0f;
+        float calibration_pitch_reference = 0.0f;
         float calibration_roll_sum = 0.0f;
         float calibration_pitch_sum = 0.0f;
         float roll_offset_deg = 0.0f;
@@ -469,54 +492,72 @@ private:
                 } else {
                     motion_failures = 0;
                     if (calibration_samples < kCalibrationSamples) {
-                        calibration_roll_sum += sample.roll_deg;
-                        calibration_pitch_sum += sample.pitch_deg;
+                        if (calibration_samples == 0) {
+                            calibration_roll_reference = sample.roll_deg;
+                            calibration_pitch_reference = sample.pitch_deg;
+                        }
+                        calibration_roll_sum +=
+                            NormalizeMotionAngle(sample.roll_deg - calibration_roll_reference);
+                        calibration_pitch_sum +=
+                            NormalizeMotionAngle(sample.pitch_deg - calibration_pitch_reference);
                         ++calibration_samples;
                         if (calibration_samples == kCalibrationSamples) {
-                            roll_offset_deg = calibration_roll_sum / kCalibrationSamples;
-                            pitch_offset_deg = calibration_pitch_sum / kCalibrationSamples;
+                            roll_offset_deg =
+                                NormalizeMotionAngle(calibration_roll_reference +
+                                                     calibration_roll_sum / kCalibrationSamples);
+                            pitch_offset_deg =
+                                NormalizeMotionAngle(calibration_pitch_reference +
+                                                     calibration_pitch_sum / kCalibrationSamples);
                             motion_sensor_valid_.store(true);
                             motion_gesture_.store(MotionGesture::kSteady);
                             ESP_LOGI(TAG, "MPU6050 orientation calibrated: roll %.1f, pitch %.1f",
                                      roll_offset_deg, pitch_offset_deg);
                         }
                     } else {
-                        const float roll = sample.roll_deg - roll_offset_deg;
-                        const float pitch = sample.pitch_deg - pitch_offset_deg;
+                        const float roll = NormalizeMotionAngle(sample.roll_deg - roll_offset_deg);
+                        const float pitch =
+                            NormalizeMotionAngle(sample.pitch_deg - pitch_offset_deg);
                         motion_roll_deg_.store(roll);
                         motion_pitch_deg_.store(pitch);
                         motion_acceleration_g_.store(sample.acceleration_magnitude_g);
                         motion_rotation_dps_.store(sample.rotation_magnitude_dps);
                         motion_sensor_valid_.store(true);
 
+                        const bool press_impulse =
+                            sample.acceleration_magnitude_g > MPU6050_PRESS_THRESHOLD_G;
                         MotionGesture gesture = MotionGesture::kSteady;
                         if (sample.acceleration_magnitude_g < MPU6050_FREEFALL_THRESHOLD_G ||
-                            sample.acceleration_magnitude_g > MPU6050_IMPACT_THRESHOLD_G) {
+                            sample.acceleration_magnitude_g > MPU6050_IMPACT_THRESHOLD_G ||
+                            press_impulse) {
                             gesture = MotionGesture::kSurprised;
                         } else if (sample.rotation_magnitude_dps > MPU6050_SHAKE_THRESHOLD_DPS) {
                             gesture = MotionGesture::kShake;
-                        } else if (std::fabs(roll) > 75.0f || std::fabs(pitch) > 75.0f) {
-                            gesture = MotionGesture::kSleepy;
-                        } else if (std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG &&
-                                   std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
-                            if (pitch < 0.0f) {
-                                gesture =
-                                    roll < 0.0f ? MotionGesture::kUpLeft : MotionGesture::kUpRight;
+                        } else if (std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
+                            // Pitch is authoritative for nose-up/down. Near those poses Euler roll
+                            // can legitimately approach 180 degrees even though the robot is not
+                            // upside down. Only use moderate roll for diagonal looks.
+                            const bool diagonal = std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG &&
+                                                  std::fabs(roll) < 75.0f;
+                            if (pitch > 0.0f) {
+                                gesture = !diagonal     ? MotionGesture::kUp
+                                          : roll < 0.0f ? MotionGesture::kUpLeft
+                                                        : MotionGesture::kUpRight;
                             } else {
-                                gesture = roll < 0.0f ? MotionGesture::kDownLeft
-                                                      : MotionGesture::kDownRight;
+                                gesture = !diagonal     ? MotionGesture::kDown
+                                          : roll < 0.0f ? MotionGesture::kDownLeft
+                                                        : MotionGesture::kDownRight;
                             }
+                        } else if (std::fabs(roll) > 150.0f) {
+                            gesture = MotionGesture::kSleepy;
                         } else if (std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG) {
                             gesture = roll < 0.0f ? MotionGesture::kLeft : MotionGesture::kRight;
-                        } else if (std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
-                            gesture = pitch < 0.0f ? MotionGesture::kUp : MotionGesture::kDown;
                         }
                         motion_gesture_.store(gesture);
 
                         const bool can_animate =
                             motion_emotions_enabled_.load() &&
                             Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
-                            !AreMotorsMoving();
+                            !motor_activity_active_.load(std::memory_order_relaxed);
                         if (!can_animate || gesture == MotionGesture::kSteady) {
                             candidate_gesture = MotionGesture::kCalibrating;
                             candidate_samples = 0;
@@ -532,13 +573,21 @@ private:
                                 std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
                                 face_busy = !temporary_emotion_.empty();
                             }
-                            if (candidate_samples >= 3 && !face_busy &&
-                                now_us - last_gesture_us >= MPU6050_GESTURE_COOLDOWN_MS * 1000LL) {
+                            if (press_impulse && !face_busy &&
+                                now_us - last_gesture_us >= MPU6050_GESTURE_COOLDOWN_MS * 1000LL &&
+                                QueuePressReaction()) {
+                                last_gesture_us = now_us;
+                                candidate_gesture = MotionGesture::kCalibrating;
+                                candidate_samples = 0;
+                            } else if (candidate_samples >= 3 && !face_busy &&
+                                       now_us - last_gesture_us >=
+                                           MPU6050_GESTURE_COOLDOWN_MS * 1000LL) {
                                 const int duration_ms = gesture == MotionGesture::kShake ||
                                                                 gesture == MotionGesture::kSurprised
                                                             ? 1400
                                                             : 1800;
-                                if (QueueTemporaryEmotion(MotionGestureName(gesture), duration_ms)) {
+                                if (QueueTemporaryEmotion(MotionGestureName(gesture),
+                                                          duration_ms)) {
                                     last_gesture_us = now_us;
                                 }
                                 candidate_samples = 0;
@@ -795,10 +844,17 @@ private:
                     } else {
                         ESP_LOGW(TAG, "Cliff detected: no valid floor return");
                     }
-                    if (self->motors_.IsMoving(MotorController::Direction::kForward) ||
+                    const bool was_moving_forward =
+                        self->motors_.IsMoving(MotorController::Direction::kForward);
+                    const bool was_moving_unsafe =
+                        was_moving_forward ||
                         self->motors_.IsMoving(MotorController::Direction::kLeft) ||
-                        self->motors_.IsMoving(MotorController::Direction::kRight)) {
+                        self->motors_.IsMoving(MotorController::Direction::kRight);
+                    if (was_moving_unsafe) {
                         self->motors_.EmergencyStop();
+                        if (was_moving_forward) {
+                            self->QueueCliffRetreat();
+                        }
                     }
                 }
             }
@@ -810,6 +866,22 @@ private:
 
     bool IsDirectionBlockedByCliff(MotorController::Direction direction) const {
         return IsCliffDetected() && direction != MotorController::Direction::kBackward;
+    }
+
+    void QueueCliffRetreat() {
+        if (cliff_retreat_pending_.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        Application::GetInstance().Schedule([this]() {
+            // EmergencyStop already removed bridge power in the sensor task. Normalize any queued
+            // sequence once more on the application task before issuing the single bounded retreat.
+            motors_.Stop();
+            if (IsCliffDetected()) {
+                ESP_LOGI(TAG, "Backing away from cliff for %d ms", CLIFF_AUTO_RETREAT_MS);
+                motors_.Drive(MotorController::Direction::kBackward, CLIFF_AUTO_RETREAT_MS);
+            }
+            cliff_retreat_pending_.store(false, std::memory_order_release);
+        });
     }
 
     void InitializeCliffSettings() {
@@ -1289,6 +1361,41 @@ private:
         return true;
     }
 
+#ifdef MPU6050_I2C_ADDRESS
+    bool QueuePressReaction() {
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        if (!distance_valid_.load(std::memory_order_relaxed) || IsCliffDetected()) {
+            return false;
+        }
+#endif
+        if (press_reaction_pending_.exchange(true, std::memory_order_acq_rel)) {
+            return false;
+        }
+
+        const std::vector<MotorController::Movement> movements = {
+            {MotorController::Direction::kLeft, 90},
+            {MotorController::Direction::kRight, 130},
+            {MotorController::Direction::kLeft, 130},
+            {MotorController::Direction::kRight, 90},
+        };
+        Application::GetInstance().Schedule([this, movements]() {
+            const bool idle = Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
+            bool floor_safe = true;
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+            floor_safe = distance_valid_.load(std::memory_order_relaxed) && !IsCliffDetected();
+#endif
+            if (idle && floor_safe && !motor_activity_active_.load(std::memory_order_relaxed)) {
+                QueueTemporaryEmotion("surprised", 1600);
+                if (!motors_.PlaySequence(movements)) {
+                    ESP_LOGW(TAG, "Pressed reaction motor sequence was rejected");
+                }
+            }
+            press_reaction_pending_.store(false, std::memory_order_release);
+        });
+        return true;
+    }
+#endif
+
     void InitializeAudioSettings() {
         Settings settings("audio", false);
         const int stored_speaker_volume = static_cast<int>(settings.GetInt("output_volume", 70));
@@ -1330,12 +1437,13 @@ private:
     }
 
     void InitializeMotorStatusLight() {
-#if BUILTIN_LED_COUNT == 1 && defined(BUILTIN_LED_STATUS_PROFILE_EDISON)
         motors_.SetMovementStateCallback([this](bool moving) {
+            motor_activity_active_.store(moving, std::memory_order_relaxed);
+#if BUILTIN_LED_COUNT == 1 && defined(BUILTIN_LED_STATUS_PROFILE_EDISON)
             Application::GetInstance().Schedule(
                 [this, moving]() { static_cast<GpioLed*>(GetLed())->SetActivityOverride(moving); });
-        });
 #endif
+        });
     }
 
     void QueueSpeakerVolume(int volume) {

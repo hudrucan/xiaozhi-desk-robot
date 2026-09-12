@@ -134,6 +134,14 @@ bool RobotWebControlServer::Start(int port) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;
     config.ctrl_port = 32770;
+    // HTTPD_DEFAULT_CONFIG allows seven client sockets and reserves another
+    // three for the server itself. With lwIP's default ten-socket pool that can
+    // starve MQTT's UDP audio channel as soon as the browser reconnects. Four
+    // clients are sufficient for status, logs, camera and one action request;
+    // recycle the least-recently-used connection if another tab appears.
+    config.max_open_sockets = 4;
+    config.lru_purge_enable = true;
+    config.backlog_conn = 2;
     config.max_uri_handlers = 7;
     config.stack_size = 6144;
 

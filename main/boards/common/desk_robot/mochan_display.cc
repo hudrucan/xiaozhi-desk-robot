@@ -2,14 +2,17 @@
 
 #include "assets/lang_config.h"
 #include "display/lvgl_display/lvgl_theme.h"
+#include "src/misc/cache/instance/lv_image_cache.h"
 
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_random.h>
 #include <material_symbols.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -23,6 +26,7 @@ constexpr int kPreviewDurationMs = 5000;
 constexpr int kTypingPeriodMs = 42;
 constexpr int kTypingFinishPeriodMs = 20;
 constexpr int kResponseTextScale = 210;
+constexpr int kEyeLayoutOffsetY = 10;
 constexpr char kTag[] = "MochanDisplay";
 
 constexpr std::array<const char*, 33> kSupportedEmotions = {
@@ -71,6 +75,12 @@ MochanDisplay::~MochanDisplay() {
     if (typing_timer_ != nullptr) {
         lv_timer_delete(typing_timer_);
     }
+    for (auto* raster : {&left_raster_, &right_raster_}) {
+        if (raster->pixels != nullptr) {
+            lv_image_cache_drop(&raster->descriptor);
+            heap_caps_free(raster->pixels);
+        }
+    }
 }
 
 void MochanDisplay::SetupUI() {
@@ -102,11 +112,16 @@ void MochanDisplay::SetupUI() {
     lv_obj_set_style_pad_all(face_, 0, 0);
     lv_obj_set_scrollbar_mode(face_, LV_SCROLLBAR_MODE_OFF);
 
-    left_eye_ = lv_obj_create(face_);
-    right_eye_ = lv_obj_create(face_);
+    const bool raster_eyes = InitializeEyeRasters();
+    left_eye_ = raster_eyes ? lv_image_create(face_) : lv_obj_create(face_);
+    right_eye_ = raster_eyes ? lv_image_create(face_) : lv_obj_create(face_);
+    if (raster_eyes) {
+        lv_image_set_src(left_eye_, &left_raster_.descriptor);
+        lv_image_set_src(right_eye_, &right_raster_.descriptor);
+    }
     for (auto* eye : {left_eye_, right_eye_}) {
         lv_obj_set_style_bg_color(eye, kBrass, 0);
-        lv_obj_set_style_bg_opa(eye, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(eye, raster_eyes ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(eye, 0, 0);
         lv_obj_set_style_shadow_width(eye, 0, 0);
         lv_obj_set_style_radius(eye, 22, 0);
@@ -121,38 +136,6 @@ void MochanDisplay::SetupUI() {
         lv_obj_set_style_radius(eyelid, 22, 0);
         lv_obj_set_style_shadow_width(eyelid, 0, 0);
         lv_obj_move_to_index(eyelid, 0);
-    }
-
-    left_eye_line_shadow_ = lv_line_create(face_);
-    right_eye_line_shadow_ = lv_line_create(face_);
-    left_eye_line_ = lv_line_create(face_);
-    right_eye_line_ = lv_line_create(face_);
-    lv_line_set_points_mutable(left_eye_line_shadow_, left_eye_line_points_, kEyeLinePointCount);
-    lv_line_set_points_mutable(left_eye_line_, left_eye_line_points_, kEyeLinePointCount);
-    lv_line_set_points_mutable(right_eye_line_shadow_, right_eye_line_points_, kEyeLinePointCount);
-    lv_line_set_points_mutable(right_eye_line_, right_eye_line_points_, kEyeLinePointCount);
-    for (auto* line : {left_eye_line_shadow_, right_eye_line_shadow_}) {
-        lv_obj_set_style_line_color(line, kEyelidShadow, 0);
-        lv_obj_set_style_line_width(line, 11, 0);
-        lv_obj_set_style_line_rounded(line, true, 0);
-        lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    left_eye_accent_ = lv_obj_create(face_);
-    right_eye_accent_ = lv_obj_create(face_);
-    for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
-        lv_obj_set_style_bg_color(accent, kBrassHighlight, 0);
-        lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(accent, 0, 0);
-        lv_obj_set_style_radius(accent, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_shadow_width(accent, 0, 0);
-        lv_obj_add_flag(accent, LV_OBJ_FLAG_HIDDEN);
-    }
-    for (auto* line : {left_eye_line_, right_eye_line_}) {
-        lv_obj_set_style_line_color(line, kBrass, 0);
-        lv_obj_set_style_line_width(line, 8, 0);
-        lv_obj_set_style_line_rounded(line, true, 0);
-        lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
     }
 
     wifi_icon_ = lv_label_create(container_);
@@ -314,23 +297,10 @@ void MochanDisplay::ShowResponseBox() {
 }
 
 bool MochanDisplay::AllowsNaturalBlink(FaceState state) {
-    switch (state) {
-        case FaceState::kHappy:
-        case FaceState::kLaughing:
-        case FaceState::kCrying:
-        case FaceState::kLoving:
-        case FaceState::kSurprised:
-        case FaceState::kShocked:
-        case FaceState::kWinking:
-        case FaceState::kRelaxed:
-        case FaceState::kDelicious:
-        case FaceState::kKissy:
-        case FaceState::kSleepy:
-        case FaceState::kShake:
-            return false;
-        default:
-            return true;
-    }
+    // Explicit expressions own their eyelids; an unrelated blink must not
+    // overwrite a wink, squint or asymmetric pose.
+    return state == FaceState::kIdle || state == FaceState::kListening ||
+           state == FaceState::kSpeaking || state >= FaceState::kLookLeft;
 }
 
 void MochanDisplay::AdvanceEyeAnimation() {
@@ -354,15 +324,134 @@ void MochanDisplay::AdvanceEyeAnimation() {
     UpdateEyes(blink_amount);
 }
 
+bool MochanDisplay::InitializeEyeRasters() {
+    constexpr size_t bytes = EyeRaster::kWidth * EyeRaster::kHeight * sizeof(uint32_t);
+    for (auto* raster : {&left_raster_, &right_raster_}) {
+        // Allocate once in PSRAM, never in the animation/audio loop. If PSRAM
+        // is unavailable, preserve the existing lightweight rounded-eye UI.
+        raster->pixels =
+            static_cast<uint32_t*>(heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (raster->pixels == nullptr) {
+            for (auto* allocated : {&left_raster_, &right_raster_}) {
+                heap_caps_free(allocated->pixels);
+                allocated->pixels = nullptr;
+            }
+            ESP_LOGW(kTag, "Eye raster allocation unavailable; using rounded eyes");
+            return false;
+        }
+        raster->descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+        raster->descriptor.header.cf = LV_COLOR_FORMAT_ARGB8888;
+        raster->descriptor.header.w = EyeRaster::kWidth;
+        raster->descriptor.header.h = EyeRaster::kHeight;
+        raster->descriptor.header.stride = EyeRaster::kWidth * sizeof(uint32_t);
+        raster->descriptor.data_size = bytes;
+        raster->descriptor.data = reinterpret_cast<const uint8_t*>(raster->pixels);
+    }
+    return true;
+}
+
+void MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry,
+                                    uint8_t blink_amount) {
+    const auto& previous = raster.previous;
+    if (raster.rendered && raster.previous_blink == blink_amount &&
+        previous.width == geometry.width && previous.height == geometry.height &&
+        previous.top_curve == geometry.top_curve &&
+        previous.bottom_curve == geometry.bottom_curve && previous.slope == geometry.slope &&
+        previous.water == geometry.water) {
+        return;
+    }
+    raster.previous = geometry;
+    raster.previous_blink = blink_amount;
+    raster.rendered = true;
+    const float openness = 1.0f - blink_amount / 100.0f;
+    const float height = std::max(7.0f, geometry.height * openness);
+    const float half_width = geometry.width * 0.5f;
+    const auto rounded_distance = [](float x, float y, float half_w, float half_h, float radius) {
+        const float qx = std::fabs(x) - half_w + radius;
+        const float qy = std::fabs(y) - half_h + radius;
+        const float dx = std::max(qx, 0.0f);
+        const float dy = std::max(qy, 0.0f);
+        return (dx > 0.0f && dy > 0.0f ? std::sqrt(dx * dx + dy * dy) : dx + dy) +
+               std::min(std::max(qx, qy), 0.0f) - radius;
+    };
+    const auto blend = [](uint32_t a, uint32_t b, float amount) {
+        uint32_t result = 0;
+        for (int shift : {0, 8, 16}) {
+            const float first = (a >> shift) & 0xff;
+            const float second = (b >> shift) & 0xff;
+            result |= static_cast<uint32_t>(first + (second - first) * amount) << shift;
+        }
+        return result;
+    };
+    lv_image_cache_drop(&raster.descriptor);
+    for (int x = 0; x < EyeRaster::kWidth; ++x) {
+        const float px = x + 0.5f - EyeRaster::kWidth * 0.5f;
+        const float u = std::clamp(px / half_width, -1.0f, 1.0f);
+        const float curve = 1.0f - u * u;
+        const float tilt = geometry.slope * u * openness;
+        const float top = -height * 0.5f + geometry.top_curve * curve * openness + tilt;
+        const float bottom = height * 0.5f + geometry.bottom_curve * curve * openness;
+        const float half_height = std::max(3.5f, (bottom - top) * 0.5f);
+        const float center = (top + bottom) * 0.5f;
+        const float radius = std::min(18.0f, std::min(half_width, half_height));
+        // A second, offset copy of the same filled shape exposes a soft left/
+        // lower layer. Scale the offset down when squinting or blinking.
+        const float layer_scale = std::clamp(height / 54.0f, 0.0f, 1.0f);
+        const float inner_x = px - 6.0f * layer_scale;
+        const float inner_u = std::clamp(inner_x / half_width, -1.0f, 1.0f);
+        const float inner_curve = 1.0f - inner_u * inner_u;
+        const float inner_top =
+            -height * 0.5f +
+            (geometry.top_curve * inner_curve + geometry.slope * inner_u) * openness;
+        const float inner_bottom = height * 0.5f + geometry.bottom_curve * inner_curve * openness;
+        const float inner_half_height = std::max(3.5f, (inner_bottom - inner_top) * 0.5f);
+        const float inner_center = (inner_top + inner_bottom) * 0.5f - 7.0f * layer_scale;
+        const float inner_radius = std::min(18.0f, std::min(half_width, inner_half_height));
+        for (int y = 0; y < EyeRaster::kHeight; ++y) {
+            const float py = y + 0.5f - EyeRaster::kHeight * 0.5f;
+            const float distance =
+                rounded_distance(px, py - center, half_width, half_height, radius);
+            const float coverage = std::clamp(0.5f - distance, 0.0f, 1.0f);
+            const float inner_distance = rounded_distance(inner_x, py - inner_center, half_width,
+                                                          inner_half_height, inner_radius);
+            const float t = std::clamp((1.0f - inner_distance) / 2.0f, 0.0f, 1.0f);
+            uint32_t color = blend(0x896a36, 0xc6a15b, t * t * (3.0f - 2.0f * t));
+            if (geometry.water > 0) {
+                const float outer = geometry.x < 0 ? -u : u;
+                const float spread = std::clamp((outer + 0.35f) / 1.35f, 0.0f, 1.0f);
+                const float waterline =
+                    bottom - geometry.water * openness * spread * spread * (3.0f - 2.0f * spread);
+                const float water_mix = std::clamp((py - waterline + 1.0f) / 2.0f, 0.0f, 1.0f);
+                color = blend(color, 0x80643b, water_mix);
+            }
+            raster.pixels[y * EyeRaster::kWidth + x] =
+                (static_cast<uint32_t>(coverage * 255.0f) << 24) | color;
+        }
+    }
+}
+
 void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
                                     uint8_t blink_amount) {
+    auto& raster = eye == left_eye_ ? left_raster_ : right_raster_;
+    if (raster.pixels != nullptr) {
+        lv_obj_add_flag(shadow, LV_OBJ_FLAG_HIDDEN);
+        RenderEyeRaster(raster, geometry, blink_amount);
+        lv_obj_set_style_transform_pivot_x(eye, EyeRaster::kWidth / 2, 0);
+        lv_obj_set_style_transform_pivot_y(eye, EyeRaster::kHeight / 2, 0);
+        lv_obj_set_style_transform_rotation(eye, geometry.rotation, 0);
+        lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x, geometry.y);
+        lv_obj_invalidate(eye);
+        return;
+    }
     const int height = std::max(7, geometry.height - (geometry.height - 7) * blink_amount / 100);
     const int inset_x = std::min(4, std::max(2, geometry.width / 8));
     const int inset_y = std::min(6, std::max(2, height / 4));
+    const int shadow_radius = std::clamp(std::min(geometry.width, height) / 3, 6, 18);
 
     lv_obj_remove_flag(shadow, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(eye, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_size(shadow, geometry.width, height);
+    lv_obj_set_style_radius(shadow, shadow_radius, 0);
     lv_obj_set_style_transform_pivot_x(shadow, geometry.width / 2, 0);
     lv_obj_set_style_transform_pivot_y(shadow, height / 2, 0);
     lv_obj_set_style_transform_rotation(shadow, geometry.rotation, 0);
@@ -371,57 +460,11 @@ void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGe
     const int bright_width = std::max(8, geometry.width - inset_x);
     const int bright_height = std::max(4, height - inset_y);
     lv_obj_set_size(eye, bright_width, bright_height);
+    lv_obj_set_style_radius(eye, std::max(5, shadow_radius - 1), 0);
     lv_obj_set_style_transform_pivot_x(eye, bright_width / 2, 0);
     lv_obj_set_style_transform_pivot_y(eye, bright_height / 2, 0);
     lv_obj_set_style_transform_rotation(eye, geometry.rotation, 0);
     lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x - inset_x / 2, geometry.y - inset_y / 2);
-}
-
-void MochanDisplay::ApplyLineEye(lv_obj_t* line, lv_obj_t* shadow, lv_point_precise_t* points,
-                                 const EyeGeometry& geometry, EyeShape shape, int stroke_width) {
-    const int width = std::max(20, geometry.width);
-    const int height = std::max(12, geometry.height);
-    if (shape == EyeShape::kHeart) {
-        static constexpr int kHeartX[kEyeLinePointCount] = {
-            500, 400, 270, 140, 40,  10,  70,  190, 350, 500,
-            650, 810, 930, 990, 960, 860, 730, 600, 500,
-        };
-        static constexpr int kHeartY[kEyeLinePointCount] = {
-            260, 90, 20, 80, 230, 410, 560, 690, 820, 980, 820, 690, 560, 410, 230, 80, 20, 90, 260,
-        };
-        for (size_t index = 0; index < kEyeLinePointCount; ++index) {
-            points[index] = {width * kHeartX[index] / 1000, height * kHeartY[index] / 1000};
-        }
-    } else {
-        constexpr int kSpan = static_cast<int>(kEyeLinePointCount - 1);
-        for (int index = 0; index <= kSpan; ++index) {
-            const int x = 2 + index * (width - 4) / kSpan;
-            const int centered = index * 2 - kSpan;
-            const int curve = (height - 6) * centered * centered / (kSpan * kSpan);
-            int y = height / 2;
-            if (shape == EyeShape::kSmileArc) {
-                y = 3 + curve;
-            } else if (shape == EyeShape::kDroopArc) {
-                y = height - 3 - curve;
-            } else {
-                y += centered * centered / (kSpan * kSpan / 2) - 1;
-            }
-            points[index] = {x, y};
-        }
-    }
-
-    lv_obj_set_style_line_width(shadow, stroke_width + 4, 0);
-    lv_obj_set_style_line_width(line, stroke_width, 0);
-    for (auto* object : {shadow, line}) {
-        lv_obj_remove_flag(object, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(object, width, height);
-        lv_obj_set_style_transform_pivot_x(object, width / 2, 0);
-        lv_obj_set_style_transform_pivot_y(object, height / 2, 0);
-        lv_obj_set_style_transform_rotation(object, geometry.rotation, 0);
-        lv_obj_invalidate(object);
-    }
-    lv_obj_align(shadow, LV_ALIGN_CENTER, geometry.x + 3, geometry.y + 4);
-    lv_obj_align(line, LV_ALIGN_CENTER, geometry.x, geometry.y);
 }
 
 void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
@@ -431,11 +474,9 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
 
     struct EyeTarget {
         EyeGeometry geometry;
-        EyeShape shape;
-        int stroke_width = 12;
     };
-    EyeTarget left{{74, 54, -48, -59, 0}, EyeShape::kRounded};
-    EyeTarget right{{74, 54, 48, -59, 0}, EyeShape::kRounded};
+    EyeTarget left{{74, 54, -48, -59, 0}};
+    EyeTarget right{{74, 54, 48, -59, 0}};
 
     const auto triangle = [](uint16_t phase, int period, int amplitude) {
         const int position = phase % period;
@@ -447,113 +488,115 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
 
     switch (face_state_) {
         case FaceState::kListening:
-            left.geometry = {78, 58 + gentle, -48, -60, 0};
-            right.geometry = {78, 58 + gentle, 48, -60, 0};
+            left.geometry = {78, 54 + gentle, -48, -59, 0};
+            right.geometry = {78, 54 + gentle, 48, -59, 0};
             break;
-        case FaceState::kSpeaking:
-            left.geometry = {68, 46 + triangle(animation_phase_, 20, 3), -48, -59, 0};
-            right.geometry = {68, 46 + triangle(animation_phase_, 20, 3), 48, -59, 0};
+        case FaceState::kSpeaking: {
+            const int voice = triangle(animation_phase_, 18, 5);
+            left.geometry = {70, 43 + voice, -48, -59, 0};
+            right.geometry = {70, 43 - voice, 48, -59, 0};
             break;
+        }
         case FaceState::kThinking:
-            left.geometry = {68, 48, -57, -66, -20};
-            right.geometry = {68, 48, 39, -66, -20};
+            left.geometry = {60, 54, -53, -63, 0, 3, 0, -5};
+            right.geometry = {68, 34, 45, -53, 0, 8, 0, 3};
             break;
         case FaceState::kHappy:
-            left = {{64, 32, -45, -58 + gentle, 0}, EyeShape::kSmileArc};
-            right = {{64, 32, 45, -58 + gentle, 0}, EyeShape::kSmileArc};
+            left.geometry = {74, 43, -47, -56 + gentle, 0, -5, -17};
+            right.geometry = {74, 43, 47, -56 + gentle, 0, -5, -17};
             break;
-        case FaceState::kLaughing:
-            left = {
-                {70, 38, -46, -57 + triangle(animation_phase_, 18, 4), 0}, EyeShape::kSmileArc, 14};
-            right = {
-                {70, 38, 46, -57 + triangle(animation_phase_, 18, 4), 0}, EyeShape::kSmileArc, 14};
+        case FaceState::kLaughing: {
+            const int bounce = triangle(animation_phase_, 16, 4);
+            left.geometry = {76, 38, -47, -54 + bounce, 0, -9, -19, -2};
+            right.geometry = {76, 38, 47, -54 + bounce, 0, -9, -19, 2};
             break;
+        }
         case FaceState::kFunny: {
-            const int sway = triangle(animation_phase_, 36, 5);
-            left = {{56, 48, -48 + sway, -59, -60}, EyeShape::kRounded};
-            right = {{64, 30, 49 + sway, -55, 30}, EyeShape::kSmileArc};
+            const int sway = triangle(animation_phase_, 30, 4);
+            left.geometry = {54, 61, -48 + sway, -61, -60, 0, -3};
+            right.geometry = {72, 40, 48 + sway, -54, 40, -5, -18};
             break;
         }
         case FaceState::kAngry:
-            left.geometry = {70, 42, -45, -56, 130};
-            right.geometry = {70, 42, 45, -56, -130};
+            left.geometry = {74, 43, -45, -55, 0, 2, 0, 12};
+            right.geometry = {74, 43, 45, -55, 0, 2, 0, -12};
             break;
         case FaceState::kSad:
-            left.geometry = {62, 40, -47, -50, -100};
-            right.geometry = {62, 40, 47, -50, 100};
+            left.geometry = {72, 49, -47, -55, 0, 10, 0, -9};
+            right.geometry = {72, 49, 47, -55, 0, 10, 0, 9};
             break;
         case FaceState::kCrying:
-            left = {{62, 31, -46, -49 + gentle, -20}, EyeShape::kDroopArc, 11};
-            right = {{62, 31, 46, -49 + gentle, 20}, EyeShape::kDroopArc, 11};
+            left.geometry = {72, 49, -47, -55 + gentle, 0, 10, 0, -9, 18};
+            right.geometry = {72, 49, 47, -55 + gentle, 0, 10, 0, 9, 18};
             break;
         case FaceState::kLoving: {
-            const int pulse = triangle(animation_phase_, 24, 3);
-            left = {{50 + pulse, 44 + pulse, -42, -58, 0}, EyeShape::kHeart, 8};
-            right = {{50 + pulse, 44 + pulse, 42, -58, 0}, EyeShape::kHeart, 8};
+            const int pulse = triangle(animation_phase_, 36, 2);
+            left.geometry = {62 + pulse, 48 + pulse, -40, -57, 60, -4, -12, 2};
+            right.geometry = {62 + pulse, 48 + pulse, 40, -57, -60, -4, -12, -2};
             break;
         }
         case FaceState::kEmbarrassed:
-            left.geometry = {56, 36, -55, -48, -30};
-            right.geometry = {56, 36, 41, -48, 30};
+            left.geometry = {59, 38, -51, -47 + gentle, 0, 8, -3, -5};
+            right.geometry = {59, 38, 41, -47 + gentle, 0, 8, -3, 5};
             break;
         case FaceState::kSurprised:
-            left.geometry = {50, 66, -44, -57, 0};
-            right.geometry = {50, 66, 44, -57, 0};
+            left.geometry = {49, 65, -44, -57, 0};
+            right.geometry = {49, 65, 44, -57, 0};
             break;
         case FaceState::kShocked: {
-            const int jitter = (animation_phase_ / 2) % 2 == 0 ? -2 : 2;
-            left.geometry = {62, 70, -43 + jitter, -56, 0};
-            right.geometry = {62, 70, 43 + jitter, -56, 0};
+            const int tremble = triangle(animation_phase_, 10, 2);
+            left.geometry = {59, 69, -44 + tremble, -57, 0};
+            right.geometry = {49, 72, 44 + tremble, -59, 0};
             break;
         }
         case FaceState::kWinking:
-            left = {{62, 20, -47, -55, -40}, EyeShape::kFlat, 12};
-            right.geometry = {66, 50, 47, -58, 0};
+            left.geometry = {69, 30, -47, -53, 0, -6, -15};
+            right.geometry = {70, 54, 47, -58, 0, 0, -5};
             break;
         case FaceState::kCool:
-            left = {{74, 22, -45, -56, 45}, EyeShape::kFlat, 13};
-            right = {{74, 22, 45, -56, -45}, EyeShape::kFlat, 13};
+            left.geometry = {78, 33, -46, -55, 0, 0, 0, -3};
+            right.geometry = {78, 33, 46, -55, 0, 0, 0, 3};
             break;
         case FaceState::kRelaxed:
-            left = {{66, 22, -46, -51, 0}, EyeShape::kFlat};
-            right = {{66, 22, 46, -51, 0}, EyeShape::kFlat};
+            left.geometry = {71, 40, -47, -54 + gentle, 0, 4, -6};
+            right.geometry = {71, 40, 47, -54 + gentle, 0, 4, -6};
             break;
         case FaceState::kDelicious: {
-            const int sway = triangle(animation_phase_, 30, 3);
-            left = {{64, 30, -46 + sway, -57, 0}, EyeShape::kSmileArc};
-            right.geometry = {58, 44, 46 + sway, -55, 20};
+            const int savor = triangle(animation_phase_, 32, 3);
+            left.geometry = {69, 41, -45, -54 + savor, 0, -4, -15};
+            right.geometry = {69, 41, 45, -54 - savor, 0, -4, -15};
             break;
         }
         case FaceState::kKissy:
-            left = {{56, 20, -49, -54, -70}, EyeShape::kFlat};
-            right = {{56, 20, 49, -54, 70}, EyeShape::kFlat};
+            left.geometry = {53, 33, -37, -54, -80, -3, -12};
+            right.geometry = {53, 33, 37, -54, 80, -3, -12};
             break;
         case FaceState::kConfident:
-            left.geometry = {74, 34, -44, -56, 70};
-            right.geometry = {74, 34, 44, -56, -70};
+            left.geometry = {70, 51, -46, -61, 0, -3, 0, 3};
+            right.geometry = {73, 34, 46, -53, 0, 4, -2, -4};
             break;
         case FaceState::kSleepy:
-            left = {{66, 22, -46, -48 + gentle, 0}, EyeShape::kDroopArc, 11};
-            right = {{66, 22, 46, -48 + gentle, 0}, EyeShape::kDroopArc, 11};
+            left.geometry = {71, 28, -46, -48 + gentle, 0, 7, 0};
+            right.geometry = {71, 28, 46, -48 + gentle, 0, 7, 0};
             break;
         case FaceState::kSilly: {
-            const int sway = triangle(animation_phase_, 26, 4);
-            left.geometry = {52, 58, -49 + sway, -59, 70};
-            right.geometry = {64, 38, 49 + sway, -52, -30};
+            const int sway = triangle(animation_phase_, 24, 4);
+            left.geometry = {48, 62, -48 + sway, -64, 80, 0, 0, -3};
+            right.geometry = {77, 33, 48 + sway, -46, -80, 2, -8};
             break;
         }
         case FaceState::kConfused:
-            left.geometry = {62, 32, -48, -47, -80};
-            right.geometry = {68, 48, 48, -61, -20};
+            left.geometry = {69, 33, -49, -49, 0, 8, 0, -7};
+            right.geometry = {54, 57, 48, -63, 0, -3, 0, 3};
             break;
         case FaceState::kSuspicious:
-            left.geometry = {66, 24, -43, -52, -40};
-            right.geometry = {64, 46, 51, -59, -10};
+            left.geometry = {74, 31, -40, -52, 0, 6, 0, 3};
+            right.geometry = {63, 43, 54, -59, 0, 9, 0, -3};
             break;
         case FaceState::kShake: {
-            const int shake = (animation_phase_ / 2) % 2 == 0 ? -12 : 12;
-            left.geometry.x += shake;
-            right.geometry.x += shake;
+            const int shake = triangle(animation_phase_, 12, 11);
+            left.geometry = {72, 46, -48 + shake, -57, 0};
+            right.geometry = {72, 46, 48 + shake, -57, 0};
             break;
         }
         case FaceState::kLookLeft:
@@ -613,6 +656,9 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
         }
     }
 
+    left.geometry.y += kEyeLayoutOffsetY;
+    right.geometry.y += kEyeLayoutOffsetY;
+
     const auto smooth = [](int current, int target) {
         const int delta = target - current;
         if (delta >= -1 && delta <= 1) {
@@ -627,6 +673,10 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
         current.x = smooth(current.x, target.x);
         current.y = smooth(current.y, target.y);
         current.rotation = smooth(current.rotation, target.rotation);
+        current.top_curve = smooth(current.top_curve, target.top_curve);
+        current.bottom_curve = smooth(current.bottom_curve, target.bottom_curve);
+        current.slope = smooth(current.slope, target.slope);
+        current.water = smooth(current.water, target.water);
     };
     if (!eye_geometry_initialized_) {
         left_eye_geometry_ = left.geometry;
@@ -637,46 +687,8 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
         approach(right_eye_geometry_, right.geometry);
     }
 
-    const auto apply_eye = [this, blink_amount](lv_obj_t* eye, lv_obj_t* eye_shadow, lv_obj_t* line,
-                                                lv_obj_t* line_shadow, lv_point_precise_t* points,
-                                                const EyeGeometry& geometry, EyeShape shape,
-                                                int stroke_width) {
-        if (shape == EyeShape::kRounded) {
-            lv_obj_add_flag(line, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(line_shadow, LV_OBJ_FLAG_HIDDEN);
-            ApplyRoundedEye(eye, eye_shadow, geometry, blink_amount);
-        } else {
-            lv_obj_add_flag(eye, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(eye_shadow, LV_OBJ_FLAG_HIDDEN);
-            ApplyLineEye(line, line_shadow, points, geometry, shape, stroke_width);
-        }
-    };
-    apply_eye(left_eye_, left_eyelid_, left_eye_line_, left_eye_line_shadow_, left_eye_line_points_,
-              left_eye_geometry_, left.shape, left.stroke_width);
-    apply_eye(right_eye_, right_eyelid_, right_eye_line_, right_eye_line_shadow_,
-              right_eye_line_points_, right_eye_geometry_, right.shape, right.stroke_width);
-
-    for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
-        lv_obj_add_flag(accent, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (face_state_ == FaceState::kCrying) {
-        const int tear_fall = animation_phase_ % 18 / 3;
-        for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
-            lv_obj_remove_flag(accent, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_bg_color(accent, kBrassHighlight, 0);
-            lv_obj_set_size(accent, 8, 15);
-        }
-        lv_obj_align(left_eye_accent_, LV_ALIGN_CENTER, -47, -18 + tear_fall);
-        lv_obj_align(right_eye_accent_, LV_ALIGN_CENTER, 47, -18 + tear_fall);
-    } else if (face_state_ == FaceState::kEmbarrassed) {
-        for (auto* accent : {left_eye_accent_, right_eye_accent_}) {
-            lv_obj_remove_flag(accent, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_bg_color(accent, kEyelidShadow, 0);
-            lv_obj_set_size(accent, 22, 5);
-        }
-        lv_obj_align(left_eye_accent_, LV_ALIGN_CENTER, -52, -20);
-        lv_obj_align(right_eye_accent_, LV_ALIGN_CENTER, 44, -20);
-    }
+    ApplyRoundedEye(left_eye_, left_eyelid_, left_eye_geometry_, blink_amount);
+    ApplyRoundedEye(right_eye_, right_eyelid_, right_eye_geometry_, blink_amount);
 }
 
 void MochanDisplay::SetStatus(const char* status) {

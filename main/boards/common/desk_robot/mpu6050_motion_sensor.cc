@@ -21,6 +21,16 @@ constexpr uint8_t kRegisterWhoAmI = 0x75;
 constexpr int kI2cTimeoutMs = 100;
 constexpr float kRadiansToDegrees = 57.2957795f;
 
+float NormalizeAngle(float angle_deg) {
+    while (angle_deg > 180.0f) {
+        angle_deg -= 360.0f;
+    }
+    while (angle_deg < -180.0f) {
+        angle_deg += 360.0f;
+    }
+    return angle_deg;
+}
+
 int16_t DecodeSigned(const uint8_t* data) {
     return static_cast<int16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
 }
@@ -122,15 +132,19 @@ bool Mpu6050MotionSensor::Read(Sample& sample) {
                          : std::clamp((now_us - previous_sample_us_) / 1000000.0f, 0.005f, 0.2f);
     previous_sample_us_ = now_us;
     if (!filter_initialized_) {
-        filtered_roll_deg_ = accel_roll;
-        filtered_pitch_deg_ = accel_pitch;
+        filtered_roll_deg_ = NormalizeAngle(accel_roll);
+        filtered_pitch_deg_ = NormalizeAngle(accel_pitch);
         filter_initialized_ = true;
     } else {
         constexpr float kGyroWeight = 0.94f;
-        filtered_roll_deg_ = kGyroWeight * (filtered_roll_deg_ + sample.gyro_x_dps * dt) +
-                             (1.0f - kGyroWeight) * accel_roll;
-        filtered_pitch_deg_ = kGyroWeight * (filtered_pitch_deg_ + sample.gyro_y_dps * dt) +
-                              (1.0f - kGyroWeight) * accel_pitch;
+        const float predicted_roll = NormalizeAngle(filtered_roll_deg_ + sample.gyro_x_dps * dt);
+        const float predicted_pitch = NormalizeAngle(filtered_pitch_deg_ + sample.gyro_y_dps * dt);
+        // Blend using the shortest angular distance. A linear average of +179 and -179 degrees
+        // points at zero and causes the fixed under-chassis mounting to drift after every crossing.
+        filtered_roll_deg_ = NormalizeAngle(
+            predicted_roll + (1.0f - kGyroWeight) * NormalizeAngle(accel_roll - predicted_roll));
+        filtered_pitch_deg_ = NormalizeAngle(
+            predicted_pitch + (1.0f - kGyroWeight) * NormalizeAngle(accel_pitch - predicted_pitch));
     }
     sample.roll_deg = filtered_roll_deg_;
     sample.pitch_deg = filtered_pitch_deg_;

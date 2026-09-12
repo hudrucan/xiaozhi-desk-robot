@@ -68,31 +68,37 @@ private:
         kLookDownRight,
     };
 
-    enum class EyeShape {
-        kRounded,
-        kSmileArc,
-        kDroopArc,
-        kFlat,
-        kHeart,
-    };
-
-    static constexpr size_t kEyeLinePointCount = 19;
-
     struct EyeGeometry {
         int width;
         int height;
         int x;
         int y;
         int rotation;
+        int top_curve = 0;
+        int bottom_curve = 0;
+        int slope = 0;
+        int water = 0;
     };
+
+    struct EyeRaster {
+        static constexpr int kWidth = 96;
+        static constexpr int kHeight = 88;
+        uint32_t* pixels = nullptr;
+        lv_image_dsc_t descriptor{};
+        EyeGeometry previous{};
+        uint8_t previous_blink = 0;
+        bool rendered = false;
+    };
+    EyeRaster left_raster_;
+    EyeRaster right_raster_;
+    bool InitializeEyeRasters();
+    void RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
 
     void SetFaceState(FaceState state);
     void AdvanceEyeAnimation();
     void UpdateEyes(uint8_t blink_amount);
     void ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
                          uint8_t blink_amount);
-    void ApplyLineEye(lv_obj_t* line, lv_obj_t* shadow, lv_point_precise_t* points,
-                      const EyeGeometry& geometry, EyeShape shape, int stroke_width);
     static bool AllowsNaturalBlink(FaceState state);
     void UpdateStatusDot();
     void ShowResponseBox();
@@ -109,12 +115,6 @@ private:
     lv_obj_t* right_eye_ = nullptr;
     lv_obj_t* left_eyelid_ = nullptr;
     lv_obj_t* right_eyelid_ = nullptr;
-    lv_obj_t* left_eye_line_ = nullptr;
-    lv_obj_t* right_eye_line_ = nullptr;
-    lv_obj_t* left_eye_line_shadow_ = nullptr;
-    lv_obj_t* right_eye_line_shadow_ = nullptr;
-    lv_obj_t* left_eye_accent_ = nullptr;
-    lv_obj_t* right_eye_accent_ = nullptr;
     lv_obj_t* response_box_ = nullptr;
     lv_obj_t* subtitle_ = nullptr;
     lv_obj_t* notification_ = nullptr;
@@ -143,10 +143,8 @@ private:
     uint16_t blink_countdown_ = 90;
     uint8_t blink_step_ = 0;
     bool eye_geometry_initialized_ = false;
-    EyeGeometry left_eye_geometry_{74, 54, -48, -59, 0};
-    EyeGeometry right_eye_geometry_{74, 54, 48, -59, 0};
-    lv_point_precise_t left_eye_line_points_[kEyeLinePointCount]{};
-    lv_point_precise_t right_eye_line_points_[kEyeLinePointCount]{};
+    EyeGeometry left_eye_geometry_{74, 54, -48, -55, 0};
+    EyeGeometry right_eye_geometry_{74, 54, 48, -55, 0};
     bool wifi_connected_ = false;
     mutable std::mutex emotion_mutex_;
     std::string current_emotion_ = "neutral";
