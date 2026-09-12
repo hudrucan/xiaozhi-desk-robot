@@ -181,8 +181,14 @@ void MochanDisplay::SetupUI() {
     if (initial_theme != nullptr && initial_theme->icon_font() != nullptr) {
         lv_obj_set_style_text_font(battery_icon_, initial_theme->icon_font()->font(), 0);
     }
-    lv_obj_set_style_transform_scale(battery_icon_, 176, 0);
-    lv_obj_align(battery_icon_, LV_ALIGN_TOP_LEFT, 31, 7);
+    // The battery glyph has considerably more internal whitespace than the Wi-Fi
+    // glyph, so it needs a larger transform to have the same apparent size.
+    lv_obj_set_style_transform_scale(battery_icon_, 224, 0);
+    lv_obj_set_style_transform_pivot_x(battery_icon_, 0, 0);
+    lv_obj_set_style_transform_pivot_y(battery_icon_, 0, 0);
+    // Wi-Fi, battery and percentage share the same visual center line. Their
+    // offsets differ because each glyph/font is rendered at a different scale.
+    lv_obj_align(battery_icon_, LV_ALIGN_TOP_LEFT, 31, 6);
     lv_obj_add_flag(battery_icon_, LV_OBJ_FLAG_HIDDEN);
 
     battery_status_ = lv_label_create(container_);
@@ -194,7 +200,7 @@ void MochanDisplay::SetupUI() {
     lv_obj_set_style_transform_scale(battery_status_, 160, 0);
     lv_obj_set_style_transform_pivot_x(battery_status_, 0, 0);
     lv_obj_set_style_transform_pivot_y(battery_status_, 0, 0);
-    lv_obj_align(battery_status_, LV_ALIGN_TOP_LEFT, 47, 7);
+    lv_obj_align(battery_status_, LV_ALIGN_TOP_LEFT, 54, 7);
 
     response_box_ = lv_obj_create(container_);
     lv_obj_set_size(response_box_, width_ - 20, 112);
@@ -942,8 +948,8 @@ void MochanDisplay::SetBatteryStatus(int percent, float voltage_v, bool charging
     char text[16] = {};
     std::snprintf(text, sizeof(text), "%d%%", safe_percent);
     lv_label_set_text(battery_status_, text);
-    lv_obj_align(battery_icon_, LV_ALIGN_TOP_LEFT, 31, 7);
-    lv_obj_align(battery_status_, LV_ALIGN_TOP_LEFT, 47, 7);
+    lv_obj_align(battery_icon_, LV_ALIGN_TOP_LEFT, 31, 6);
+    lv_obj_align(battery_status_, LV_ALIGN_TOP_LEFT, 54, 7);
 }
 
 bool MochanDisplay::SetPanelMirror(bool mirror_x, bool mirror_y) {

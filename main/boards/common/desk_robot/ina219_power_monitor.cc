@@ -132,7 +132,9 @@ bool Ina219PowerMonitor::Read(Reading& reading) {
     // INA219 power register itself is unsigned and is awkward for bidirectional current.
     reading.power_mw = reading.bus_voltage_v * reading.current_ma;
     reading.battery_percent = EstimateBatteryPercent(reading.bus_voltage_v);
-    reading.charging = reading.current_ma < -20.0f;
-    reading.discharging = reading.current_ma > 20.0f;
+    // This robot's high-side wiring reports charger-to-battery current as positive
+    // and battery-to-load current as negative.
+    reading.charging = reading.current_ma > 20.0f;
+    reading.discharging = reading.current_ma < -20.0f;
     return true;
 }
