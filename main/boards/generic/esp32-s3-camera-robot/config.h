@@ -2,6 +2,7 @@
 #define ESP32_S3_CAMERA_ROBOT_CONFIG_H_
 
 #include <driver/gpio.h>
+#include <driver/i2c_types.h>
 
 #define AUDIO_INPUT_SAMPLE_RATE 16000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
@@ -90,12 +91,30 @@
 #define CLIFF_CONFIRM_SAMPLES 2
 #define DISTANCE_SENSOR_PERIOD_MS 80
 
-// Secondary 0.91-inch SSD1306 OLED on a dedicated I2C controller.
-#define SECONDARY_OLED_SDA_PIN GPIO_NUM_38
-#define SECONDARY_OLED_SCL_PIN GPIO_NUM_14
+// Shared auxiliary I2C bus: SSD1306 + INA219 + MPU6050.
+#define AUXILIARY_I2C_SDA_PIN GPIO_NUM_38
+#define AUXILIARY_I2C_SCL_PIN GPIO_NUM_14
+#define AUXILIARY_I2C_PORT I2C_NUM_1
+#define SECONDARY_OLED_SDA_PIN AUXILIARY_I2C_SDA_PIN
+#define SECONDARY_OLED_SCL_PIN AUXILIARY_I2C_SCL_PIN
 #define SECONDARY_OLED_I2C_ADDRESS 0x3C
 #define SECONDARY_OLED_WIDTH 128
 #define SECONDARY_OLED_HEIGHT 32
 #define SECONDARY_OLED_FLIP_180 true
+
+// INA219 breakout with both A0/A1 jumpers open and an R100 (0.1 ohm) shunt.
+#define INA219_I2C_ADDRESS 0x40
+#define INA219_SHUNT_RESISTANCE_OHMS 0.1f
+#define INA219_SAMPLE_PERIOD_MS 1000
+
+// MPU6050 is intentionally disabled until the module is physically installed. Defining its I2C
+// address enables the complete motion-sensing path at compile time.
+// #define MPU6050_I2C_ADDRESS 0x68
+// #define MPU6050_SAMPLE_PERIOD_MS 40
+// #define MPU6050_TILT_THRESHOLD_DEG 28.0f
+// #define MPU6050_SHAKE_THRESHOLD_DPS 180.0f
+// #define MPU6050_IMPACT_THRESHOLD_G 1.75f
+// #define MPU6050_FREEFALL_THRESHOLD_G 0.45f
+// #define MPU6050_GESTURE_COOLDOWN_MS 2500
 
 #endif  // ESP32_S3_CAMERA_ROBOT_CONFIG_H_

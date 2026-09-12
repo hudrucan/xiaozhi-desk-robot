@@ -11,11 +11,17 @@
 #else
 #include "esp_video.h"
 #endif
+#ifdef INA219_I2C_ADDRESS
+#include "ina219_power_monitor.h"
+#endif
 #include "led/circular_strip.h"
 #include "led/gpio_led.h"
 #include "mcp_server.h"
 #include "mochan_display.h"
 #include "motor_controller.h"
+#ifdef MPU6050_I2C_ADDRESS
+#include "mpu6050_motion_sensor.h"
+#endif
 #include "robot_web_control_server.h"
 #include "secondary_oled.h"
 #include "settings.h"
@@ -35,6 +41,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <wifi_manager.h>
+
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
 extern "C" {
 #include <vl53l0x.h>
@@ -44,6 +51,7 @@ extern "C" {
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -67,6 +75,10 @@ extern "C" {
 
 #ifndef DISTANCE_SENSOR_PERIOD_MS
 #define DISTANCE_SENSOR_PERIOD_MS 80
+#endif
+
+#ifndef MPU6050_SAMPLE_PERIOD_MS
+#define MPU6050_SAMPLE_PERIOD_MS 40
 #endif
 
 #ifdef DESK_ROBOT_USE_ESP32_CAMERA
@@ -173,6 +185,34 @@ private:
     std::string temporary_emotion_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
+#ifdef AUXILIARY_I2C_SDA_PIN
+    i2c_master_bus_handle_t auxiliary_i2c_bus_ = nullptr;
+    std::mutex auxiliary_i2c_mutex_;
+#endif
+#ifdef INA219_I2C_ADDRESS
+    Ina219PowerMonitor power_monitor_;
+    std::atomic_bool battery_valid_{false};
+    std::atomic_int battery_percent_{-1};
+    std::atomic<float> battery_voltage_v_{0.0f};
+    std::atomic<float> battery_current_ma_{0.0f};
+    std::atomic<float> battery_power_mw_{0.0f};
+    std::atomic_bool battery_charging_{false};
+    std::atomic_bool battery_discharging_{false};
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+    Mpu6050MotionSensor motion_sensor_;
+    std::atomic_bool motion_sensor_valid_{false};
+    std::atomic_bool motion_emotions_enabled_{true};
+    std::atomic<float> motion_roll_deg_{0.0f};
+    std::atomic<float> motion_pitch_deg_{0.0f};
+    std::atomic<float> motion_acceleration_g_{0.0f};
+    std::atomic<float> motion_rotation_dps_{0.0f};
+    std::mutex motion_gesture_mutex_;
+    std::string motion_gesture_ = "calibrating";
+#endif
+#if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
+    TaskHandle_t auxiliary_sensor_task_ = nullptr;
+#endif
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
     i2c_master_bus_handle_t camera_i2c_bus_ = nullptr;
     vl53l0x_handle_t distance_sensor_ = nullptr;
@@ -185,6 +225,264 @@ private:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     SecondaryOled secondary_oled_;
     TaskHandle_t secondary_oled_task_ = nullptr;
+#endif
+
+#ifdef AUXILIARY_I2C_SDA_PIN
+    void InitializeAuxiliaryI2c() {
+        i2c_master_bus_config_t bus_config = {
+            .i2c_port = AUXILIARY_I2C_PORT,
+            .sda_io_num = AUXILIARY_I2C_SDA_PIN,
+            .scl_io_num = AUXILIARY_I2C_SCL_PIN,
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+            .intr_priority = 0,
+            .trans_queue_depth = 0,
+            .flags = {.enable_internal_pullup = true},
+        };
+        const esp_err_t error = i2c_new_master_bus(&bus_config, &auxiliary_i2c_bus_);
+        if (error != ESP_OK) {
+            auxiliary_i2c_bus_ = nullptr;
+            ESP_LOGW(TAG, "Cannot create auxiliary I2C bus on SDA GPIO%d/SCL GPIO%d: %s",
+                     AUXILIARY_I2C_SDA_PIN, AUXILIARY_I2C_SCL_PIN, esp_err_to_name(error));
+            return;
+        }
+        ESP_LOGI(TAG, "Auxiliary I2C bus ready on SDA GPIO%d/SCL GPIO%d", AUXILIARY_I2C_SDA_PIN,
+                 AUXILIARY_I2C_SCL_PIN);
+    }
+#endif
+
+#ifdef INA219_I2C_ADDRESS
+    void InitializePowerMonitor() {
+        std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
+        if (auxiliary_i2c_bus_ == nullptr ||
+            i2c_master_probe(auxiliary_i2c_bus_, INA219_I2C_ADDRESS, 100) != ESP_OK) {
+            ESP_LOGW(TAG, "INA219 not detected at 0x%02x", INA219_I2C_ADDRESS);
+            return;
+        }
+        if (!power_monitor_.Initialize(auxiliary_i2c_bus_, INA219_I2C_ADDRESS,
+                                       INA219_SHUNT_RESISTANCE_OHMS)) {
+            ESP_LOGW(TAG, "INA219 initialization failed");
+        }
+    }
+#endif
+
+#ifdef MPU6050_I2C_ADDRESS
+    void SetMotionGesture(const std::string& gesture) {
+        std::lock_guard<std::mutex> lock(motion_gesture_mutex_);
+        motion_gesture_ = gesture;
+    }
+
+    bool AreMotorsMoving() const {
+        return motors_.IsMoving(MotorController::Direction::kForward) ||
+               motors_.IsMoving(MotorController::Direction::kBackward) ||
+               motors_.IsMoving(MotorController::Direction::kLeft) ||
+               motors_.IsMoving(MotorController::Direction::kRight);
+    }
+
+    void InitializeMotionSensor() {
+        Settings settings("desk_robot", false);
+        motion_emotions_enabled_.store(settings.GetBool("motion_emotions", true));
+        std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
+        if (auxiliary_i2c_bus_ == nullptr ||
+            !motion_sensor_.Initialize(auxiliary_i2c_bus_, MPU6050_I2C_ADDRESS)) {
+            ESP_LOGW(TAG, "MPU6050 not detected at 0x68 or 0x69");
+        }
+    }
+#endif
+
+#if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
+    static void AuxiliarySensorTask(void* arg) {
+        static_cast<DeskRobotBoard*>(arg)->RunAuxiliarySensorTask();
+    }
+
+    void RunAuxiliarySensorTask() {
+        TickType_t last_wake_time = xTaskGetTickCount();
+#ifdef INA219_I2C_ADDRESS
+        int64_t next_power_sample_us = 0;
+        bool power_filter_initialized = false;
+        float filtered_voltage_v = 0.0f;
+        float filtered_current_ma = 0.0f;
+        float filtered_power_mw = 0.0f;
+        float filtered_percent = 0.0f;
+        unsigned power_failures = 0;
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+        constexpr int kCalibrationSamples = 50;
+        int calibration_samples = 0;
+        float calibration_roll_sum = 0.0f;
+        float calibration_pitch_sum = 0.0f;
+        float roll_offset_deg = 0.0f;
+        float pitch_offset_deg = 0.0f;
+        std::string candidate_gesture;
+        int candidate_samples = 0;
+        int64_t last_gesture_us = 0;
+        unsigned motion_failures = 0;
+#endif
+
+        while (true) {
+            const int64_t now_us = esp_timer_get_time();
+#ifdef INA219_I2C_ADDRESS
+            if (power_monitor_.IsAvailable() && now_us >= next_power_sample_us) {
+                next_power_sample_us = now_us + INA219_SAMPLE_PERIOD_MS * 1000LL;
+                Ina219PowerMonitor::Reading reading;
+                bool read_ok = false;
+                {
+                    std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
+                    read_ok = power_monitor_.Read(reading);
+                }
+                if (read_ok) {
+                    constexpr float kFilterAlpha = 0.25f;
+                    if (!power_filter_initialized) {
+                        filtered_voltage_v = reading.bus_voltage_v;
+                        filtered_current_ma = reading.current_ma;
+                        filtered_power_mw = reading.power_mw;
+                        filtered_percent = static_cast<float>(reading.battery_percent);
+                        power_filter_initialized = true;
+                    } else {
+                        filtered_voltage_v +=
+                            kFilterAlpha * (reading.bus_voltage_v - filtered_voltage_v);
+                        filtered_current_ma +=
+                            kFilterAlpha * (reading.current_ma - filtered_current_ma);
+                        filtered_power_mw += kFilterAlpha * (reading.power_mw - filtered_power_mw);
+                        filtered_percent +=
+                            kFilterAlpha * (reading.battery_percent - filtered_percent);
+                    }
+                    battery_voltage_v_.store(filtered_voltage_v);
+                    battery_current_ma_.store(std::fabs(filtered_current_ma));
+                    battery_power_mw_.store(std::fabs(filtered_power_mw));
+                    battery_percent_.store(
+                        std::clamp(static_cast<int>(std::lround(filtered_percent)), 0, 100));
+                    battery_charging_.store(reading.charging);
+                    battery_discharging_.store(reading.discharging);
+                    battery_valid_.store(true);
+                    power_failures = 0;
+                    const int percent = battery_percent_.load();
+                    const float voltage = battery_voltage_v_.load();
+                    const bool charging = battery_charging_.load();
+                    Application::GetInstance().Schedule([this, percent, voltage, charging]() {
+                        display_->SetBatteryStatus(percent, voltage, charging);
+                    });
+                } else {
+                    battery_valid_.store(false);
+                    if (++power_failures == 1 || power_failures % 30 == 0) {
+                        ESP_LOGW(TAG, "INA219 read failed (%u consecutive)", power_failures);
+                    }
+                }
+            }
+#endif
+
+#ifdef MPU6050_I2C_ADDRESS
+            if (motion_sensor_.IsAvailable()) {
+                Mpu6050MotionSensor::Sample sample;
+                bool read_ok = false;
+                {
+                    std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
+                    read_ok = motion_sensor_.Read(sample);
+                }
+                if (!read_ok) {
+                    motion_sensor_valid_.store(false);
+                    if (++motion_failures == 1 || motion_failures % 250 == 0) {
+                        ESP_LOGW(TAG, "MPU6050 read failed (%u consecutive)", motion_failures);
+                    }
+                } else {
+                    motion_failures = 0;
+                    if (calibration_samples < kCalibrationSamples) {
+                        calibration_roll_sum += sample.roll_deg;
+                        calibration_pitch_sum += sample.pitch_deg;
+                        ++calibration_samples;
+                        if (calibration_samples == kCalibrationSamples) {
+                            roll_offset_deg = calibration_roll_sum / kCalibrationSamples;
+                            pitch_offset_deg = calibration_pitch_sum / kCalibrationSamples;
+                            motion_sensor_valid_.store(true);
+                            SetMotionGesture("steady");
+                            ESP_LOGI(TAG, "MPU6050 orientation calibrated: roll %.1f, pitch %.1f",
+                                     roll_offset_deg, pitch_offset_deg);
+                        }
+                    } else {
+                        const float roll = sample.roll_deg - roll_offset_deg;
+                        const float pitch = sample.pitch_deg - pitch_offset_deg;
+                        motion_roll_deg_.store(roll);
+                        motion_pitch_deg_.store(pitch);
+                        motion_acceleration_g_.store(sample.acceleration_magnitude_g);
+                        motion_rotation_dps_.store(sample.rotation_magnitude_dps);
+                        motion_sensor_valid_.store(true);
+
+                        std::string gesture;
+                        if (sample.acceleration_magnitude_g < MPU6050_FREEFALL_THRESHOLD_G ||
+                            sample.acceleration_magnitude_g > MPU6050_IMPACT_THRESHOLD_G) {
+                            gesture = "surprised";
+                        } else if (sample.rotation_magnitude_dps > MPU6050_SHAKE_THRESHOLD_DPS) {
+                            gesture = "shake";
+                        } else if (std::fabs(roll) > 75.0f || std::fabs(pitch) > 75.0f) {
+                            gesture = "sleepy";
+                        } else if (std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG &&
+                                   std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
+                            gesture = pitch < 0.0f ? "up_" : "down_";
+                            gesture += roll < 0.0f ? "left" : "right";
+                        } else if (std::fabs(roll) > MPU6050_TILT_THRESHOLD_DEG) {
+                            gesture = roll < 0.0f ? "left" : "right";
+                        } else if (std::fabs(pitch) > MPU6050_TILT_THRESHOLD_DEG) {
+                            gesture = pitch < 0.0f ? "up" : "down";
+                        } else {
+                            gesture = "steady";
+                        }
+                        SetMotionGesture(gesture);
+
+                        const bool can_animate =
+                            motion_emotions_enabled_.load() &&
+                            Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
+                            !AreMotorsMoving();
+                        if (!can_animate || gesture == "steady") {
+                            candidate_gesture.clear();
+                            candidate_samples = 0;
+                        } else {
+                            if (gesture == candidate_gesture) {
+                                ++candidate_samples;
+                            } else {
+                                candidate_gesture = gesture;
+                                candidate_samples = 1;
+                            }
+                            bool face_busy = false;
+                            {
+                                std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
+                                face_busy = !temporary_emotion_.empty();
+                            }
+                            if (candidate_samples >= 3 && !face_busy &&
+                                now_us - last_gesture_us >= MPU6050_GESTURE_COOLDOWN_MS * 1000LL) {
+                                const int duration_ms =
+                                    gesture == "shake" || gesture == "surprised" ? 1400 : 1800;
+                                if (QueueTemporaryEmotion(gesture, duration_ms)) {
+                                    last_gesture_us = now_us;
+                                }
+                                candidate_samples = 0;
+                            }
+                        }
+                    }
+                }
+            }
+#endif
+            vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_SAMPLE_PERIOD_MS));
+        }
+    }
+
+    void StartAuxiliarySensorTask() {
+        const bool has_sensor =
+#ifdef INA219_I2C_ADDRESS
+            power_monitor_.IsAvailable() ||
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+            motion_sensor_.IsAvailable() ||
+#endif
+            false;
+        if (!has_sensor) {
+            return;
+        }
+        if (xTaskCreate(AuxiliarySensorTask, "aux_sensors", 6144, this, 2,
+                        &auxiliary_sensor_task_) != pdPASS) {
+            auxiliary_sensor_task_ = nullptr;
+            ESP_LOGE(TAG, "Failed to create auxiliary sensor task");
+        }
+    }
 #endif
 
     void OnNetworkEvent(NetworkEvent event, const std::string& data = "") override {
@@ -495,6 +793,9 @@ private:
         std::string previous_state;
         int previous_distance = -2;
         bool previous_valid = false;
+        int previous_battery_percent = -2;
+        int previous_battery_centi_v = -1;
+        int previous_battery_current_ma = 0;
         while (true) {
             const char* state_name =
                 DeviceStateMachine::GetStateName(Application::GetInstance().GetDeviceState());
@@ -506,12 +807,32 @@ private:
             const int distance = -1;
             const bool valid = false;
 #endif
+#ifdef INA219_I2C_ADDRESS
+            const int battery_percent =
+                self->battery_valid_.load() ? self->battery_percent_.load() : -1;
+            const float battery_voltage = self->battery_voltage_v_.load();
+            const int battery_centi_v = static_cast<int>(std::lround(battery_voltage * 100.0f));
+            const float battery_current = self->battery_current_ma_.load();
+            const int battery_current_ma = static_cast<int>(std::lround(battery_current));
+#else
+            const int battery_percent = -1;
+            const float battery_voltage = 0.0f;
+            const int battery_centi_v = 0;
+            const float battery_current = 0.0f;
+            const int battery_current_ma = 0;
+#endif
             if (state != previous_state || distance != previous_distance ||
-                valid != previous_valid) {
-                self->secondary_oled_.ShowStatus(state, distance, valid);
+                valid != previous_valid || battery_percent != previous_battery_percent ||
+                battery_centi_v != previous_battery_centi_v ||
+                battery_current_ma != previous_battery_current_ma) {
+                self->secondary_oled_.ShowStatus(state, distance, valid, battery_percent,
+                                                 battery_voltage, battery_current);
                 previous_state = state;
                 previous_distance = distance;
                 previous_valid = valid;
+                previous_battery_percent = battery_percent;
+                previous_battery_centi_v = battery_centi_v;
+                previous_battery_current_ma = battery_current_ma;
             } else {
                 self->secondary_oled_.Tick();
             }
@@ -526,17 +847,20 @@ private:
         oled_config.show_brand = settings.GetBool("oled_brand_on", true);
         oled_config.show_state = settings.GetBool("oled_state_on", true);
         oled_config.show_distance = settings.GetBool("oled_dist_on", true);
+        oled_config.show_battery = settings.GetBool("oled_bat_on", true);
+        oled_config.show_voltage = settings.GetBool("oled_volt_on", false);
+        oled_config.show_current = settings.GetBool("oled_amp_on", false);
         oled_config.text_scale =
             std::clamp(static_cast<int>(settings.GetInt("oled_scale", 2)), 1, 3);
         oled_config.brand = settings.GetString("oled_brand", "Xiaozhi");
         oled_config.distance_prefix = settings.GetString("oled_prefix", "Dist");
-        if (!secondary_oled_.Initialize(I2C_NUM_1, SECONDARY_OLED_SDA_PIN, SECONDARY_OLED_SCL_PIN,
+        if (!secondary_oled_.Initialize(auxiliary_i2c_bus_, auxiliary_i2c_mutex_,
                                         SECONDARY_OLED_I2C_ADDRESS, SECONDARY_OLED_WIDTH,
                                         SECONDARY_OLED_HEIGHT, oled_config.flip_180)) {
             return;
         }
         secondary_oled_.Configure(oled_config);
-        if (xTaskCreate(SecondaryOledTask, "status_oled", 4096, this, 2, &secondary_oled_task_) !=
+        if (xTaskCreate(SecondaryOledTask, "status_oled", 6144, this, 2, &secondary_oled_task_) !=
             pdPASS) {
             secondary_oled_task_ = nullptr;
             ESP_LOGE(TAG, "Failed to create secondary OLED task");
@@ -634,6 +958,9 @@ private:
             settings.SetBool("oled_brand_on", config.show_brand);
             settings.SetBool("oled_state_on", config.show_state);
             settings.SetBool("oled_dist_on", config.show_distance);
+            settings.SetBool("oled_bat_on", config.show_battery);
+            settings.SetBool("oled_volt_on", config.show_voltage);
+            settings.SetBool("oled_amp_on", config.show_current);
             settings.SetInt("oled_scale", config.text_scale);
             settings.SetString("oled_brand", config.brand);
             settings.SetString("oled_prefix", config.distance_prefix);
@@ -1057,8 +1384,9 @@ private:
         }
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         if (action == "oled_flip" || action == "oled_show_brand" || action == "oled_show_state" ||
-            action == "oled_show_distance" || action == "oled_scale" || action == "oled_brand" ||
-            action == "oled_prefix") {
+            action == "oled_show_distance" || action == "oled_show_battery" ||
+            action == "oled_show_voltage" || action == "oled_show_current" ||
+            action == "oled_scale" || action == "oled_brand" || action == "oled_prefix") {
             SecondaryOled::Config config = secondary_oled_.GetConfig();
             if (action == "oled_flip") {
                 config.flip_180 = !config.flip_180;
@@ -1068,6 +1396,12 @@ private:
                 config.show_state = duration_ms != 0;
             } else if (action == "oled_show_distance") {
                 config.show_distance = duration_ms != 0;
+            } else if (action == "oled_show_battery") {
+                config.show_battery = duration_ms != 0;
+            } else if (action == "oled_show_voltage") {
+                config.show_voltage = duration_ms != 0;
+            } else if (action == "oled_show_current") {
+                config.show_current = duration_ms != 0;
             } else if (action == "oled_scale") {
                 config.text_scale = std::clamp(duration_ms, 1, 3);
             } else if (action == "oled_brand") {
@@ -1145,6 +1479,18 @@ private:
             return true;
         }
 #endif
+#ifdef MPU6050_I2C_ADDRESS
+        if (action == "motion_emotions") {
+            const bool enabled = duration_ms != 0;
+            motion_emotions_enabled_.store(enabled);
+            Application::GetInstance().Schedule([enabled]() {
+                Settings settings("desk_robot", true);
+                settings.SetBool("motion_emotions", enabled);
+            });
+            message = enabled ? "Motion emotions enabled" : "Motion emotions disabled";
+            return true;
+        }
+#endif
         if (action == "live_camera") {
             const bool enabled = ToggleLiveCamera();
             message = enabled ? "Live preview enabled" : "Live preview disabled";
@@ -1205,6 +1551,32 @@ private:
                 cJSON_AddBoolToObject(root, "cliff_detected", IsCliffDetected());
                 cJSON_AddNumberToObject(root, "cliff_edge_mm", cliff_edge_mm_.load());
 #endif
+#ifdef INA219_I2C_ADDRESS
+                cJSON_AddBoolToObject(root, "battery_available", power_monitor_.IsAvailable());
+                cJSON_AddBoolToObject(root, "battery_valid", battery_valid_.load());
+                cJSON_AddNumberToObject(root, "battery_percent", battery_percent_.load());
+                cJSON_AddNumberToObject(root, "battery_voltage_v", battery_voltage_v_.load());
+                cJSON_AddNumberToObject(root, "battery_current_ma", battery_current_ma_.load());
+                cJSON_AddNumberToObject(root, "battery_power_mw", battery_power_mw_.load());
+                cJSON_AddBoolToObject(root, "battery_charging", battery_charging_.load());
+                cJSON_AddBoolToObject(root, "battery_discharging", battery_discharging_.load());
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+                cJSON_AddBoolToObject(root, "motion_sensor_available",
+                                      motion_sensor_.IsAvailable());
+                cJSON_AddBoolToObject(root, "motion_sensor_valid", motion_sensor_valid_.load());
+                cJSON_AddBoolToObject(root, "motion_emotions_enabled",
+                                      motion_emotions_enabled_.load());
+                cJSON_AddNumberToObject(root, "motion_roll_deg", motion_roll_deg_.load());
+                cJSON_AddNumberToObject(root, "motion_pitch_deg", motion_pitch_deg_.load());
+                cJSON_AddNumberToObject(root, "motion_acceleration_g",
+                                        motion_acceleration_g_.load());
+                cJSON_AddNumberToObject(root, "motion_rotation_dps", motion_rotation_dps_.load());
+                {
+                    std::lock_guard<std::mutex> lock(motion_gesture_mutex_);
+                    cJSON_AddStringToObject(root, "motion_gesture", motion_gesture_.c_str());
+                }
+#endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
                 cJSON_AddBoolToObject(root, "oled_available", secondary_oled_.IsAvailable());
                 const SecondaryOled::Config oled_config = secondary_oled_.GetConfig();
@@ -1212,6 +1584,9 @@ private:
                 cJSON_AddBoolToObject(root, "oled_show_brand", oled_config.show_brand);
                 cJSON_AddBoolToObject(root, "oled_show_state", oled_config.show_state);
                 cJSON_AddBoolToObject(root, "oled_show_distance", oled_config.show_distance);
+                cJSON_AddBoolToObject(root, "oled_show_battery", oled_config.show_battery);
+                cJSON_AddBoolToObject(root, "oled_show_voltage", oled_config.show_voltage);
+                cJSON_AddBoolToObject(root, "oled_show_current", oled_config.show_current);
                 cJSON_AddNumberToObject(root, "oled_text_scale", oled_config.text_scale);
                 cJSON_AddStringToObject(root, "oled_brand", oled_config.brand.c_str());
                 cJSON_AddStringToObject(root, "oled_distance_prefix",
@@ -1273,7 +1648,7 @@ private:
                 Property("direction", kPropertyTypeString),
                 Property("duration_ms", kPropertyTypeInteger, 250, 50, 2000),
             }),
-            [this](const PropertyList& properties) -> ReturnValue {
+            [this](const PropertyList& properties) -> ToolResult {
                 const auto direction = properties["direction"].value<std::string>();
                 MotorController::Direction command;
                 if (!ParseDirection(direction, command)) {
@@ -1312,7 +1687,7 @@ private:
                 Property("emotion", kPropertyTypeString, "neutral"),
                 Property("duration_ms", kPropertyTypeInteger, 5000, 250, 30000),
             }),
-            [this](const PropertyList& properties) -> ReturnValue {
+            [this](const PropertyList& properties) -> ToolResult {
                 const std::string emotion = properties["emotion"].value<std::string>();
                 if (!QueueTemporaryEmotion(emotion, properties["duration_ms"].value<int>())) {
                     return std::string("Unsupported face emotion");
@@ -1327,7 +1702,7 @@ private:
                 Property("direction", kPropertyTypeString, "center"),
                 Property("duration_ms", kPropertyTypeInteger, 2500, 250, 15000),
             }),
-            [this](const PropertyList& properties) -> ReturnValue {
+            [this](const PropertyList& properties) -> ToolResult {
                 std::string direction = properties["direction"].value<std::string>();
                 if (direction == "center") {
                     direction = "neutral";
@@ -1346,7 +1721,7 @@ private:
                 Property("text", kPropertyTypeString),
                 Property("duration_ms", kPropertyTypeInteger, 5000, 500, 60000),
             }),
-            [this](const PropertyList& properties) -> ReturnValue {
+            [this](const PropertyList& properties) -> ToolResult {
                 if (!QueueTemporaryOledText(properties["text"].value<std::string>(),
                                             properties["duration_ms"].value<int>())) {
                     return std::string("OLED is unavailable or text is empty");
@@ -1364,7 +1739,7 @@ private:
                 Property("effect", kPropertyTypeString, "steady"),
                 Property("duration_ms", kPropertyTypeInteger, 5000, 250, 30000),
             }),
-            [this](const PropertyList& properties) -> ReturnValue {
+            [this](const PropertyList& properties) -> ToolResult {
                 if (!QueueStatusLightEffect(properties["effect"].value<std::string>(),
                                             properties["duration_ms"].value<int>())) {
                     return std::string("Unsupported status-light effect");
@@ -1400,6 +1775,64 @@ private:
                        ",\"edge_mm\":" + std::to_string(cliff_edge_mm_.load()) + "}";
             });
 #endif
+#ifdef INA219_I2C_ADDRESS
+        mcp_server.AddTool(
+            "self.battery.get_status",
+            "Get INA219 battery voltage, estimated charge percentage, current, and power.",
+            PropertyList(), [this](const PropertyList&) -> ToolResult {
+                cJSON* result = cJSON_CreateObject();
+                if (result == nullptr) {
+                    return std::unexpected("Out of memory");
+                }
+                cJSON_AddBoolToObject(result, "available", power_monitor_.IsAvailable());
+                cJSON_AddBoolToObject(result, "valid", battery_valid_.load());
+                if (battery_valid_.load()) {
+                    cJSON_AddNumberToObject(result, "percent", battery_percent_.load());
+                    cJSON_AddNumberToObject(result, "voltage_v", battery_voltage_v_.load());
+                    cJSON_AddNumberToObject(result, "current_ma", battery_current_ma_.load());
+                    cJSON_AddNumberToObject(result, "power_mw", battery_power_mw_.load());
+                    cJSON_AddBoolToObject(result, "charging", battery_charging_.load());
+                    cJSON_AddBoolToObject(result, "discharging", battery_discharging_.load());
+                }
+                return result;
+            });
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+        mcp_server.AddTool(
+            "self.motion.get_orientation",
+            "Get the MPU6050 orientation, acceleration, rotation, and detected gesture.",
+            PropertyList(), [this](const PropertyList&) -> ToolResult {
+                cJSON* result = cJSON_CreateObject();
+                if (result == nullptr) {
+                    return std::unexpected("Out of memory");
+                }
+                cJSON_AddBoolToObject(result, "available", motion_sensor_.IsAvailable());
+                cJSON_AddBoolToObject(result, "valid", motion_sensor_valid_.load());
+                cJSON_AddBoolToObject(result, "emotion_control", motion_emotions_enabled_.load());
+                if (motion_sensor_valid_.load()) {
+                    cJSON_AddNumberToObject(result, "roll_deg", motion_roll_deg_.load());
+                    cJSON_AddNumberToObject(result, "pitch_deg", motion_pitch_deg_.load());
+                    cJSON_AddNumberToObject(result, "acceleration_g",
+                                            motion_acceleration_g_.load());
+                    cJSON_AddNumberToObject(result, "rotation_dps", motion_rotation_dps_.load());
+                    std::lock_guard<std::mutex> lock(motion_gesture_mutex_);
+                    cJSON_AddStringToObject(result, "gesture", motion_gesture_.c_str());
+                }
+                return result;
+            });
+        mcp_server.AddTool("self.motion.set_emotion_control",
+                           "Enable or disable automatic face reactions from MPU6050 movement.",
+                           PropertyList({Property("enabled", kPropertyTypeBoolean, true)}),
+                           [this](const PropertyList& properties) -> ReturnValue {
+                               const bool enabled = properties["enabled"].value<bool>();
+                               motion_emotions_enabled_.store(enabled);
+                               Application::GetInstance().Schedule([enabled]() {
+                                   Settings settings("desk_robot", true);
+                                   settings.SetBool("motion_emotions", enabled);
+                               });
+                               return true;
+                           });
+#endif
     }
 
 public:
@@ -1416,6 +1849,9 @@ public:
             GetBacklight()->RestoreBrightness();
         }
         InitializeButtons();
+#ifdef AUXILIARY_I2C_SDA_PIN
+        InitializeAuxiliaryI2c();
+#endif
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         InitializeCameraI2c();
         InitializeCliffSettings();
@@ -1430,11 +1866,20 @@ public:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         InitializeSecondaryOled();
 #endif
+#ifdef INA219_I2C_ADDRESS
+        InitializePowerMonitor();
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+        InitializeMotionSensor();
+#endif
         InitializeAudioSettings();
         InitializeLightingSettings();
         InitializeMotorStatusLight();
         InitializeLiveCamera();
         InitializeInteractionTimers();
+#if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
+        StartAuxiliarySensorTask();
+#endif
         InitializeTools();
         InitializeWebControl();
         ESP_LOGI(TAG, "Desk robot board initialized");
@@ -1453,6 +1898,20 @@ public:
                                                AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
 #endif
         return &audio_codec;
+    }
+
+    bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+#ifdef INA219_I2C_ADDRESS
+        if (!battery_valid_.load()) {
+            return false;
+        }
+        level = battery_percent_.load();
+        charging = battery_charging_.load();
+        discharging = battery_discharging_.load();
+        return true;
+#else
+        return false;
+#endif
     }
 
     Led* GetLed() override {

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdio>
 #include <utility>
 
 #define TAG "SecondaryOled"
@@ -14,6 +16,8 @@ namespace {
 // Compact 5x7 uppercase font. Columns are stored least-significant bit at the top.
 constexpr uint8_t kBlank[5] = {};
 constexpr uint8_t kHyphen[5] = {0x08, 0x08, 0x08, 0x08, 0x08};
+constexpr uint8_t kPeriod[5] = {0x00, 0x60, 0x60, 0x00, 0x00};
+constexpr uint8_t kPercent[5] = {0x63, 0x13, 0x08, 0x64, 0x63};
 constexpr uint8_t kDigits[][5] = {
     {0x3e, 0x51, 0x49, 0x45, 0x3e}, {0x00, 0x42, 0x7f, 0x40, 0x00}, {0x42, 0x61, 0x51, 0x49, 0x46},
     {0x21, 0x41, 0x45, 0x4b, 0x31}, {0x18, 0x14, 0x12, 0x7f, 0x10}, {0x27, 0x45, 0x45, 0x45, 0x39},
@@ -45,28 +49,19 @@ constexpr uint8_t kLowercase[][5] = {
 
 }  // namespace
 
-bool SecondaryOled::Initialize(i2c_port_num_t port, gpio_num_t sda, gpio_num_t scl, uint8_t address,
+bool SecondaryOled::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, uint8_t address,
                                int width, int height, bool flip_180) {
     if (width != 128 || height != 32) {
         ESP_LOGE(TAG, "Only SSD1306 128x32 is supported");
         return false;
     }
-
-    i2c_master_bus_config_t bus_config = {
-        .i2c_port = port,
-        .sda_io_num = sda,
-        .scl_io_num = scl,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .intr_priority = 0,
-        .trans_queue_depth = 0,
-        .flags = {.enable_internal_pullup = true},
-    };
-    esp_err_t error = i2c_new_master_bus(&bus_config, &bus_);
-    if (error != ESP_OK) {
-        ESP_LOGW(TAG, "Cannot create OLED I2C bus: %s", esp_err_to_name(error));
+    if (bus == nullptr) {
+        ESP_LOGW(TAG, "Cannot initialize OLED without an I2C bus");
         return false;
     }
+    bus_ = bus;
+    bus_mutex_ = &bus_mutex;
+    esp_err_t error = ESP_OK;
     error = i2c_master_probe(bus_, address, 100);
     if (error != ESP_OK && (address == 0x3c || address == 0x3d)) {
         const uint8_t alternate_address = address == 0x3c ? 0x3d : 0x3c;
@@ -78,15 +73,13 @@ bool SecondaryOled::Initialize(i2c_port_num_t port, gpio_num_t sda, gpio_num_t s
         }
     }
     if (error != ESP_OK) {
-        ESP_LOGW(TAG, "SSD1306 not detected at 0x3c or 0x3d on SDA GPIO%d/SCL GPIO%d", sda, scl);
-        i2c_del_master_bus(bus_);
-        bus_ = nullptr;
+        ESP_LOGW(TAG, "SSD1306 not detected at 0x3c or 0x3d on shared I2C bus");
         return false;
     }
 
     esp_lcd_panel_io_i2c_config_t io_config = {
         .dev_addr = address,
-        .scl_speed_hz = 100 * 1000,
+        .scl_speed_hz = 400 * 1000,
         .control_phase_bytes = 1,
         .dc_bit_offset = 6,
         .lcd_cmd_bits = 8,
@@ -123,13 +116,19 @@ bool SecondaryOled::Initialize(i2c_port_num_t port, gpio_num_t sda, gpio_num_t s
     flip_180_ = flip_180;
     config_.flip_180 = flip_180;
     ShowStatus("STARTING", 0, false);
-    ESP_LOGI(TAG, "SSD1306 status display ready on GPIO%d/GPIO%d", sda, scl);
+    ESP_LOGI(TAG, "SSD1306 status display ready on shared I2C bus");
     return true;
 }
 
 const uint8_t* SecondaryOled::Glyph(char character) {
     if (character == '-') {
         return kHyphen;
+    }
+    if (character == '.') {
+        return kPeriod;
+    }
+    if (character == '%') {
+        return kPercent;
     }
     if (character >= '0' && character <= '9') {
         return kDigits[character - '0'];
@@ -184,6 +183,7 @@ bool SecondaryOled::Configure(const Config& config) {
     }
 
     if (panel_ != nullptr && normalized.flip_180 != flip_180_) {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
         const esp_err_t error =
             esp_lcd_panel_mirror(panel_, normalized.flip_180, normalized.flip_180);
         if (error != ESP_OK) {
@@ -206,9 +206,10 @@ SecondaryOled::Config SecondaryOled::GetConfig() const {
 }
 
 bool SecondaryOled::Flush() {
-    if (panel_ == nullptr) {
+    if (panel_ == nullptr || bus_mutex_ == nullptr) {
         return false;
     }
+    std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
 
     const esp_err_t error =
         esp_lcd_panel_draw_bitmap(panel_, 0, 0, width_, height_, framebuffer_.data());
@@ -225,7 +226,7 @@ bool SecondaryOled::Flush() {
         return false;
     }
 
-    ESP_LOGW(TAG, "Resetting OLED I2C bus after repeated transfer failures");
+    ESP_LOGW(TAG, "Resetting shared auxiliary I2C bus after repeated OLED failures");
     const esp_err_t reset_error = i2c_master_bus_reset(bus_);
     if (reset_error == ESP_OK) {
         esp_lcd_panel_init(panel_);
@@ -238,7 +239,9 @@ bool SecondaryOled::Flush() {
     return false;
 }
 
-void SecondaryOled::ShowStatus(const std::string& state, int distance_mm, bool distance_valid) {
+void SecondaryOled::ShowStatus(const std::string& state, int distance_mm, bool distance_valid,
+                               int battery_percent, float battery_voltage_v,
+                               float battery_current_ma) {
     if (panel_ == nullptr) {
         return;
     }
@@ -260,6 +263,9 @@ void SecondaryOled::ShowStatus(const std::string& state, int distance_mm, bool d
     state_ = std::move(normalized_state);
     distance_mm_ = distance_mm;
     distance_valid_ = distance_valid;
+    battery_percent_ = battery_percent;
+    battery_voltage_v_ = battery_voltage_v;
+    battery_current_ma_ = battery_current_ma;
     RebuildMessageLocked();
     RenderLocked();
 }
@@ -317,6 +323,24 @@ void SecondaryOled::RebuildMessageLocked() {
             distance += "0";
         }
         append(distance);
+    }
+    if (config_.show_battery && battery_percent_ >= 0) {
+        char battery[32] = {};
+        std::snprintf(battery, sizeof(battery), "Bat %d%%", std::clamp(battery_percent_, 0, 100));
+        append(battery);
+    }
+    if (config_.show_voltage && battery_percent_ >= 0) {
+        char voltage[24] = {};
+        const int centivolts =
+            std::max(0, static_cast<int>(std::lround(battery_voltage_v_ * 100.0f)));
+        std::snprintf(voltage, sizeof(voltage), "Vol %d.%02dV", centivolts / 100, centivolts % 100);
+        append(voltage);
+    }
+    if (config_.show_current && battery_percent_ >= 0) {
+        char current[24] = {};
+        const int milliamps = static_cast<int>(std::lround(battery_current_ma_));
+        std::snprintf(current, sizeof(current), "Amp %dmA", milliamps);
+        append(current);
     }
     if (message != message_) {
         message_ = std::move(message);

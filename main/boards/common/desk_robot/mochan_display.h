@@ -23,6 +23,7 @@ public:
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
     void SetTheme(Theme* theme) override;
     void SetWifiConnected(bool connected);
+    void SetBatteryStatus(int percent, float voltage_v, bool charging);
     bool SetPanelMirror(bool mirror_x, bool mirror_y);
     std::string GetCurrentEmotion() const;
     static bool IsSupportedEmotion(const std::string& emotion);
@@ -120,7 +121,9 @@ private:
     lv_obj_t* camera_image_ = nullptr;
     lv_obj_t* splash_ = nullptr;
     lv_obj_t* wifi_icon_ = nullptr;
+    lv_obj_t* battery_icon_ = nullptr;
     lv_obj_t* status_dot_ = nullptr;
+    lv_obj_t* battery_status_ = nullptr;
     lv_timer_t* eye_timer_ = nullptr;
     lv_timer_t* notification_timer_ = nullptr;
     lv_timer_t* typing_timer_ = nullptr;

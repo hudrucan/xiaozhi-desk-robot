@@ -3,7 +3,8 @@
 Generic ESP32-S3 WROOM N16R8 camera board wired to an INMP441 microphone, an I2S amplifier,
 an ST7789 240x240 primary display, a 0.91-inch SSD1306 128x32 status OLED, an L298N Mini
 motor driver, a jumper-A TTP223 touch button, a small Edison status LED, and a VL53L0X
-distance sensor.
+distance sensor. An INA219 power monitor and MPU6050 motion sensor share the secondary OLED's
+auxiliary I2C bus.
 
 The board uses the shared desk-robot implementation, including the Mochan-style UI,
 camera preview and flip control, queued motor movement and dance action, wake/Wi-Fi
@@ -23,14 +24,20 @@ Build with:
 python3 scripts/build.py generic/esp32-s3-camera-robot --name esp32-s3-camera-robot --language en-US
 ```
 
-## Added display and distance wiring
+## Display and sensor wiring
 
 - ST7789: SCLK GPIO19, MOSI GPIO20, RST GPIO21, DC GPIO47, CS permanently tied to GND,
   and BL GPIO45. The firmware keeps SPI mode 3 and rotates the panel 270 degrees.
 - SSD1306 OLED: SDA GPIO38, SCL GPIO14, powered from 3.3 V. The firmware tries address
-  `0x3C` and then `0x3D` at 100 kHz. Its brand, assistant state, and distance segments can be
+  `0x3C` and then `0x3D`. Its brand, assistant state, distance, and battery segments can be
   independently hidden or customized from the dashboard. Text that fits the 128-pixel width is
   centered and static; longer text scrolls continuously.
+- INA219: VCC 3.3 V, GND common, SDA GPIO38, SCL GPIO14, address `0x40` with both A0/A1
+  jumpers open. The high-side current path is battery positive -> VIN+ -> VIN- -> charger/boost
+  battery-positive input. Battery negative remains directly on common GND; VIN- is not GND.
+- MPU6050: VCC 3.3 V, GND common, SDA GPIO38, SCL GPIO14. AD0 goes to GND for address
+  `0x68`; INT is left disconnected. The driver also probes `0x69` as a fail-soft fallback.
+  All three auxiliary devices run at 400 kHz so the animated OLED does not starve sensor reads.
 - Edison status LED: positive leg GPIO48 and negative leg GND. GPIO48 is driven with PWM;
   the local web dashboard controls the maximum effect brightness. It is off while idle,
   breathes while listening, blinks quickly while speaking, and stays steadily lit for the
@@ -44,14 +51,19 @@ python3 scripts/build.py generic/esp32-s3-camera-robot --name esp32-s3-camera-ro
   It shares the camera SCCB bus; the firmware creates that bus once and passes the same
   handle to the OV3660 camera and distance sensor.
 
-The OLED is a secondary status screen; the ST7789 remains the primary Mochan UI. The
+The OLED is a secondary status screen; the ST7789 remains the primary Mochan UI. INA219 data is
+smoothed before the estimated one-cell Li-ion percentage, voltage, current, and power are shown on
+the displays and dashboard. MPU6050 orientation is calibrated at startup; stable tilts, shaking,
+impact/freefall, and extreme orientation can trigger short face reactions only while the robot is
+idle and its motors are stopped. Motion-driven expressions can be disabled in the dashboard or
+through MCP. Missing OLED/INA219/MPU6050 modules are logged but do not stop boot. The
 VL53L0X is sampled in a low-priority task, exposed as `self.distance.get`, and included in
 the local control status JSON. Its edge threshold defaults to 150 mm, can be calibrated from 50 to
 500 mm in the dashboard, and is persisted in NVS. A valid floor reading at or below the threshold
 permits forward motion. Two consecutive readings above it, invalid returns, or measurement failures
 are treated as a table edge: forward and turning motion stop, the entire queued dance is cancelled,
 and those directions remain blocked until the floor is detected again. Reverse remains available so
-the robot can escape. Missing OLED/VL53L0X modules are logged but do not stop boot.
+the robot can escape. A missing VL53L0X is logged but does not stop boot.
 
 The board also exposes expressive MCP tools for conversation-driven behavior:
 
@@ -62,6 +74,11 @@ The board also exposes expressive MCP tools for conversation-driven behavior:
   short message, then restores automatic status content.
 - `self.status_light.set_effect` temporarily applies `steady`, `breathe`, `blink`, or `off`;
   active motor movement retains priority and the normal status profile resumes afterward.
+- `self.battery.get_status` returns INA219 percentage, voltage, current, charge direction,
+  and power.
+- `self.motion.get_orientation` returns roll, pitch, acceleration magnitude, rotation magnitude,
+  and the current gesture.
+- `self.motion.set_emotion_control` enables or disables automatic MPU6050 face reactions.
 
 Disconnect motor power while flashing or resetting through the onboard USB-UART bridge. Keep the
 ESP32, L298N, and motor supply grounds common, and never power the motors from the ESP32 3.3 V rail.

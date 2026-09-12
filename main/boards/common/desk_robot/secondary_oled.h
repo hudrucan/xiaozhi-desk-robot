@@ -16,16 +16,21 @@ public:
         bool show_brand = true;
         bool show_state = true;
         bool show_distance = true;
+        bool show_battery = true;
+        bool show_voltage = false;
+        bool show_current = false;
         int text_scale = 2;
         std::string brand = "Xiaozhi";
         std::string distance_prefix = "Dist";
     };
 
-    bool Initialize(i2c_port_num_t port, gpio_num_t sda, gpio_num_t scl, uint8_t address, int width,
+    bool Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, uint8_t address, int width,
                     int height, bool flip_180);
     bool Configure(const Config& config);
     Config GetConfig() const;
-    void ShowStatus(const std::string& state, int distance_mm, bool distance_valid);
+    void ShowStatus(const std::string& state, int distance_mm, bool distance_valid,
+                    int battery_percent = -1, float battery_voltage_v = 0.0f,
+                    float battery_current_ma = 0.0f);
     void ShowTemporaryText(const std::string& text);
     void ClearTemporaryText();
     void Tick();
@@ -41,6 +46,7 @@ private:
     bool Flush();
 
     i2c_master_bus_handle_t bus_ = nullptr;
+    std::mutex* bus_mutex_ = nullptr;
     esp_lcd_panel_io_handle_t io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     int width_ = 0;
@@ -52,6 +58,9 @@ private:
     std::string state_ = "Starting";
     int distance_mm_ = 0;
     bool distance_valid_ = false;
+    int battery_percent_ = -1;
+    float battery_voltage_v_ = 0.0f;
+    float battery_current_ma_ = 0.0f;
     std::string message_;
     std::string temporary_text_;
     mutable std::mutex mutex_;

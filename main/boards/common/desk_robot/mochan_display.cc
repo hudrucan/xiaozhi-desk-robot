@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -173,6 +174,27 @@ void MochanDisplay::SetupUI() {
     lv_obj_set_style_bg_color(status_dot_, kSpinnerTrack, 0);
     lv_obj_set_style_border_width(status_dot_, 0, 0);
     lv_obj_align(status_dot_, LV_ALIGN_TOP_RIGHT, -9, 9);
+
+    battery_icon_ = lv_label_create(container_);
+    lv_label_set_text(battery_icon_, MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_FULL);
+    lv_obj_set_style_text_color(battery_icon_, kBrassHighlight, 0);
+    if (initial_theme != nullptr && initial_theme->icon_font() != nullptr) {
+        lv_obj_set_style_text_font(battery_icon_, initial_theme->icon_font()->font(), 0);
+    }
+    lv_obj_set_style_transform_scale(battery_icon_, 176, 0);
+    lv_obj_align(battery_icon_, LV_ALIGN_TOP_LEFT, 31, 7);
+    lv_obj_add_flag(battery_icon_, LV_OBJ_FLAG_HIDDEN);
+
+    battery_status_ = lv_label_create(container_);
+    lv_label_set_text(battery_status_, "");
+    lv_obj_set_style_text_color(battery_status_, kBrassHighlight, 0);
+    if (initial_theme != nullptr && initial_theme->text_font() != nullptr) {
+        lv_obj_set_style_text_font(battery_status_, initial_theme->text_font()->font(), 0);
+    }
+    lv_obj_set_style_transform_scale(battery_status_, 160, 0);
+    lv_obj_set_style_transform_pivot_x(battery_status_, 0, 0);
+    lv_obj_set_style_transform_pivot_y(battery_status_, 0, 0);
+    lv_obj_align(battery_status_, LV_ALIGN_TOP_LEFT, 47, 7);
 
     response_box_ = lv_obj_create(container_);
     lv_obj_set_size(response_box_, width_ - 20, 112);
@@ -875,6 +897,12 @@ void MochanDisplay::SetTheme(Theme* theme) {
     if (wifi_icon_ != nullptr && lvgl_theme->icon_font() != nullptr) {
         lv_obj_set_style_text_font(wifi_icon_, lvgl_theme->icon_font()->font(), 0);
     }
+    if (battery_icon_ != nullptr && lvgl_theme->icon_font() != nullptr) {
+        lv_obj_set_style_text_font(battery_icon_, lvgl_theme->icon_font()->font(), 0);
+    }
+    if (battery_status_ != nullptr) {
+        lv_obj_set_style_text_font(battery_status_, text_font, 0);
+    }
 }
 
 void MochanDisplay::SetWifiConnected(bool connected) {
@@ -886,6 +914,36 @@ void MochanDisplay::SetWifiConnected(bool connected) {
     wifi_connected_ = connected;
     lv_label_set_text(wifi_icon_, connected ? MATERIAL_SYMBOLS_WIFI : MATERIAL_SYMBOLS_WIFI_OFF);
     lv_obj_set_style_text_color(wifi_icon_, connected ? kBrassHighlight : kSpinnerTrack, 0);
+}
+
+void MochanDisplay::SetBatteryStatus(int percent, float voltage_v, bool charging) {
+    (void)voltage_v;
+    DisplayLockGuard lock(this);
+    if (battery_icon_ == nullptr || battery_status_ == nullptr) {
+        return;
+    }
+    if (percent < 0) {
+        lv_obj_add_flag(battery_icon_, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(battery_status_, "");
+        return;
+    }
+    static constexpr std::array<const char*, 8> kBatteryIcons = {
+        MATERIAL_SYMBOLS_BATTERY_ANDROID_0,       MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_1,
+        MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_2, MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_3,
+        MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_4, MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_5,
+        MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_6, MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_FULL,
+    };
+    const int safe_percent = std::clamp(percent, 0, 100);
+    const int icon_index =
+        safe_percent <= 0 ? 0 : (safe_percent >= 100 ? 7 : 1 + (safe_percent - 1) * 6 / 99);
+    lv_label_set_text(battery_icon_, charging ? MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_BOLT
+                                              : kBatteryIcons[icon_index]);
+    lv_obj_remove_flag(battery_icon_, LV_OBJ_FLAG_HIDDEN);
+    char text[16] = {};
+    std::snprintf(text, sizeof(text), "%d%%", safe_percent);
+    lv_label_set_text(battery_status_, text);
+    lv_obj_align(battery_icon_, LV_ALIGN_TOP_LEFT, 31, 7);
+    lv_obj_align(battery_status_, LV_ALIGN_TOP_LEFT, 47, 7);
 }
 
 bool MochanDisplay::SetPanelMirror(bool mirror_x, bool mirror_y) {
