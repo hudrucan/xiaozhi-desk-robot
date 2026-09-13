@@ -197,6 +197,7 @@ private:
 #ifdef AUXILIARY_I2C_SDA_PIN
     i2c_master_bus_handle_t auxiliary_i2c_bus_ = nullptr;
     std::mutex auxiliary_i2c_mutex_;
+    TaskHandle_t auxiliary_init_task_ = nullptr;
 #endif
 #ifdef INA219_I2C_ADDRESS
     Ina219PowerMonitor power_monitor_;
@@ -277,6 +278,51 @@ private:
         }
         ESP_LOGI(TAG, "Auxiliary I2C bus ready on SDA GPIO%d/SCL GPIO%d", AUXILIARY_I2C_SDA_PIN,
                  AUXILIARY_I2C_SCL_PIN);
+    }
+
+    static void DeferredAuxiliaryInitTask(void* arg) {
+        auto* self = static_cast<DeskRobotBoard*>(arg);
+
+        // This task is queued from Application::Run(), after Application::Initialize() returns.
+        // A short delay also lets the main display and audio DMA settle before another driver is
+        // added.
+        vTaskDelay(pdMS_TO_TICKS(250));
+        ESP_LOGI(TAG, "Deferred auxiliary I2C initialization starting");
+
+        self->InitializeAuxiliaryI2c();
+        if (self->auxiliary_i2c_bus_ != nullptr) {
+            // Do not start any periodic I2C task until every device has completed its one-time
+            // setup. This guarantees that SSD1306 panel creation cannot overlap a sensor read.
+#ifdef INA219_I2C_ADDRESS
+            self->InitializePowerMonitor();
+            vTaskDelay(pdMS_TO_TICKS(50));
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+            self->InitializeMotionSensor();
+            vTaskDelay(pdMS_TO_TICKS(50));
+#endif
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+            self->InitializeSecondaryOled();
+#endif
+#if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
+            self->StartAuxiliarySensorTask();
+#endif
+        }
+
+        ESP_LOGI(TAG, "Deferred auxiliary I2C initialization complete");
+        self->auxiliary_init_task_ = nullptr;
+        vTaskDelete(nullptr);
+    }
+
+    void StartDeferredAuxiliaryInit() {
+        if (auxiliary_init_task_ != nullptr) {
+            return;
+        }
+        if (xTaskCreate(DeferredAuxiliaryInitTask, "aux_i2c_init", 10240, this, 1,
+                        &auxiliary_init_task_) != pdPASS) {
+            auxiliary_init_task_ = nullptr;
+            ESP_LOGE(TAG, "Failed to create deferred auxiliary I2C initialization task");
+        }
     }
 #endif
 
@@ -1094,7 +1140,7 @@ private:
             return;
         }
         secondary_oled_.Configure(oled_config);
-        if (xTaskCreate(SecondaryOledTask, "status_oled", 6144, this, 2, &secondary_oled_task_) !=
+        if (xTaskCreate(SecondaryOledTask, "status_oled", 8192, this, 2, &secondary_oled_task_) !=
             pdPASS) {
             secondary_oled_task_ = nullptr;
             ESP_LOGE(TAG, "Failed to create secondary OLED task");
@@ -2123,9 +2169,6 @@ public:
             GetBacklight()->RestoreBrightness();
         }
         InitializeButtons();
-#ifdef AUXILIARY_I2C_SDA_PIN
-        InitializeAuxiliaryI2c();
-#endif
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         InitializeCameraI2c();
         InitializeCliffSettings();
@@ -2137,29 +2180,22 @@ public:
             return !IsDirectionBlockedByCliff(direction);
         });
 #endif
-#ifdef SECONDARY_OLED_I2C_ADDRESS
-        InitializeSecondaryOled();
-#endif
-#ifdef INA219_I2C_ADDRESS
-        InitializePowerMonitor();
-#endif
-#ifdef MPU6050_I2C_ADDRESS
-        InitializeMotionSensor();
-#endif
         InitializeAudioSettings();
         InitializeLightingSettings();
         InitializeMotorStatusLight();
         InitializeLiveCamera();
         InitializeInteractionTimers();
-#if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
-        StartAuxiliarySensorTask();
-#endif
         InitializeTools();
 #ifdef MPU6050_I2C_ADDRESS
         RegisterMotionTools();
 #endif
         InitializeWebControl();
         ESP_LOGI(TAG, "Desk robot board initialized");
+#ifdef AUXILIARY_I2C_SDA_PIN
+        // Board construction runs inside Application::Initialize(). Queue only the lightweight
+        // task creation here; Application::Run() executes it after initialization has returned.
+        Application::GetInstance().Schedule([this]() { StartDeferredAuxiliaryInit(); });
+#endif
     }
 
     AudioCodec* GetAudioCodec() override {

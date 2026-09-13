@@ -62,53 +62,58 @@ bool SecondaryOled::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mute
     bus_ = bus;
     bus_mutex_ = &bus_mutex;
     esp_err_t error = ESP_OK;
-    error = i2c_master_probe(bus_, address, 100);
-    if (error != ESP_OK && (address == 0x3c || address == 0x3d)) {
-        const uint8_t alternate_address = address == 0x3c ? 0x3d : 0x3c;
-        error = i2c_master_probe(bus_, alternate_address, 100);
-        if (error == ESP_OK) {
-            ESP_LOGW(TAG, "SSD1306 found at 0x%02x instead of configured address 0x%02x",
-                     alternate_address, address);
-            address = alternate_address;
+    {
+        // Panel IO creation and initialization both transact on the shared bus. Serialize the
+        // complete one-time setup just like regular frame transfers.
+        std::lock_guard<std::mutex> bus_lock(bus_mutex);
+        error = i2c_master_probe(bus_, address, 100);
+        if (error != ESP_OK && (address == 0x3c || address == 0x3d)) {
+            const uint8_t alternate_address = address == 0x3c ? 0x3d : 0x3c;
+            error = i2c_master_probe(bus_, alternate_address, 100);
+            if (error == ESP_OK) {
+                ESP_LOGW(TAG, "SSD1306 found at 0x%02x instead of configured address 0x%02x",
+                         alternate_address, address);
+                address = alternate_address;
+            }
         }
-    }
-    if (error != ESP_OK) {
-        ESP_LOGW(TAG, "SSD1306 not detected at 0x3c or 0x3d on shared I2C bus");
-        return false;
-    }
+        if (error != ESP_OK) {
+            ESP_LOGW(TAG, "SSD1306 not detected at 0x3c or 0x3d on shared I2C bus");
+            return false;
+        }
 
-    esp_lcd_panel_io_i2c_config_t io_config = {
-        .dev_addr = address,
-        .scl_speed_hz = 400 * 1000,
-        .control_phase_bytes = 1,
-        .dc_bit_offset = 6,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
-        .on_color_trans_done = nullptr,
-        .user_ctx = nullptr,
-        .flags = {.dc_low_on_data = 0, .disable_control_phase = 0},
-    };
-    error = esp_lcd_new_panel_io_i2c(bus_, &io_config, &io_);
-    if (error != ESP_OK) {
-        ESP_LOGW(TAG, "Cannot create OLED panel IO: %s", esp_err_to_name(error));
-        return false;
-    }
+        esp_lcd_panel_io_i2c_config_t io_config = {
+            .dev_addr = address,
+            .scl_speed_hz = 400 * 1000,
+            .control_phase_bytes = 1,
+            .dc_bit_offset = 6,
+            .lcd_cmd_bits = 8,
+            .lcd_param_bits = 8,
+            .on_color_trans_done = nullptr,
+            .user_ctx = nullptr,
+            .flags = {.dc_low_on_data = 0, .disable_control_phase = 0},
+        };
+        error = esp_lcd_new_panel_io_i2c(bus_, &io_config, &io_);
+        if (error != ESP_OK) {
+            ESP_LOGW(TAG, "Cannot create OLED panel IO: %s", esp_err_to_name(error));
+            return false;
+        }
 
-    esp_lcd_panel_ssd1306_config_t ssd1306_config = {
-        .height = static_cast<uint8_t>(height),
-    };
-    esp_lcd_panel_dev_config_t panel_config = {};
-    panel_config.reset_gpio_num = GPIO_NUM_NC;
-    panel_config.bits_per_pixel = 1;
-    panel_config.vendor_config = &ssd1306_config;
-    error = esp_lcd_new_panel_ssd1306(io_, &panel_config, &panel_);
-    if (error != ESP_OK || esp_lcd_panel_reset(panel_) != ESP_OK ||
-        esp_lcd_panel_init(panel_) != ESP_OK ||
-        esp_lcd_panel_mirror(panel_, flip_180, flip_180) != ESP_OK ||
-        esp_lcd_panel_disp_on_off(panel_, true) != ESP_OK) {
-        ESP_LOGW(TAG, "Cannot initialize SSD1306 panel");
-        panel_ = nullptr;
-        return false;
+        esp_lcd_panel_ssd1306_config_t ssd1306_config = {
+            .height = static_cast<uint8_t>(height),
+        };
+        esp_lcd_panel_dev_config_t panel_config = {};
+        panel_config.reset_gpio_num = GPIO_NUM_NC;
+        panel_config.bits_per_pixel = 1;
+        panel_config.vendor_config = &ssd1306_config;
+        error = esp_lcd_new_panel_ssd1306(io_, &panel_config, &panel_);
+        if (error != ESP_OK || esp_lcd_panel_reset(panel_) != ESP_OK ||
+            esp_lcd_panel_init(panel_) != ESP_OK ||
+            esp_lcd_panel_mirror(panel_, flip_180, flip_180) != ESP_OK ||
+            esp_lcd_panel_disp_on_off(panel_, true) != ESP_OK) {
+            ESP_LOGW(TAG, "Cannot initialize SSD1306 panel");
+            panel_ = nullptr;
+            return false;
+        }
     }
 
     width_ = width;
@@ -226,16 +231,11 @@ bool SecondaryOled::Flush() {
         return false;
     }
 
-    ESP_LOGW(TAG, "Resetting shared auxiliary I2C bus after repeated OLED failures");
-    const esp_err_t reset_error = i2c_master_bus_reset(bus_);
-    if (reset_error == ESP_OK) {
-        esp_lcd_panel_init(panel_);
-        esp_lcd_panel_mirror(panel_, flip_180_, flip_180_);
-        esp_lcd_panel_disp_on_off(panel_, true);
-    } else {
-        ESP_LOGW(TAG, "OLED I2C reset failed: %s", esp_err_to_name(reset_error));
-    }
-    consecutive_flush_failures_ = 0;
+    // The OLED shares this controller with INA219 and MPU6050. Resetting the whole bus from an
+    // optional display invalidates assumptions made by the other live device handles and can turn
+    // a flaky or damaged OLED into a reboot loop. Quarantine only the OLED until the next reboot.
+    ESP_LOGE(TAG, "Disabling SSD1306 after repeated transfer failures; shared I2C bus left intact");
+    panel_ = nullptr;
     return false;
 }
 
