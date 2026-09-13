@@ -585,7 +585,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
             right.geometry = {77, 33, 48 + sway, -46, -80, 2, -8};
             break;
         }
-        case FaceState::kConfused:333
+        case FaceState::kConfused:
             left.geometry = {69, 33, -49, -49, 0, 8, 0, -7};
             right.geometry = {54, 57, 48, -63, 0, -3, 0, 3};
             break;
