@@ -3,6 +3,7 @@
 #include "application.h"
 
 #include <driver/gpio.h>
+#include <driver/ledc.h>
 #include <esp_log.h>
 
 #include <algorithm>
@@ -10,6 +11,15 @@
 #include <utility>
 
 #define TAG "MotorController"
+
+namespace {
+// Desk robot: camera/backlight use timer 0, status light uses timer 2.
+constexpr auto kPwmMode = LEDC_LOW_SPEED_MODE;
+constexpr auto kPwmTimer = LEDC_TIMER_3;
+constexpr ledc_channel_t kChannels[] = {LEDC_CHANNEL_4, LEDC_CHANNEL_5, LEDC_CHANNEL_6,
+                                        LEDC_CHANNEL_7};
+constexpr uint32_t kMaxDuty = 1023;
+}  // namespace
 
 MotorController::MotorController(gpio_num_t left_in1, gpio_num_t left_in2, gpio_num_t right_in1,
                                  gpio_num_t right_in2)
@@ -77,13 +87,87 @@ MotorController::~MotorController() {
     }
 }
 
-void MotorController::SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward) {
-    gpio_set_level(in1, forward ? 1 : 0);
-    gpio_set_level(in2, forward ? 0 : 1);
+void MotorController::SetSpeedPercent(int percent) {
+    speed_percent_.store(std::clamp(percent, 55, 100));
+}
+
+bool MotorController::InitializePwm() {
+    // Called with output_mutex_ held, only when an actual movement starts.
+    if (pwm_ready_) {
+        return true;
+    }
+    ledc_timer_config_t timer = {};
+    timer.speed_mode = kPwmMode;
+    timer.timer_num = kPwmTimer;
+    timer.duty_resolution = LEDC_TIMER_10_BIT;
+    timer.freq_hz = 20000;
+    timer.clk_cfg = LEDC_AUTO_CLK;
+    esp_err_t result = ledc_timer_config(&timer);
+    const gpio_num_t pins[] = {left_in1_, left_in2_, right_in1_, right_in2_};
+    size_t configured = 0;
+    while (result == ESP_OK && configured < 4) {
+        ledc_channel_config_t channel = {};
+        channel.gpio_num = pins[configured];
+        channel.speed_mode = kPwmMode;
+        channel.channel = kChannels[configured];
+        channel.timer_sel = kPwmTimer;
+        channel.duty = 0;
+        result = ledc_channel_config(&channel);
+        if (result == ESP_OK) {
+            ++configured;
+        }
+    }
+    if (result != ESP_OK) {
+        for (size_t i = 0; i < configured; ++i) {
+            ledc_stop(kPwmMode, kChannels[i], 0);
+        }
+        // Detach any partially configured channels and restore the safe GPIO state.
+        for (const auto pin : pins) {
+            gpio_reset_pin(pin);
+            gpio_set_level(pin, 0);
+            gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+        }
+        ESP_LOGE(TAG, "Motor PWM initialization failed: %s", esp_err_to_name(result));
+        return false;
+    }
+    pwm_ready_ = true;
+    ESP_LOGI(TAG, "Motor PWM ready: 20 kHz, timer 3, channels 4-7");
+    return true;
+}
+
+bool MotorController::SetInput(gpio_num_t pin, uint32_t duty) {
+    const gpio_num_t pins[] = {left_in1_, left_in2_, right_in1_, right_in2_};
+    for (size_t i = 0; i < 4; ++i) {
+        if (pins[i] == pin) {
+            // Basic duty operations are serialized by output_mutex_; no fade service needed.
+            return ledc_set_duty(kPwmMode, kChannels[i], duty) == ESP_OK &&
+                   ledc_update_duty(kPwmMode, kChannels[i]) == ESP_OK;
+        }
+    }
+    return false;
+}
+
+bool MotorController::SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward) {
+    const uint32_t duty = kMaxDuty * static_cast<uint32_t>(speed_percent_.load()) / 100;
+    return SetInput(forward ? in2 : in1, 0) && SetInput(forward ? in1 : in2, duty);
 }
 
 void MotorController::AllOff() {
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    OutputsOffLocked();
+}
+
+void MotorController::OutputsOffLocked() {
     if (!available_) {
+        return;
+    }
+    if (pwm_ready_) {
+        // Keep LEDC channels configured between movements. Stopping the channels
+        // while pwm_ready_ remains true would make the next movement skip re-init.
+        for (const auto channel : kChannels) {
+            ledc_set_duty(kPwmMode, channel, 0);
+            ledc_update_duty(kPwmMode, channel);
+        }
         return;
     }
     gpio_set_level(left_in1_, 0);
@@ -221,23 +305,40 @@ void MotorController::ApplyNextCommand() {
     active_until_us_.store(esp_timer_get_time() + static_cast<int64_t>(command.duration_ms) * 1000,
                            std::memory_order_relaxed);
 
-    switch (command.direction) {
-        case Direction::kForward:
-            SetMotor(left_in1_, left_in2_, false);
-            SetMotor(right_in1_, right_in2_, false);
-            break;
-        case Direction::kBackward:
-            SetMotor(left_in1_, left_in2_, true);
-            SetMotor(right_in1_, right_in2_, true);
-            break;
-        case Direction::kLeft:
-            SetMotor(left_in1_, left_in2_, true);
-            SetMotor(right_in1_, right_in2_, false);
-            break;
-        case Direction::kRight:
-            SetMotor(left_in1_, left_in2_, false);
-            SetMotor(right_in1_, right_in2_, true);
-            break;
+    bool applied = false;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        if (!emergency_pending_.load() && InitializePwm()) {
+            switch (command.direction) {
+                case Direction::kForward:
+                    applied = SetMotor(left_in1_, left_in2_, false) &&
+                              SetMotor(right_in1_, right_in2_, false);
+                    break;
+                case Direction::kBackward:
+                    applied = SetMotor(left_in1_, left_in2_, true) &&
+                              SetMotor(right_in1_, right_in2_, true);
+                    break;
+                case Direction::kLeft:
+                    applied = SetMotor(left_in1_, left_in2_, true) &&
+                              SetMotor(right_in1_, right_in2_, false);
+                    break;
+                case Direction::kRight:
+                    applied = SetMotor(left_in1_, left_in2_, false) &&
+                              SetMotor(right_in1_, right_in2_, true);
+                    break;
+            }
+        }
+        if (!applied) {
+            OutputsOffLocked();
+        }
+    }
+    if (!applied) {
+        if (emergency_pending_.load()) {
+            Stop();
+            return;
+        }
+        EnterFault("motor PWM unavailable; outputs disabled");
+        return;
     }
 
     ArmTimer(command.duration_ms);
@@ -307,6 +408,7 @@ void MotorController::Stop() {
     sequence_completed_.store(0, std::memory_order_relaxed);
     active_until_us_.store(0, std::memory_order_relaxed);
     PublishMotionActive(false);
+    emergency_pending_.store(false);
 }
 
 void MotorController::EmergencyStop() {
@@ -315,9 +417,13 @@ void MotorController::EmergencyStop() {
     }
     // Cut the H-bridge inputs from the caller's task immediately. Queue and
     // timer state are then normalized on the application task by Stop().
-    AllOff();
-    moving_.store(false, std::memory_order_relaxed);
-    timer_generation_.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        emergency_pending_.store(true);
+        OutputsOffLocked();
+        moving_.store(false, std::memory_order_relaxed);
+        timer_generation_.fetch_add(1, std::memory_order_relaxed);
+    }
     if (stop_timer_ != nullptr) {
         esp_timer_stop(stop_timer_);
     }

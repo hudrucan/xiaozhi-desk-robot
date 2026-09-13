@@ -1735,6 +1735,11 @@ private:
             message = "Screen brightness " + std::to_string(safe_brightness) + "%";
             return true;
         }
+        if (action == "motor_speed") {
+            motors_.SetSpeedPercent(duration_ms);
+            message = "Motor speed " + std::to_string(motors_.GetSpeedPercent()) + "%";
+            return true;
+        }
         if (action == "status_light_brightness") {
             const int safe_brightness = std::clamp(duration_ms, 0, 100);
             QueueStatusLightBrightness(safe_brightness);
@@ -1840,6 +1845,7 @@ private:
                 cJSON_AddNumberToObject(root, "status_light_brightness",
                                         status_light_brightness_.load());
                 cJSON_AddBoolToObject(root, "live_camera", live_camera_enabled_.load());
+                cJSON_AddNumberToObject(root, "motor_speed", motors_.GetSpeedPercent());
                 cJSON* motor_status = cJSON_Parse(motors_.StatusJson().c_str());
                 cJSON_AddItemToObject(
                     root, "motors", motor_status != nullptr ? motor_status : cJSON_CreateObject());

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <deque>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,8 @@ public:
     bool PlaySequence(const std::vector<Movement>& movements);
     void Stop();
     void EmergencyStop();
+    void SetSpeedPercent(int percent);
+    int GetSpeedPercent() const { return speed_percent_.load(); }
     void SetMotionGuard(std::function<bool(Direction)> guard);
     void SetMovementStateCallback(std::function<void(bool)> callback);
     bool IsMoving(Direction direction) const;
@@ -58,7 +61,10 @@ private:
     void EnterFault(const char* reason);
     void PublishMotionActive(bool active);
     void AllOff();
-    void SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward);
+    bool InitializePwm();
+    void OutputsOffLocked();
+    bool SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward);
+    bool SetInput(gpio_num_t pin, uint32_t duty);
 
     gpio_num_t left_in1_;
     gpio_num_t left_in2_;
@@ -66,6 +72,11 @@ private:
     gpio_num_t right_in2_;
     esp_timer_handle_t stop_timer_ = nullptr;
     bool available_ = false;
+    // Serializes timer/sensor emergency stops with application PWM writes.
+    std::mutex output_mutex_;
+    bool pwm_ready_ = false;
+    std::atomic_int speed_percent_{100};
+    std::atomic_bool emergency_pending_{false};
     std::atomic<bool> faulted_{false};
     Phase phase_ = Phase::kIdle;
     std::atomic<Direction> direction_{Direction::kForward};
