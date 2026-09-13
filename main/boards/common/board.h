@@ -72,6 +72,9 @@ public:
     virtual AudioCodec* GetAudioCodec() = 0;
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
+    // Route assistant emotions through the board so hardware with expressive
+    // actuators can react without coupling Application to a concrete board.
+    virtual void ApplyEmotion(const char* emotion);
     virtual Camera* GetCamera();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;

@@ -13,7 +13,12 @@ also exposes motor/dance telemetry, a microphone level meter, cliff calibration,
 browser snapshots, and searchable/downloadable runtime logs.
 The camera controls live with the browser preview, and stopping live mode clears its last frame.
 The separate Emotions panel can preview every standard Xiaozhi emotion plus the Mochan
-`suspicious` and `shake` expressions without running a disruptive loop.
+`suspicious` and `shake` expressions. The dashboard's **Emotion movement** switch optionally
+adds short, safety-guarded body-language sequences to both assistant emotions and previews.
+Motor speed, manual-drive duration, and this switch are persisted in the `desk_robot` NVS namespace
+(`motor_speed`, `drive_time`, and `emotion_move`); emotion movement defaults off and the
+conservative default motor limit is 70%. Four gyro buttons around Forward/Backward provide bounded
+left/right 90- and 180-degree turns when the MPU6050 is calibrated and the floor is safe.
 Display settings persist in NVS and cover 180-degree rotation of both screens, OLED segment
 visibility, custom brand and distance-prefix text, and 1x-3x OLED text scaling. The OLED centers
 text that fits its width and only starts the marquee when the composed line overflows.
@@ -38,6 +43,8 @@ python3 scripts/build.py generic/esp32-s3-camera-robot --name esp32-s3-camera-ro
 - MPU6050: VCC 3.3 V, GND common, SDA GPIO38, SCL GPIO14. AD0 goes to GND for address
   `0x68`; INT is left disconnected. The driver also probes `0x69` as a fail-soft fallback.
   All three auxiliary devices run at 400 kHz so the animated OLED does not starve sensor reads.
+  The current flat mounting uses gyro Z for yaw; `MPU6050_YAW_SIGN` in `config.h` must be flipped
+  if a hardware direction test reports positive yaw while the chassis turns left.
 - Edison status LED: positive leg GPIO48 and negative leg GND. GPIO48 is driven with PWM;
   the local web dashboard controls the maximum effect brightness. It is off while idle,
   breathes while listening, blinks quickly while speaking, and stays steadily lit for the
@@ -56,8 +63,10 @@ smoothed before the estimated one-cell Li-ion percentage, voltage, current, and 
 the displays and dashboard. MPU6050 orientation is calibrated at startup; stable tilts, shaking,
 impact/freefall, and extreme orientation can trigger short face reactions only while the robot is
 idle and its motors are stopped. Motion-driven expressions can be disabled in the dashboard or
-through MCP. Missing OLED/INA219/MPU6050 modules are logged but do not stop boot. The
-VL53L0X is sampled in a low-priority task, exposed as `self.distance.get`, and included in
+through MCP. The auxiliary sensor task remains the only continuous MPU6050 reader. It publishes
+bias-corrected yaw samples for bounded relative turns; unavailable, uncalibrated, or stale gyro
+data falls back to timed movement. Missing OLED/INA219/MPU6050 modules are logged but do not stop
+boot. The VL53L0X is sampled in a low-priority task, exposed as `self.distance.get`, and included in
 the local control status JSON. Its edge threshold defaults to 150 mm, can be calibrated from 50 to
 500 mm in the dashboard, and is persisted in NVS. A valid floor reading at or below the threshold
 permits forward motion. Two consecutive readings above it, invalid returns, or measurement failures
@@ -77,8 +86,10 @@ The board also exposes expressive MCP tools for conversation-driven behavior:
 - `self.battery.get_status` returns INA219 percentage, voltage, current, charge direction,
   and power.
 - `self.motion.get_orientation` returns roll, pitch, acceleration magnitude, rotation magnitude,
-  and the current gesture.
+  the current gesture, and gyro-turn target/progress/result telemetry.
 - `self.motion.set_emotion_control` enables or disables automatic MPU6050 face reactions.
+- `self.robot.turn_relative` accepts signed degrees from -180 to 180; positive values turn right
+  and negative values turn left using the same bounded gyro controller as the dashboard buttons.
 
 Disconnect motor power while flashing or resetting through the onboard USB-UART bridge. Keep the
 ESP32, L298N, and motor supply grounds common, and never power the motors from the ESP32 3.3 V rail.

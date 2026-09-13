@@ -669,8 +669,8 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
-                Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
-                    display->SetEmotion(emotion_str.c_str());
+                Schedule([emotion_str = std::string(emotion->valuestring)]() {
+                    Board::GetInstance().ApplyEmotion(emotion_str.c_str());
                 });
             }
         } else if (strcmp(type->valuestring, "mcp") == 0) {

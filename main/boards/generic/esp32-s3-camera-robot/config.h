@@ -114,9 +114,14 @@
 #define MPU6050_SAMPLE_PERIOD_MS 40
 #define MPU6050_TILT_THRESHOLD_DEG 28.0f
 #define MPU6050_SHAKE_THRESHOLD_DPS 180.0f
-#define MPU6050_PRESS_THRESHOLD_G 1.35f
+#define MPU6050_PRESS_THRESHOLD_G 1.25f
 #define MPU6050_IMPACT_THRESHOLD_G 1.75f
 #define MPU6050_FREEFALL_THRESHOLD_G 0.45f
 #define MPU6050_GESTURE_COOLDOWN_MS 2500
+// Gyro Z is the yaw axis for the current flat, under-chassis MPU6050 mounting.
+// Positive corrected yaw must correspond to a right turn; flip this sign after
+// the first hardware direction check if the installed module is mirrored.
+#define MPU6050_YAW_AXIS 2
+#define MPU6050_YAW_SIGN 1.0f
 
 #endif  // ESP32_S3_CAMERA_ROBOT_CONFIG_H_

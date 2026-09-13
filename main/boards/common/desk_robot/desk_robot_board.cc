@@ -49,6 +49,7 @@ extern "C" {
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -87,6 +88,14 @@ extern "C" {
 
 #ifndef MPU6050_PRESS_THRESHOLD_G
 #define MPU6050_PRESS_THRESHOLD_G 1.35f
+#endif
+
+#ifndef MPU6050_YAW_AXIS
+#define MPU6050_YAW_AXIS 2
+#endif
+
+#ifndef MPU6050_YAW_SIGN
+#define MPU6050_YAW_SIGN 1.0f
 #endif
 
 #ifdef DESK_ROBOT_USE_ESP32_CAMERA
@@ -173,6 +182,19 @@ private:
 
 class DeskRobotBoard : public WifiBoard {
 private:
+    enum class EmotionSource : uint8_t { kAssistant, kPreview, kMpuReaction };
+
+    static constexpr int kDefaultMotorSpeedPercent = 70;
+    static constexpr int kDefaultDriveDurationMs = 250;
+    static constexpr int64_t kEmotionMovementCooldownUs = 1500 * 1000LL;
+#ifdef MPU6050_I2C_ADDRESS
+    static constexpr int kGyroBiasSamples = 50;
+    static constexpr float kGyroBiasYawStabilityDps = 1.5f;
+    static constexpr int64_t kGyroSampleStaleUs = 160 * 1000LL;
+    static constexpr float kGyroTurnToleranceDeg = 2.5f;
+    static constexpr uint32_t kGyroTurnMaxTimeoutMs = 10000;
+#endif
+
     Button boot_button_;
     MochanDisplay* display_ = nullptr;
     DeskRobotCamera* camera_ = nullptr;
@@ -186,6 +208,11 @@ private:
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_bool live_camera_enabled_{false};
     std::atomic_bool motor_activity_active_{false};
+    std::atomic_int drive_duration_ms_{kDefaultDriveDurationMs};
+    std::atomic_bool emotion_movement_enabled_{false};
+    std::atomic_bool emotion_movement_active_{false};
+    int64_t last_emotion_movement_us_ = 0;
+    std::array<uint8_t, 8> last_emotion_variants_{};
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
     esp_timer_handle_t oled_text_reset_timer_ = nullptr;
@@ -229,6 +256,16 @@ private:
         kSurprised,
         kSleepy,
     };
+    enum class GyroTurnStopReason : uint8_t {
+        kNone,
+        kActive,
+        kTargetReached,
+        kTimeout,
+        kStaleSensor,
+        kDirectionMismatch,
+        kCancelled,
+        kRejected,
+    };
     Mpu6050MotionSensor motion_sensor_;
     std::atomic_bool motion_sensor_valid_{false};
     std::atomic_bool motion_emotions_enabled_{true};
@@ -238,6 +275,18 @@ private:
     std::atomic<float> motion_rotation_dps_{0.0f};
     std::atomic<MotionGesture> motion_gesture_{MotionGesture::kCalibrating};
     std::atomic_bool press_reaction_pending_{false};
+    std::atomic<float> motion_yaw_rate_dps_{0.0f};
+    std::atomic<float> motion_yaw_bias_dps_{0.0f};
+    std::atomic<int64_t> motion_sample_timestamp_us_{0};
+    std::atomic_bool motion_gyro_bias_valid_{false};
+    std::atomic_bool gyro_turn_pending_{false};
+    std::atomic_bool gyro_turn_active_{false};
+    std::atomic<float> gyro_turn_target_deg_{0.0f};
+    std::atomic<float> gyro_turn_progress_deg_{0.0f};
+    std::atomic<GyroTurnStopReason> gyro_turn_stop_reason_{GyroTurnStopReason::kNone};
+    std::atomic<uint8_t> gyro_turn_intensity_percent_{80};
+    std::atomic<uint32_t> gyro_turn_timeout_ms_{0};
+    TaskHandle_t gyro_turn_task_ = nullptr;
 #endif
 #if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
     TaskHandle_t auxiliary_sensor_task_ = nullptr;
@@ -398,6 +447,40 @@ private:
         return "calibrating";
     }
 
+    static const char* GyroTurnStopReasonName(GyroTurnStopReason reason) {
+        switch (reason) {
+            case GyroTurnStopReason::kNone:
+                return "none";
+            case GyroTurnStopReason::kActive:
+                return "active";
+            case GyroTurnStopReason::kTargetReached:
+                return "target_reached";
+            case GyroTurnStopReason::kTimeout:
+                return "timeout";
+            case GyroTurnStopReason::kStaleSensor:
+                return "stale_sensor";
+            case GyroTurnStopReason::kDirectionMismatch:
+                return "direction_mismatch";
+            case GyroTurnStopReason::kCancelled:
+                return "cancelled";
+            case GyroTurnStopReason::kRejected:
+                return "rejected";
+        }
+        return "none";
+    }
+
+    static float SelectYawRate(const Mpu6050MotionSensor::Sample& sample) {
+        float rate = sample.gyro_z_dps;
+#if MPU6050_YAW_AXIS == 0
+        rate = sample.gyro_x_dps;
+#elif MPU6050_YAW_AXIS == 1
+        rate = sample.gyro_y_dps;
+#elif MPU6050_YAW_AXIS != 2
+#error "MPU6050_YAW_AXIS must be 0 (X), 1 (Y), or 2 (Z)"
+#endif
+        return rate * MPU6050_YAW_SIGN;
+    }
+
     bool AreMotorsMoving() const {
         return motors_.IsMoving(MotorController::Direction::kForward) ||
                motors_.IsMoving(MotorController::Direction::kBackward) ||
@@ -430,6 +513,23 @@ private:
                 cJSON_AddBoolToObject(result, "available", motion_sensor_.IsAvailable());
                 cJSON_AddBoolToObject(result, "valid", motion_sensor_valid_.load());
                 cJSON_AddBoolToObject(result, "emotion_control", motion_emotions_enabled_.load());
+                cJSON_AddBoolToObject(result, "gyro_bias_valid", motion_gyro_bias_valid_.load());
+                const int64_t gyro_sample_us =
+                    motion_sample_timestamp_us_.load(std::memory_order_acquire);
+                cJSON_AddNumberToObject(
+                    result, "gyro_sample_age_ms",
+                    gyro_sample_us > 0 ? (esp_timer_get_time() - gyro_sample_us) / 1000.0 : -1.0);
+                cJSON_AddBoolToObject(result, "gyro_turn_available", IsGyroTurnAvailable());
+                cJSON_AddBoolToObject(result, "gyro_turn_pending", gyro_turn_pending_.load());
+                cJSON_AddBoolToObject(result, "gyro_turn_active", gyro_turn_active_.load());
+                cJSON_AddNumberToObject(result, "gyro_turn_target_deg",
+                                        gyro_turn_target_deg_.load());
+                cJSON_AddNumberToObject(result, "gyro_turn_progress_deg",
+                                        gyro_turn_progress_deg_.load());
+                cJSON_AddStringToObject(result, "gyro_turn_stop_reason",
+                                        GyroTurnStopReasonName(gyro_turn_stop_reason_.load()));
+                cJSON_AddNumberToObject(result, "yaw_rate_dps", motion_yaw_rate_dps_.load());
+                cJSON_AddNumberToObject(result, "yaw_bias_dps", motion_yaw_bias_dps_.load());
                 if (motion_sensor_valid_.load()) {
                     cJSON_AddNumberToObject(result, "roll_deg", motion_roll_deg_.load());
                     cJSON_AddNumberToObject(result, "pitch_deg", motion_pitch_deg_.load());
@@ -453,6 +553,20 @@ private:
                                });
                                return true;
                            });
+        mcp_server.AddTool(
+            "self.robot.turn_relative",
+            "Turn the robot by a relative gyro-measured angle. Positive degrees turn right; "
+            "negative degrees turn left. Use 90 for right 90 degrees or -90 for left 90 degrees. "
+            "The command is rejected unless the MPU6050 is calibrated, the motors are idle, and "
+            "the floor is safe.",
+            PropertyList({Property("degrees", kPropertyTypeInteger, 90, -180, 180)}),
+            [this](const PropertyList& properties) -> ToolResult {
+                std::string message;
+                if (!RequestGyroTurn(properties["degrees"].value<int>(), message)) {
+                    return std::unexpected(message);
+                }
+                return true;
+            });
         ESP_LOGI(TAG, "MPU6050 MCP tools registered");
     }
 #endif
@@ -488,6 +602,10 @@ private:
         float calibration_pitch_sum = 0.0f;
         float roll_offset_deg = 0.0f;
         float pitch_offset_deg = 0.0f;
+        int gyro_bias_samples = 0;
+        float gyro_bias_sum = 0.0f;
+        float previous_gyro_bias_yaw_rate_dps = 0.0f;
+        bool have_previous_gyro_bias_sample = false;
         MotionGesture candidate_gesture = MotionGesture::kCalibrating;
         int candidate_samples = 0;
         int64_t last_gesture_us = 0;
@@ -612,6 +730,48 @@ private:
                     }
                 } else {
                     motion_failures = 0;
+                    const float raw_yaw_rate_dps = SelectYawRate(sample);
+
+                    // Bias calibration must measure the yaw axis' zero-rate offset, so do not
+                    // require the absolute gyro reading (or the 3-axis magnitude) to be near
+                    // zero. A real MPU6050 may sit still with a several-dps constant offset.
+                    // Instead require the yaw reading itself to remain stable between samples.
+                    bool yaw_stable = true;
+                    if (have_previous_gyro_bias_sample) {
+                        yaw_stable =
+                            std::fabs(raw_yaw_rate_dps - previous_gyro_bias_yaw_rate_dps) <=
+                            kGyroBiasYawStabilityDps;
+                    }
+                    previous_gyro_bias_yaw_rate_dps = raw_yaw_rate_dps;
+                    have_previous_gyro_bias_sample = true;
+
+                    const bool gyro_still =
+                        !motor_activity_active_.load(std::memory_order_relaxed) && yaw_stable &&
+                        sample.acceleration_magnitude_g > 0.85f &&
+                        sample.acceleration_magnitude_g < 1.15f;
+
+                    if (!motion_gyro_bias_valid_.load(std::memory_order_relaxed)) {
+                        if (gyro_still) {
+                            gyro_bias_sum += raw_yaw_rate_dps;
+                            ++gyro_bias_samples;
+                            if (gyro_bias_samples >= kGyroBiasSamples) {
+                                const float bias = gyro_bias_sum / gyro_bias_samples;
+                                motion_yaw_bias_dps_.store(bias, std::memory_order_relaxed);
+                                motion_gyro_bias_valid_.store(true, std::memory_order_release);
+                                ESP_LOGI(TAG, "MPU6050 yaw bias calibrated: %.3f dps (%d samples)",
+                                         bias, gyro_bias_samples);
+                            }
+                        } else {
+                            gyro_bias_samples = 0;
+                            gyro_bias_sum = 0.0f;
+                        }
+                    }
+                    if (motion_gyro_bias_valid_.load(std::memory_order_acquire)) {
+                        motion_yaw_rate_dps_.store(
+                            raw_yaw_rate_dps - motion_yaw_bias_dps_.load(std::memory_order_relaxed),
+                            std::memory_order_relaxed);
+                        motion_sample_timestamp_us_.store(now_us, std::memory_order_release);
+                    }
                     if (calibration_samples < kCalibrationSamples) {
                         if (calibration_samples == 0) {
                             calibration_roll_reference = sample.roll_deg;
@@ -707,8 +867,8 @@ private:
                                                                 gesture == MotionGesture::kSurprised
                                                             ? 1400
                                                             : 1800;
-                                if (QueueTemporaryEmotion(MotionGestureName(gesture),
-                                                          duration_ms)) {
+                                if (QueueTemporaryEmotion(MotionGestureName(gesture), duration_ms,
+                                                          EmotionSource::kMpuReaction)) {
                                     last_gesture_us = now_us;
                                 }
                                 candidate_samples = 0;
@@ -739,6 +899,191 @@ private:
             auxiliary_sensor_task_ = nullptr;
             ESP_LOGE(TAG, "Failed to create auxiliary sensor task");
         }
+    }
+#endif
+
+#ifdef MPU6050_I2C_ADDRESS
+    bool IsGyroTurnAvailable() const {
+        const int64_t sample_us = motion_sample_timestamp_us_.load(std::memory_order_acquire);
+        return gyro_turn_task_ != nullptr && motion_sensor_valid_.load(std::memory_order_relaxed) &&
+               motion_gyro_bias_valid_.load(std::memory_order_acquire) && sample_us > 0 &&
+               esp_timer_get_time() - sample_us <= kGyroSampleStaleUs;
+    }
+
+    bool RequestGyroTurn(int target_degrees, std::string& message) {
+        if (target_degrees < -180 || target_degrees > 180 || std::abs(target_degrees) < 3) {
+            message = "Gyro turn angle must be between 3 and 180 degrees";
+            return false;
+        }
+        if (!IsGyroTurnAvailable()) {
+            message = "Gyro turn unavailable: MPU6050 is not ready";
+            return false;
+        }
+        if (motors_.IsActive()) {
+            message = "Gyro turn blocked: motors are busy";
+            return false;
+        }
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        if (!distance_valid_.load(std::memory_order_relaxed) || IsCliffDetected()) {
+            message = "Gyro turn blocked: no safe floor detected";
+            return false;
+        }
+#endif
+        if (gyro_turn_pending_.exchange(true, std::memory_order_acq_rel)) {
+            message = "Gyro turn blocked: another turn is pending";
+            return false;
+        }
+
+        gyro_turn_target_deg_.store(static_cast<float>(target_degrees), std::memory_order_relaxed);
+        gyro_turn_progress_deg_.store(0.0f, std::memory_order_relaxed);
+        gyro_turn_stop_reason_.store(GyroTurnStopReason::kNone, std::memory_order_relaxed);
+        Application::GetInstance().Schedule([this, target_degrees]() {
+            if (!StartGyroTurn(static_cast<float>(target_degrees), 100)) {
+                gyro_turn_stop_reason_.store(GyroTurnStopReason::kRejected,
+                                             std::memory_order_relaxed);
+                ESP_LOGW(TAG, "Relative turn %d deg was rejected", target_degrees);
+            }
+            gyro_turn_pending_.store(false, std::memory_order_release);
+        });
+        const int magnitude = target_degrees < 0 ? -target_degrees : target_degrees;
+        message = std::string("Turning ") + (target_degrees < 0 ? "left " : "right ") +
+                  std::to_string(magnitude) + " degrees";
+        return true;
+    }
+
+    bool StartGyroTurn(float target_deg, uint8_t intensity_percent, bool emotion_owned = false) {
+        if (!IsGyroTurnAvailable() || gyro_turn_active_.load(std::memory_order_relaxed) ||
+            motors_.IsActive() || std::fabs(target_deg) < kGyroTurnToleranceDeg) {
+            return false;
+        }
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        if (!distance_valid_.load(std::memory_order_relaxed) || IsCliffDetected()) {
+            return false;
+        }
+#endif
+        const uint32_t timeout_ms = std::min<uint32_t>(
+            kGyroTurnMaxTimeoutMs, static_cast<uint32_t>(500.0f + std::fabs(target_deg) * 55.0f));
+        const auto direction = target_deg > 0.0f ? MotorController::Direction::kRight
+                                                 : MotorController::Direction::kLeft;
+        if (!motors_.Drive(direction, timeout_ms, intensity_percent)) {
+            return false;
+        }
+        gyro_turn_target_deg_.store(target_deg, std::memory_order_relaxed);
+        gyro_turn_progress_deg_.store(0.0f, std::memory_order_relaxed);
+        gyro_turn_intensity_percent_.store(intensity_percent, std::memory_order_relaxed);
+        gyro_turn_timeout_ms_.store(timeout_ms, std::memory_order_relaxed);
+        gyro_turn_stop_reason_.store(GyroTurnStopReason::kActive, std::memory_order_relaxed);
+        gyro_turn_active_.store(true, std::memory_order_release);
+        emotion_movement_active_.store(emotion_owned, std::memory_order_relaxed);
+        xTaskNotifyGive(gyro_turn_task_);
+        return true;
+    }
+
+    static void GyroTurnTask(void* arg) { static_cast<DeskRobotBoard*>(arg)->RunGyroTurnTask(); }
+
+    void RunGyroTurnTask() {
+        while (true) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            if (!gyro_turn_active_.load(std::memory_order_acquire)) {
+                continue;
+            }
+
+            const float target_deg = gyro_turn_target_deg_.load(std::memory_order_relaxed);
+            const uint8_t maximum_intensity =
+                gyro_turn_intensity_percent_.load(std::memory_order_relaxed);
+            const int64_t started_us = esp_timer_get_time();
+            const int64_t deadline_us =
+                started_us + static_cast<int64_t>(gyro_turn_timeout_ms_.load()) * 1000;
+            int64_t previous_sample_us = 0;
+            float turned_deg = 0.0f;
+            uint8_t applied_intensity = maximum_intensity;
+            GyroTurnStopReason stop_reason = GyroTurnStopReason::kNone;
+
+            while (gyro_turn_active_.load(std::memory_order_acquire)) {
+                const int64_t now_us = esp_timer_get_time();
+                const int64_t sample_us =
+                    motion_sample_timestamp_us_.load(std::memory_order_acquire);
+                if (now_us >= deadline_us) {
+                    stop_reason = GyroTurnStopReason::kTimeout;
+                    break;
+                }
+                if (!motion_sensor_valid_.load(std::memory_order_relaxed) ||
+                    !motion_gyro_bias_valid_.load(std::memory_order_acquire) || sample_us <= 0 ||
+                    now_us - sample_us > kGyroSampleStaleUs) {
+                    stop_reason = GyroTurnStopReason::kStaleSensor;
+                    break;
+                }
+                if (sample_us != previous_sample_us) {
+                    if (previous_sample_us > 0) {
+                        const float dt_seconds =
+                            std::clamp((sample_us - previous_sample_us) / 1000000.0f, 0.0f, 0.1f);
+                        turned_deg +=
+                            motion_yaw_rate_dps_.load(std::memory_order_relaxed) * dt_seconds;
+                        gyro_turn_progress_deg_.store(turned_deg, std::memory_order_relaxed);
+                    }
+                    previous_sample_us = sample_us;
+                    const float remaining_deg = target_deg - turned_deg;
+                    if (std::fabs(remaining_deg) <= kGyroTurnToleranceDeg ||
+                        (target_deg > 0.0f && turned_deg > target_deg) ||
+                        (target_deg < 0.0f && turned_deg < target_deg)) {
+                        stop_reason = GyroTurnStopReason::kTargetReached;
+                        break;
+                    }
+                    if (target_deg * turned_deg < 0.0f && std::fabs(turned_deg) > 2.0f) {
+                        stop_reason = GyroTurnStopReason::kDirectionMismatch;
+                        break;
+                    }
+
+                    uint8_t desired_intensity = maximum_intensity;
+                    if (std::fabs(remaining_deg) <= 4.0f) {
+                        desired_intensity = std::min<uint8_t>(maximum_intensity, 60);
+                    } else if (std::fabs(remaining_deg) <= 10.0f) {
+                        desired_intensity = std::min<uint8_t>(maximum_intensity, 70);
+                    }
+                    if (desired_intensity != applied_intensity &&
+                        motors_.SetActiveIntensityPercent(desired_intensity)) {
+                        applied_intensity = desired_intensity;
+                    }
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+
+            if (stop_reason != GyroTurnStopReason::kNone && gyro_turn_active_.exchange(false)) {
+                gyro_turn_progress_deg_.store(turned_deg, std::memory_order_relaxed);
+                gyro_turn_stop_reason_.store(stop_reason, std::memory_order_relaxed);
+                ESP_LOGI(TAG, "Gyro turn %.1f/%.1f deg stopped: %s", turned_deg, target_deg,
+                         GyroTurnStopReasonName(stop_reason));
+                motors_.EmergencyStop();
+            }
+        }
+    }
+
+    void InitializeGyroTurnController() {
+        if (xTaskCreate(GyroTurnTask, "gyro_turn", 4096, this, 2, &gyro_turn_task_) != pdPASS) {
+            gyro_turn_task_ = nullptr;
+            ESP_LOGE(TAG, "Failed to create gyro turn controller task");
+        }
+    }
+
+    bool TryStartGyroEmotionTurn(const std::string& emotion) {
+        float magnitude_deg = 0.0f;
+        uint8_t intensity_percent = 0;
+        if (emotion == "thinking" || emotion == "suspicious") {
+            magnitude_deg = 8.0f + static_cast<float>(esp_random() % 5);
+            intensity_percent = 68;
+        } else if (emotion == "confused") {
+            magnitude_deg = 10.0f + static_cast<float>(esp_random() % 5);
+            intensity_percent = 72;
+        } else if (emotion == "surprised" || emotion == "shocked") {
+            magnitude_deg = 7.0f + static_cast<float>(esp_random() % 4);
+            intensity_percent = 85;
+        } else {
+            return false;
+        }
+        if ((esp_random() & 1U) == 0) {
+            magnitude_deg = -magnitude_deg;
+        }
+        return StartGyroTurn(magnitude_deg, intensity_percent, true);
     }
 #endif
 
@@ -1282,7 +1627,184 @@ private:
         return normalized;
     }
 
-    bool QueueTemporaryEmotion(const std::string& emotion, int duration_ms) {
+    std::vector<MotorController::Movement> BuildEmotionMovement(const std::string& emotion) {
+        enum Group : size_t {
+            kJoy,
+            kAffection,
+            kSad,
+            kBold,
+            kSurprise,
+            kCurious,
+            kAwkward,
+            kShake,
+        };
+
+        size_t group = 0;
+        if (emotion == "happy" || emotion == "laughing" || emotion == "funny" ||
+            emotion == "delicious") {
+            group = kJoy;
+        } else if (emotion == "loving" || emotion == "kissy" || emotion == "winking") {
+            group = kAffection;
+        } else if (emotion == "sad" || emotion == "crying" || emotion == "sleepy") {
+            group = kSad;
+        } else if (emotion == "angry" || emotion == "confident" || emotion == "cool") {
+            group = kBold;
+        } else if (emotion == "surprised" || emotion == "shocked") {
+            group = kSurprise;
+        } else if (emotion == "thinking" || emotion == "confused" || emotion == "suspicious") {
+            group = kCurious;
+        } else if (emotion == "embarrassed" || emotion == "silly") {
+            group = kAwkward;
+        } else if (emotion == "shake") {
+            group = kShake;
+        } else {
+            // Neutral, relaxed, activity states, and directional looks are face-only.
+            return {};
+        }
+
+        constexpr uint8_t kVariantCount = 3;
+        uint8_t variant = static_cast<uint8_t>(esp_random() % kVariantCount);
+        if (variant == last_emotion_variants_[group]) {
+            variant = static_cast<uint8_t>((variant + 1 + esp_random() % (kVariantCount - 1)) %
+                                           kVariantCount);
+        }
+        last_emotion_variants_[group] = variant;
+
+        using Direction = MotorController::Direction;
+        switch (group) {
+            case kJoy:
+                if (variant == 0) {
+                    return {{Direction::kLeft, 100, 85},
+                            {Direction::kRight, 160, 85},
+                            {Direction::kLeft, 100, 80}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kForward, 100, 75},
+                            {Direction::kBackward, 100, 70},
+                            {Direction::kRight, 120, 80}};
+                }
+                return {{Direction::kRight, 110, 85},
+                        {Direction::kLeft, 170, 85},
+                        {Direction::kRight, 110, 80}};
+            case kAffection:
+                if (variant == 0) {
+                    return {{Direction::kLeft, 120, 65}, {Direction::kRight, 120, 65}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kForward, 90, 60}, {Direction::kBackward, 90, 60}};
+                }
+                return {{Direction::kRight, 130, 65}, {Direction::kLeft, 100, 60}};
+            case kSad:
+                if (variant == 0) {
+                    return {{Direction::kBackward, 100, 60}, {Direction::kLeft, 110, 60}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kRight, 120, 60}, {Direction::kLeft, 120, 60}};
+                }
+                return {{Direction::kLeft, 140, 60}};
+            case kBold:
+                if (variant == 0) {
+                    return {{Direction::kForward, 130, 90}, {Direction::kBackward, 80, 75}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kLeft, 150, 90}, {Direction::kRight, 80, 75}};
+                }
+                return {{Direction::kRight, 150, 90}, {Direction::kLeft, 80, 75}};
+            case kSurprise:
+                if (variant == 0) {
+                    return {{Direction::kBackward, 80, 90}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kLeft, 80, 90}, {Direction::kRight, 90, 85}};
+                }
+                return {{Direction::kRight, 80, 90}, {Direction::kLeft, 90, 85}};
+            case kCurious:
+                if (variant == 0) {
+                    return {{Direction::kLeft, 110, 65}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kRight, 110, 65}};
+                }
+                return {{Direction::kLeft, 90, 65}, {Direction::kRight, 140, 65}};
+            case kAwkward:
+                if (variant == 0) {
+                    return {{Direction::kLeft, 90, 70},
+                            {Direction::kRight, 130, 70},
+                            {Direction::kLeft, 80, 65}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kBackward, 80, 65}, {Direction::kRight, 100, 70}};
+                }
+                return {{Direction::kRight, 90, 70},
+                        {Direction::kLeft, 130, 70},
+                        {Direction::kRight, 80, 65}};
+            case kShake:
+                if (variant == 0) {
+                    return {{Direction::kLeft, 100, 85},
+                            {Direction::kRight, 160, 85},
+                            {Direction::kLeft, 160, 85},
+                            {Direction::kRight, 100, 80}};
+                }
+                if (variant == 1) {
+                    return {{Direction::kRight, 100, 85},
+                            {Direction::kLeft, 160, 85},
+                            {Direction::kRight, 160, 85},
+                            {Direction::kLeft, 100, 80}};
+                }
+                return {{Direction::kLeft, 120, 80},
+                        {Direction::kRight, 120, 80},
+                        {Direction::kLeft, 120, 80},
+                        {Direction::kRight, 120, 80}};
+        }
+        return {};
+    }
+
+    void MaybeStartEmotionMovement(const std::string& emotion, EmotionSource source) {
+        if (!emotion_movement_enabled_.load(std::memory_order_relaxed) ||
+            source == EmotionSource::kMpuReaction || motors_.IsActive()) {
+            return;
+        }
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        // Automatic movement is conservative: unlike manual reverse, it requires a valid floor
+        // sample and never starts while a cliff is active.
+        if (!distance_valid_.load(std::memory_order_relaxed) || IsCliffDetected()) {
+            return;
+        }
+#endif
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us - last_emotion_movement_us_ < kEmotionMovementCooldownUs) {
+            return;
+        }
+#ifdef MPU6050_I2C_ADDRESS
+        if (TryStartGyroEmotionTurn(emotion)) {
+            last_emotion_movement_us_ = now_us;
+            return;
+        }
+#endif
+        auto movements = BuildEmotionMovement(emotion);
+        if (movements.empty()) {
+            return;
+        }
+        if (motors_.PlaySequence(movements)) {
+            emotion_movement_active_.store(true, std::memory_order_relaxed);
+            last_emotion_movement_us_ = now_us;
+        } else {
+            emotion_movement_active_.store(false, std::memory_order_relaxed);
+            ESP_LOGW(TAG, "Emotion movement was rejected for %s", emotion.c_str());
+        }
+    }
+
+    bool ApplyRobotEmotion(const std::string& emotion, EmotionSource source) {
+        if (!MochanDisplay::IsSupportedEmotion(emotion)) {
+            return false;
+        }
+        display_->SetEmotion(emotion.c_str());
+        MaybeStartEmotionMovement(emotion, source);
+        return true;
+    }
+
+    bool QueueTemporaryEmotion(const std::string& emotion, int duration_ms,
+                               EmotionSource source = EmotionSource::kPreview) {
         if (!MochanDisplay::IsSupportedEmotion(emotion)) {
             return false;
         }
@@ -1292,7 +1814,7 @@ private:
             temporary_emotion_ = emotion;
         }
         Application::GetInstance().Schedule(
-            [this, emotion]() { display_->SetEmotion(emotion.c_str()); });
+            [this, emotion, source]() { ApplyRobotEmotion(emotion, source); });
         if (face_reset_timer_ != nullptr) {
             esp_timer_stop(face_reset_timer_);
             ESP_ERROR_CHECK(esp_timer_start_once(face_reset_timer_, safe_duration * 1000ULL));
@@ -1506,7 +2028,7 @@ private:
             floor_safe = distance_valid_.load(std::memory_order_relaxed) && !IsCliffDetected();
 #endif
             if (idle && floor_safe && !motor_activity_active_.load(std::memory_order_relaxed)) {
-                QueueTemporaryEmotion("surprised", 1600);
+                QueueTemporaryEmotion("surprised", 1600, EmotionSource::kMpuReaction);
                 if (!motors_.PlaySequence(movements)) {
                     ESP_LOGW(TAG, "Pressed reaction motor sequence was rejected");
                 }
@@ -1560,10 +2082,64 @@ private:
     void InitializeMotorStatusLight() {
         motors_.SetMovementStateCallback([this](bool moving) {
             motor_activity_active_.store(moving, std::memory_order_relaxed);
+            if (!moving) {
+                emotion_movement_active_.store(false, std::memory_order_relaxed);
+#ifdef MPU6050_I2C_ADDRESS
+                if (gyro_turn_active_.exchange(false, std::memory_order_acq_rel)) {
+                    gyro_turn_stop_reason_.store(GyroTurnStopReason::kCancelled,
+                                                 std::memory_order_relaxed);
+                }
+#endif
+            }
 #if BUILTIN_LED_COUNT == 1 && defined(BUILTIN_LED_STATUS_PROFILE_EDISON)
             Application::GetInstance().Schedule(
                 [this, moving]() { static_cast<GpioLed*>(GetLed())->SetActivityOverride(moving); });
 #endif
+        });
+    }
+
+    void InitializeMotorSettings() {
+        Settings settings("desk_robot", false);
+        const int speed =
+            std::clamp(static_cast<int>(settings.GetInt("motor_speed", kDefaultMotorSpeedPercent)),
+                       MotorController::kMinSpeedPercent, MotorController::kMaxSpeedPercent);
+        const int drive_duration = std::clamp(
+            static_cast<int>(settings.GetInt("drive_time", kDefaultDriveDurationMs)), 50, 2000);
+        motors_.SetSpeedPercent(speed);
+        drive_duration_ms_.store(drive_duration, std::memory_order_relaxed);
+        emotion_movement_enabled_.store(settings.GetBool("emotion_move", false),
+                                        std::memory_order_relaxed);
+        ESP_LOGI(TAG, "Motor speed %d%%, drive time %d ms, emotion movement %s", speed,
+                 drive_duration, emotion_movement_enabled_.load() ? "enabled" : "disabled");
+    }
+
+    void QueueMotorSpeed(int speed) {
+        const int safe_speed =
+            std::clamp(speed, MotorController::kMinSpeedPercent, MotorController::kMaxSpeedPercent);
+        Application::GetInstance().Schedule([this, safe_speed]() {
+            motors_.SetSpeedPercent(safe_speed);
+            Settings settings("desk_robot", true);
+            settings.SetInt("motor_speed", safe_speed);
+        });
+    }
+
+    void QueueDriveDuration(int duration_ms) {
+        const int safe_duration = std::clamp(duration_ms, 50, 2000);
+        drive_duration_ms_.store(safe_duration, std::memory_order_relaxed);
+        Application::GetInstance().Schedule([safe_duration]() {
+            Settings settings("desk_robot", true);
+            settings.SetInt("drive_time", safe_duration);
+        });
+    }
+
+    void QueueEmotionMovementEnabled(bool enabled) {
+        emotion_movement_enabled_.store(enabled, std::memory_order_relaxed);
+        Application::GetInstance().Schedule([this, enabled]() {
+            if (!enabled && emotion_movement_active_.load(std::memory_order_relaxed)) {
+                motors_.Stop();
+            }
+            Settings settings("desk_robot", true);
+            settings.SetBool("emotion_move", enabled);
         });
     }
 
@@ -1680,6 +2256,11 @@ private:
             message = "Motors stopped";
             return true;
         }
+#ifdef MPU6050_I2C_ADDRESS
+        if (action == "turn_relative") {
+            return RequestGyroTurn(duration_ms, message);
+        }
+#endif
         if (action == "dance") {
             const bool started = QueueDance();
             message = started ? "Random dance started" : "Dance blocked: table edge detected";
@@ -1782,8 +2363,22 @@ private:
             return true;
         }
         if (action == "motor_speed") {
-            motors_.SetSpeedPercent(duration_ms);
-            message = "Motor speed " + std::to_string(motors_.GetSpeedPercent()) + "%";
+            const int safe_speed = std::clamp(duration_ms, MotorController::kMinSpeedPercent,
+                                              MotorController::kMaxSpeedPercent);
+            QueueMotorSpeed(safe_speed);
+            message = "Motor speed " + std::to_string(safe_speed) + "%";
+            return true;
+        }
+        if (action == "drive_duration") {
+            const int safe_duration = std::clamp(duration_ms, 50, 2000);
+            QueueDriveDuration(safe_duration);
+            message = "Drive time " + std::to_string(safe_duration) + " ms";
+            return true;
+        }
+        if (action == "emotion_movement") {
+            const bool enabled = duration_ms != 0;
+            QueueEmotionMovementEnabled(enabled);
+            message = enabled ? "Emotion movement enabled" : "Emotion movement disabled";
             return true;
         }
         if (action == "status_light_brightness") {
@@ -1892,6 +2487,12 @@ private:
                                         status_light_brightness_.load());
                 cJSON_AddBoolToObject(root, "live_camera", live_camera_enabled_.load());
                 cJSON_AddNumberToObject(root, "motor_speed", motors_.GetSpeedPercent());
+                cJSON_AddNumberToObject(root, "drive_duration_ms",
+                                        drive_duration_ms_.load(std::memory_order_relaxed));
+                cJSON_AddBoolToObject(root, "emotion_movement_enabled",
+                                      emotion_movement_enabled_.load(std::memory_order_relaxed));
+                cJSON_AddBoolToObject(root, "emotion_movement_active",
+                                      emotion_movement_active_.load(std::memory_order_relaxed));
                 cJSON* motor_status = cJSON_Parse(motors_.StatusJson().c_str());
                 cJSON_AddItemToObject(
                     root, "motors", motor_status != nullptr ? motor_status : cJSON_CreateObject());
@@ -1930,6 +2531,22 @@ private:
                 cJSON_AddNumberToObject(root, "motion_acceleration_g",
                                         motion_acceleration_g_.load());
                 cJSON_AddNumberToObject(root, "motion_rotation_dps", motion_rotation_dps_.load());
+                cJSON_AddNumberToObject(root, "motion_yaw_rate_dps", motion_yaw_rate_dps_.load());
+                cJSON_AddNumberToObject(root, "motion_yaw_bias_dps", motion_yaw_bias_dps_.load());
+                cJSON_AddBoolToObject(root, "gyro_bias_valid", motion_gyro_bias_valid_.load());
+                const int64_t gyro_sample_us =
+                    motion_sample_timestamp_us_.load(std::memory_order_acquire);
+                cJSON_AddNumberToObject(
+                    root, "gyro_sample_age_ms",
+                    gyro_sample_us > 0 ? (esp_timer_get_time() - gyro_sample_us) / 1000.0 : -1.0);
+                cJSON_AddBoolToObject(root, "gyro_turn_available", IsGyroTurnAvailable());
+                cJSON_AddBoolToObject(root, "gyro_turn_pending", gyro_turn_pending_.load());
+                cJSON_AddBoolToObject(root, "gyro_turn_active", gyro_turn_active_.load());
+                cJSON_AddNumberToObject(root, "gyro_turn_target_deg", gyro_turn_target_deg_.load());
+                cJSON_AddNumberToObject(root, "gyro_turn_progress_deg",
+                                        gyro_turn_progress_deg_.load());
+                cJSON_AddStringToObject(root, "gyro_turn_stop_reason",
+                                        GyroTurnStopReasonName(gyro_turn_stop_reason_.load()));
                 cJSON_AddStringToObject(root, "motion_gesture",
                                         MotionGestureName(motion_gesture_.load()));
 #endif
@@ -2018,6 +2635,9 @@ private:
 #endif
                 const int duration_ms = properties["duration_ms"].value<int>();
                 Application::GetInstance().Schedule([this, command, duration_ms]() {
+                    if (emotion_movement_active_.load(std::memory_order_relaxed)) {
+                        motors_.Stop();
+                    }
                     motors_.Drive(command, static_cast<uint32_t>(duration_ms));
                 });
                 return true;
@@ -2182,12 +2802,14 @@ public:
 #endif
         InitializeAudioSettings();
         InitializeLightingSettings();
+        InitializeMotorSettings();
         InitializeMotorStatusLight();
         InitializeLiveCamera();
         InitializeInteractionTimers();
         InitializeTools();
 #ifdef MPU6050_I2C_ADDRESS
         RegisterMotionTools();
+        InitializeGyroTurnController();
 #endif
         InitializeWebControl();
         ESP_LOGI(TAG, "Desk robot board initialized");
@@ -2251,6 +2873,11 @@ public:
     }
 
     Display* GetDisplay() override { return display_; }
+    void ApplyEmotion(const char* emotion) override {
+        if (emotion != nullptr) {
+            ApplyRobotEmotion(emotion, EmotionSource::kAssistant);
+        }
+    }
     Camera* GetCamera() override { return camera_; }
 };
 

@@ -88,7 +88,7 @@ MotorController::~MotorController() {
 }
 
 void MotorController::SetSpeedPercent(int percent) {
-    speed_percent_.store(std::clamp(percent, 55, 100));
+    speed_percent_.store(std::clamp(percent, kMinSpeedPercent, kMaxSpeedPercent));
 }
 
 bool MotorController::InitializePwm() {
@@ -147,8 +147,11 @@ bool MotorController::SetInput(gpio_num_t pin, uint32_t duty) {
     return false;
 }
 
-bool MotorController::SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward) {
-    const uint32_t duty = kMaxDuty * static_cast<uint32_t>(speed_percent_.load()) / 100;
+bool MotorController::SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward,
+                               uint8_t intensity_percent) {
+    const uint32_t bounded_intensity = std::min<uint32_t>(intensity_percent, 100);
+    const uint32_t duty =
+        kMaxDuty * static_cast<uint32_t>(speed_percent_.load()) * bounded_intensity / 10000;
     return SetInput(forward ? in2 : in1, 0) && SetInput(forward ? in1 : in2, duty);
 }
 
@@ -176,29 +179,30 @@ void MotorController::OutputsOffLocked() {
     gpio_set_level(right_in2_, 0);
 }
 
-void MotorController::Drive(Direction direction, uint32_t duration_ms) {
+bool MotorController::Drive(Direction direction, uint32_t duration_ms, uint8_t intensity_percent) {
     if (!available_ || faulted_.load(std::memory_order_relaxed)) {
-        return;
+        return false;
     }
     if (esp_timer_get_time() < arm_at_us_) {
         ESP_LOGW(TAG, "Ignoring motor command during startup arm delay");
-        return;
+        return false;
     }
     if (motion_guard_ && !motion_guard_(direction)) {
         ESP_LOGW(TAG, "Motor command blocked by safety guard");
-        return;
+        return false;
     }
     duration_ms = std::clamp(duration_ms, kMinDurationMs, kMaxDurationMs);
     if (queued_commands_.size() >= kMaxQueuedCommands) {
         ESP_LOGW(TAG, "Motor command queue is full; dropping command");
-        return;
+        return false;
     }
     if (queued_runtime_ms_.load(std::memory_order_relaxed) + duration_ms > kMaxQueuedRuntimeMs) {
         ESP_LOGW(TAG, "Motor command queue runtime limit reached; dropping command");
-        return;
+        return false;
     }
 
-    queued_commands_.push_back({direction, duration_ms});
+    queued_commands_.push_back(
+        {direction, duration_ms, static_cast<uint8_t>(std::min<int>(intensity_percent, 100))});
     queued_runtime_ms_.fetch_add(duration_ms, std::memory_order_relaxed);
     queued_count_.store(queued_commands_.size(), std::memory_order_relaxed);
     if (queued_commands_.size() == 1 && phase_ == Phase::kIdle) {
@@ -210,6 +214,7 @@ void MotorController::Drive(Direction direction, uint32_t duration_ms) {
     if (phase_ == Phase::kIdle) {
         BeginDeadTime();
     }
+    return true;
 }
 
 bool MotorController::PlaySequence(const std::vector<Movement>& movements) {
@@ -236,7 +241,8 @@ bool MotorController::PlaySequence(const std::vector<Movement>& movements) {
     Stop();
     for (const auto& movement : movements) {
         queued_commands_.push_back(
-            {movement.direction, std::clamp(movement.duration_ms, kMinDurationMs, kMaxDurationMs)});
+            {movement.direction, std::clamp(movement.duration_ms, kMinDurationMs, kMaxDurationMs),
+             static_cast<uint8_t>(std::min<int>(movement.intensity_percent, 100))});
     }
     queued_runtime_ms_.store(total_runtime_ms, std::memory_order_relaxed);
     queued_count_.store(queued_commands_.size(), std::memory_order_relaxed);
@@ -300,6 +306,7 @@ void MotorController::ApplyNextCommand() {
         return;
     }
     direction_.store(command.direction, std::memory_order_relaxed);
+    active_intensity_percent_.store(command.intensity_percent, std::memory_order_relaxed);
     phase_ = Phase::kDriving;
     moving_.store(true, std::memory_order_relaxed);
     active_until_us_.store(esp_timer_get_time() + static_cast<int64_t>(command.duration_ms) * 1000,
@@ -311,20 +318,20 @@ void MotorController::ApplyNextCommand() {
         if (!emergency_pending_.load() && InitializePwm()) {
             switch (command.direction) {
                 case Direction::kForward:
-                    applied = SetMotor(left_in1_, left_in2_, false) &&
-                              SetMotor(right_in1_, right_in2_, false);
+                    applied = SetMotor(left_in1_, left_in2_, false, command.intensity_percent) &&
+                              SetMotor(right_in1_, right_in2_, false, command.intensity_percent);
                     break;
                 case Direction::kBackward:
-                    applied = SetMotor(left_in1_, left_in2_, true) &&
-                              SetMotor(right_in1_, right_in2_, true);
+                    applied = SetMotor(left_in1_, left_in2_, true, command.intensity_percent) &&
+                              SetMotor(right_in1_, right_in2_, true, command.intensity_percent);
                     break;
                 case Direction::kLeft:
-                    applied = SetMotor(left_in1_, left_in2_, true) &&
-                              SetMotor(right_in1_, right_in2_, false);
+                    applied = SetMotor(left_in1_, left_in2_, true, command.intensity_percent) &&
+                              SetMotor(right_in1_, right_in2_, false, command.intensity_percent);
                     break;
                 case Direction::kRight:
-                    applied = SetMotor(left_in1_, left_in2_, false) &&
-                              SetMotor(right_in1_, right_in2_, true);
+                    applied = SetMotor(left_in1_, left_in2_, false, command.intensity_percent) &&
+                              SetMotor(right_in1_, right_in2_, true, command.intensity_percent);
                     break;
             }
         }
@@ -342,6 +349,44 @@ void MotorController::ApplyNextCommand() {
     }
 
     ArmTimer(command.duration_ms);
+}
+
+bool MotorController::SetActiveIntensityPercent(uint8_t intensity_percent) {
+    if (!available_ || faulted_.load(std::memory_order_relaxed) ||
+        !moving_.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    const uint8_t safe_intensity = static_cast<uint8_t>(std::min<int>(intensity_percent, 100));
+    const auto direction = direction_.load(std::memory_order_relaxed);
+    bool applied = false;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        if (!emergency_pending_.load() && pwm_ready_ &&
+            active_until_us_.load(std::memory_order_relaxed) > esp_timer_get_time()) {
+            switch (direction) {
+                case Direction::kForward:
+                    applied = SetMotor(left_in1_, left_in2_, false, safe_intensity) &&
+                              SetMotor(right_in1_, right_in2_, false, safe_intensity);
+                    break;
+                case Direction::kBackward:
+                    applied = SetMotor(left_in1_, left_in2_, true, safe_intensity) &&
+                              SetMotor(right_in1_, right_in2_, true, safe_intensity);
+                    break;
+                case Direction::kLeft:
+                    applied = SetMotor(left_in1_, left_in2_, true, safe_intensity) &&
+                              SetMotor(right_in1_, right_in2_, false, safe_intensity);
+                    break;
+                case Direction::kRight:
+                    applied = SetMotor(left_in1_, left_in2_, false, safe_intensity) &&
+                              SetMotor(right_in1_, right_in2_, true, safe_intensity);
+                    break;
+            }
+        }
+    }
+    if (applied) {
+        active_intensity_percent_.store(safe_intensity, std::memory_order_relaxed);
+    }
+    return applied;
 }
 
 void MotorController::HandleTimerExpired(uint32_t generation) {
@@ -465,16 +510,17 @@ std::string MotorController::StatusJson() const {
     const uint32_t remaining_ms =
         queued_runtime_ms_.load(std::memory_order_relaxed) +
         (active_remaining_us > 0 ? static_cast<uint32_t>(active_remaining_us / 1000) : 0);
-    char result[280];
+    char result[320];
     snprintf(
         result, sizeof(result),
         "{\"available\":%s,\"faulted\":%s,\"moving\":%s,\"direction\":\"%s\","
-        "\"queued\":%zu,\"remaining_ms\":%lu,\"sequence_active\":%s,"
+        "\"intensity_percent\":%u,\"queued\":%zu,\"remaining_ms\":%lu,\"sequence_active\":%s,"
         "\"sequence_total\":%zu,\"sequence_completed\":%zu}",
         available_ ? "true" : "false", faulted_.load(std::memory_order_relaxed) ? "true" : "false",
         moving_.load(std::memory_order_relaxed) ? "true" : "false",
-        kDirectionNames[static_cast<int>(direction)], queued_count_.load(std::memory_order_relaxed),
-        static_cast<unsigned long>(remaining_ms),
+        kDirectionNames[static_cast<int>(direction)],
+        static_cast<unsigned>(active_intensity_percent_.load(std::memory_order_relaxed)),
+        queued_count_.load(std::memory_order_relaxed), static_cast<unsigned long>(remaining_ms),
         sequence_active_.load(std::memory_order_relaxed) ? "true" : "false",
         sequence_total_.load(std::memory_order_relaxed),
         sequence_completed_.load(std::memory_order_relaxed));

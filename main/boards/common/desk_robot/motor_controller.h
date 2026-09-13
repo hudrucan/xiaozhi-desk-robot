@@ -12,23 +12,29 @@
 
 class MotorController {
 public:
+    static constexpr int kMinSpeedPercent = 55;
+    static constexpr int kMaxSpeedPercent = 100;
+
     enum class Direction { kForward, kBackward, kLeft, kRight };
 
     struct Movement {
         Direction direction;
         uint32_t duration_ms;
+        uint8_t intensity_percent = 100;
     };
 
     MotorController(gpio_num_t left_in1, gpio_num_t left_in2, gpio_num_t right_in1,
                     gpio_num_t right_in2);
     ~MotorController();
 
-    void Drive(Direction direction, uint32_t duration_ms);
+    bool Drive(Direction direction, uint32_t duration_ms, uint8_t intensity_percent = 100);
     bool PlaySequence(const std::vector<Movement>& movements);
     void Stop();
     void EmergencyStop();
     void SetSpeedPercent(int percent);
     int GetSpeedPercent() const { return speed_percent_.load(); }
+    bool IsActive() const { return motion_active_.load(std::memory_order_relaxed); }
+    bool SetActiveIntensityPercent(uint8_t intensity_percent);
     void SetMotionGuard(std::function<bool(Direction)> guard);
     void SetMovementStateCallback(std::function<void(bool)> callback);
     bool IsMoving(Direction direction) const;
@@ -40,16 +46,17 @@ private:
     struct Command {
         Direction direction;
         uint32_t duration_ms;
+        uint8_t intensity_percent;
     };
 
     // Keep every movement bounded. The dead time guarantees that the bridge
     // sees LOW/LOW before either motor is driven in the opposite direction.
     static constexpr size_t kMaxQueuedCommands = 12;
     static constexpr uint32_t kMinDurationMs = 50;
-    static constexpr uint32_t kMaxDurationMs = 2000;
-    static constexpr uint32_t kMaxQueuedRuntimeMs = 3600;
+    static constexpr uint32_t kMaxDurationMs = 10000;
+    static constexpr uint32_t kMaxQueuedRuntimeMs = 13500;
     static constexpr size_t kMaxSequenceCommands = 50;
-    static constexpr uint32_t kMaxSequenceRuntimeMs = 30000;
+    static constexpr uint32_t kMaxSequenceRuntimeMs = 50000;
     static constexpr uint32_t kDirectionDeadTimeMs = 80;
     static constexpr uint32_t kStartupArmDelayMs = 1500;
 
@@ -63,7 +70,7 @@ private:
     void AllOff();
     bool InitializePwm();
     void OutputsOffLocked();
-    bool SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward);
+    bool SetMotor(gpio_num_t in1, gpio_num_t in2, bool forward, uint8_t intensity_percent);
     bool SetInput(gpio_num_t pin, uint32_t duty);
 
     gpio_num_t left_in1_;
@@ -80,6 +87,7 @@ private:
     std::atomic<bool> faulted_{false};
     Phase phase_ = Phase::kIdle;
     std::atomic<Direction> direction_{Direction::kForward};
+    std::atomic<uint8_t> active_intensity_percent_{100};
     std::atomic<bool> moving_{false};
     std::atomic<size_t> queued_count_{0};
     std::atomic<uint32_t> queued_runtime_ms_{0};
