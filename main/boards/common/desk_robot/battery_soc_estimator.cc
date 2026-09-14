@@ -4,10 +4,17 @@
 #include <array>
 #include <cmath>
 
-BatterySocEstimator::BatterySocEstimator(float usable_capacity_mah,
-                                         int64_t maximum_integration_gap_us)
-    : usable_capacity_mah_(usable_capacity_mah),
-      maximum_integration_gap_us_(maximum_integration_gap_us) {}
+BatterySocEstimator::BatterySocEstimator(const Config& config)
+    : usable_capacity_mah_(config.usable_capacity_mah),
+      maximum_integration_gap_us_(config.maximum_integration_gap_us),
+      quasi_rest_max_current_ma_(config.quasi_rest_max_current_ma),
+      quasi_rest_current_stddev_ma_(config.quasi_rest_current_stddev_ma),
+      quasi_rest_voltage_stddev_v_(config.quasi_rest_voltage_stddev_v),
+      quasi_rest_current_transition_ma_(config.quasi_rest_current_transition_ma),
+      quasi_rest_voltage_transition_v_(config.quasi_rest_voltage_transition_v),
+      quasi_rest_qualification_us_(config.quasi_rest_qualification_us),
+      quasi_rest_correction_interval_us_(config.quasi_rest_correction_interval_us),
+      quasi_rest_correction_time_constant_us_(config.quasi_rest_correction_time_constant_us) {}
 
 bool BatterySocEstimator::Restore(const PersistedState& state) {
     const int32_t configured_capacity_uah =
@@ -31,19 +38,22 @@ bool BatterySocEstimator::Restore(const PersistedState& state) {
     tracking_degraded_ = state.tracking_degraded;
     initialized_ = true;
     ResetIntegrationBaseline();
+    ResetQuasiRestQualification();
     return true;
 }
 
 void BatterySocEstimator::SeedFromVoltage(float battery_voltage_v) {
-    const int percent = EstimatePercentFromVoltage(battery_voltage_v);
+    const float percent = EstimatePercentFromVoltage(battery_voltage_v);
     remaining_mah_ = usable_capacity_mah_ * percent / 100.0f;
     last_voltage_v_ = battery_voltage_v;
     tracking_degraded_ = false;
     initialized_ = true;
     ResetIntegrationBaseline();
+    ResetQuasiRestQualification();
 }
 
-void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, int64_t now_us) {
+void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, bool motors_idle,
+                                 bool charging, int64_t now_us) {
     if (!initialized_ || !std::isfinite(battery_voltage_v) || !std::isfinite(current_ma) ||
         now_us <= 0) {
         return;
@@ -54,6 +64,7 @@ void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, int6
         previous_current_ma_ = current_ma;
         last_update_us_ = now_us;
         have_previous_current_ = true;
+        UpdateQuasiRest(battery_voltage_v, current_ma, motors_idle, charging, now_us, 0);
         return;
     }
 
@@ -62,6 +73,8 @@ void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, int6
         previous_current_ma_ = current_ma;
         last_update_us_ = now_us;
         tracking_degraded_ = true;
+        ResetQuasiRestQualification();
+        UpdateQuasiRest(battery_voltage_v, current_ma, motors_idle, charging, now_us, 0);
         return;
     }
 
@@ -69,9 +82,10 @@ void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, int6
         0.5 * (static_cast<double>(previous_current_ma_) + current_ma);
     const double delta_mah = average_current_ma * elapsed_us / 3600000000.0;
     remaining_mah_ = static_cast<float>(std::clamp(static_cast<double>(remaining_mah_) - delta_mah,
-                                                0.0, static_cast<double>(usable_capacity_mah_)));
+                                                   0.0, static_cast<double>(usable_capacity_mah_)));
     previous_current_ma_ = current_ma;
     last_update_us_ = now_us;
+    UpdateQuasiRest(battery_voltage_v, current_ma, motors_idle, charging, now_us, elapsed_us);
 }
 
 void BatterySocEstimator::MarkMeasurementGap() {
@@ -80,6 +94,7 @@ void BatterySocEstimator::MarkMeasurementGap() {
     }
     tracking_degraded_ = true;
     ResetIntegrationBaseline();
+    ResetQuasiRestQualification();
 }
 
 float BatterySocEstimator::GetSocPercent() const {
@@ -100,7 +115,7 @@ BatterySocEstimator::PersistedState BatterySocEstimator::GetPersistedState() con
     return state;
 }
 
-int BatterySocEstimator::EstimatePercentFromVoltage(float voltage_v) {
+float BatterySocEstimator::EstimatePercentFromVoltage(float voltage_v) {
     struct Point {
         float voltage;
         int percent;
@@ -126,9 +141,8 @@ int BatterySocEstimator::EstimatePercentFromVoltage(float voltage_v) {
             const float ratio =
                 (voltage_v - curve[i - 1].voltage) / (curve[i].voltage - curve[i - 1].voltage);
             return std::clamp(
-                static_cast<int>(std::lround(curve[i - 1].percent +
-                                             ratio * (curve[i].percent - curve[i - 1].percent))),
-                0, 100);
+                curve[i - 1].percent + ratio * (curve[i].percent - curve[i - 1].percent), 0.0f,
+                100.0f);
         }
     }
     return 100;
@@ -138,4 +152,90 @@ void BatterySocEstimator::ResetIntegrationBaseline() {
     previous_current_ma_ = 0.0f;
     last_update_us_ = 0;
     have_previous_current_ = false;
+}
+
+void BatterySocEstimator::ResetQuasiRestQualification() {
+    quasi_rest_started_us_ = 0;
+    quasi_rest_sample_count_ = 0;
+    quasi_rest_current_mean_ma_ = 0.0;
+    quasi_rest_current_m2_ = 0.0;
+    quasi_rest_voltage_mean_v_ = 0.0;
+    quasi_rest_voltage_m2_ = 0.0;
+    quasi_rest_correction_elapsed_us_ = 0;
+    have_quasi_rest_previous_sample_ = false;
+    quasi_resting_ = false;
+    quasi_rest_voltage_soc_percent_ = 0.0f;
+}
+
+void BatterySocEstimator::UpdateQuasiRest(float battery_voltage_v, float current_ma,
+                                          bool motors_idle, bool charging, int64_t now_us,
+                                          int64_t elapsed_us) {
+    const bool candidate =
+        motors_idle && !charging && std::fabs(current_ma) <= quasi_rest_max_current_ma_;
+    if (!candidate) {
+        ResetQuasiRestQualification();
+        return;
+    }
+
+    if (have_quasi_rest_previous_sample_ &&
+        (std::fabs(current_ma - quasi_rest_previous_current_ma_) >
+             quasi_rest_current_transition_ma_ ||
+         std::fabs(battery_voltage_v - quasi_rest_previous_voltage_v_) >
+             quasi_rest_voltage_transition_v_)) {
+        ResetQuasiRestQualification();
+    }
+    quasi_rest_previous_current_ma_ = current_ma;
+    quasi_rest_previous_voltage_v_ = battery_voltage_v;
+    have_quasi_rest_previous_sample_ = true;
+
+    if (quasi_rest_started_us_ == 0) {
+        quasi_rest_started_us_ = now_us;
+    }
+    ++quasi_rest_sample_count_;
+    const double current_delta = current_ma - quasi_rest_current_mean_ma_;
+    quasi_rest_current_mean_ma_ += current_delta / quasi_rest_sample_count_;
+    quasi_rest_current_m2_ +=
+        current_delta * (static_cast<double>(current_ma) - quasi_rest_current_mean_ma_);
+    const double voltage_delta = battery_voltage_v - quasi_rest_voltage_mean_v_;
+    quasi_rest_voltage_mean_v_ += voltage_delta / quasi_rest_sample_count_;
+    quasi_rest_voltage_m2_ +=
+        voltage_delta * (static_cast<double>(battery_voltage_v) - quasi_rest_voltage_mean_v_);
+
+    if (now_us - quasi_rest_started_us_ < quasi_rest_qualification_us_ ||
+        quasi_rest_sample_count_ < 2) {
+        return;
+    }
+    const double current_stddev =
+        std::sqrt(std::max(0.0, quasi_rest_current_m2_ / (quasi_rest_sample_count_ - 1)));
+    const double voltage_stddev =
+        std::sqrt(std::max(0.0, quasi_rest_voltage_m2_ / (quasi_rest_sample_count_ - 1)));
+    if (current_stddev > quasi_rest_current_stddev_ma_ ||
+        voltage_stddev > quasi_rest_voltage_stddev_v_) {
+        ResetQuasiRestQualification();
+        return;
+    }
+
+    quasi_resting_ = true;
+    quasi_rest_voltage_soc_percent_ =
+        EstimatePercentFromVoltage(static_cast<float>(quasi_rest_voltage_mean_v_));
+    if (elapsed_us <= 0 || quasi_rest_correction_interval_us_ <= 0 ||
+        quasi_rest_correction_time_constant_us_ <= 0) {
+        return;
+    }
+    quasi_rest_correction_elapsed_us_ += elapsed_us;
+    if (quasi_rest_correction_elapsed_us_ < quasi_rest_correction_interval_us_) {
+        return;
+    }
+    const double target_remaining_mah =
+        usable_capacity_mah_ * quasi_rest_voltage_soc_percent_ / 100.0;
+    const double correction_fraction =
+        -std::expm1(-static_cast<double>(quasi_rest_correction_elapsed_us_) /
+                    quasi_rest_correction_time_constant_us_);
+    quasi_rest_correction_elapsed_us_ = 0;
+    const float previous_remaining_mah = remaining_mah_;
+    remaining_mah_ = static_cast<float>(
+        std::clamp(static_cast<double>(remaining_mah_) +
+                       (target_remaining_mah - remaining_mah_) * correction_fraction,
+                   0.0, static_cast<double>(usable_capacity_mah_)));
+    cumulative_voltage_correction_mah_ += remaining_mah_ - previous_remaining_mah;
 }

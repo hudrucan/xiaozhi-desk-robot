@@ -229,8 +229,19 @@ private:
 #endif
 #ifdef INA219_I2C_ADDRESS
     Ina219PowerMonitor power_monitor_;
-    BatterySocEstimator battery_soc_estimator_{BATTERY_SOC_USABLE_CAPACITY_MAH,
-                                               BATTERY_SOC_MAX_INTEGRATION_GAP_MS * 1000LL};
+    BatterySocEstimator battery_soc_estimator_{BatterySocEstimator::Config {
+        .usable_capacity_mah = BATTERY_SOC_USABLE_CAPACITY_MAH,
+        .maximum_integration_gap_us = BATTERY_SOC_MAX_INTEGRATION_GAP_MS * 1000LL,
+        .quasi_rest_max_current_ma = BATTERY_SOC_QUASI_REST_MAX_CURRENT_MA,
+        .quasi_rest_current_stddev_ma = BATTERY_SOC_QUASI_REST_CURRENT_STDDEV_MA,
+        .quasi_rest_voltage_stddev_v = BATTERY_SOC_QUASI_REST_VOLTAGE_STDDEV_MV / 1000.0f,
+        .quasi_rest_current_transition_ma = BATTERY_SOC_QUASI_REST_CURRENT_TRANSITION_MA,
+        .quasi_rest_voltage_transition_v = BATTERY_SOC_QUASI_REST_VOLTAGE_TRANSITION_MV / 1000.0f,
+        .quasi_rest_qualification_us = BATTERY_SOC_QUASI_REST_QUALIFICATION_MS * 1000LL,
+        .quasi_rest_correction_interval_us = BATTERY_SOC_QUASI_REST_CORRECTION_INTERVAL_MS * 1000LL,
+        .quasi_rest_correction_time_constant_us =
+            BATTERY_SOC_QUASI_REST_CORRECTION_TIME_CONSTANT_MS * 1000LL,
+    }};
     std::atomic_bool battery_valid_{false};
     std::atomic_int battery_percent_{-1};
     std::atomic<float> battery_voltage_v_{0.0f};
@@ -243,6 +254,9 @@ private:
     std::atomic_bool battery_conversion_ready_{false};
     std::atomic_bool battery_math_overflow_{false};
     std::atomic_bool battery_soc_tracking_degraded_{false};
+    std::atomic_bool battery_soc_quasi_resting_{false};
+    std::atomic<float> battery_soc_voltage_reference_percent_{0.0f};
+    std::atomic<float> battery_soc_voltage_correction_mah_{0.0f};
     std::atomic_bool battery_charging_{false};
     std::atomic_bool battery_discharging_{false};
     std::atomic_bool battery_capacity_test_active_{false};
@@ -634,7 +648,6 @@ private:
         float filtered_power_mw = 0.0f;
         unsigned power_failures = 0;
         unsigned power_invalid_samples = 0;
-        int64_t next_power_log_us = 0;
         int64_t next_battery_display_us = 0;
         int64_t soc_last_save_us = esp_timer_get_time();
         float soc_last_saved_remaining_mah = battery_soc_estimator_.GetRemainingMah();
@@ -702,8 +715,16 @@ private:
                         ESP_LOGI(TAG, "Battery SoC seeded from %.3f V: %.2f%%",
                                  reading.battery_voltage_v, battery_soc_estimator_.GetSocPercent());
                     }
+                    const bool was_quasi_resting = battery_soc_estimator_.IsQuasiResting();
                     battery_soc_estimator_.Update(reading.battery_voltage_v, reading.current_ma,
-                                                  now_us);
+                                                  !motors_.IsActive(), reading.charging, now_us);
+                    if (was_quasi_resting != battery_soc_estimator_.IsQuasiResting()) {
+                        ESP_LOGI(TAG,
+                                 "Battery quasi-rest %s: voltage_soc=%.2f%% correction=%+.4f mAh",
+                                 battery_soc_estimator_.IsQuasiResting() ? "qualified" : "reset",
+                                 battery_soc_estimator_.GetQuasiRestVoltageSocPercent(),
+                                 battery_soc_estimator_.GetCumulativeVoltageCorrectionMah());
+                    }
                     battery_voltage_v_.store(filtered_voltage_v);
                     battery_current_ma_.store(std::fabs(filtered_current_ma));
                     battery_power_mw_.store(std::fabs(filtered_power_mw));
@@ -716,6 +737,11 @@ private:
                         100));
                     battery_soc_tracking_degraded_.store(
                         battery_soc_estimator_.IsTrackingDegraded());
+                    battery_soc_quasi_resting_.store(battery_soc_estimator_.IsQuasiResting());
+                    battery_soc_voltage_reference_percent_.store(
+                        battery_soc_estimator_.GetQuasiRestVoltageSocPercent());
+                    battery_soc_voltage_correction_mah_.store(
+                        battery_soc_estimator_.GetCumulativeVoltageCorrectionMah());
                     battery_charging_.store(reading.charging);
                     battery_discharging_.store(reading.discharging);
                     battery_valid_.store(true);
@@ -756,7 +782,7 @@ private:
                                 elapsed_us <= BATTERY_SOC_MAX_INTEGRATION_GAP_MS * 1000LL) {
                                 const double average_discharge_ma =
                                     0.5 * (static_cast<double>(capacity_previous_current_ma) +
-                                            reading.current_ma);
+                                           reading.current_ma);
                                 if (average_discharge_ma > 0.0) {
                                     // mA * us / 3,600,000 = uAh.
                                     capacity_fractional_uah +=
@@ -819,18 +845,6 @@ private:
                     power_failures = 0;
                     power_invalid_samples = 0;
 
-                    if (now_us >= next_power_log_us) {
-                        next_power_log_us = now_us + 5000000LL;
-                        ESP_LOGI(TAG,
-                                 "Battery raw: bus=%.3f V battery=%.3f V shunt=%+.3f mV "
-                                 "current=%+.1f mA power=%+.1f mW soc=%.2f%% remaining=%.1f mAh "
-                                 "degraded=%s",
-                                 reading.bus_voltage_v, reading.battery_voltage_v,
-                                 reading.shunt_voltage_mv, reading.current_ma, reading.power_mw,
-                                 battery_soc_estimator_.GetSocPercent(),
-                                 battery_soc_estimator_.GetRemainingMah(),
-                                 battery_soc_estimator_.IsTrackingDegraded() ? "yes" : "no");
-                    }
                     if (now_us >= next_battery_display_us) {
                         next_battery_display_us = now_us + 1000000LL;
                         const int percent = battery_percent_.load();
@@ -848,6 +862,8 @@ private:
                     battery_soc_estimator_.MarkMeasurementGap();
                     battery_soc_tracking_degraded_.store(
                         battery_soc_estimator_.IsTrackingDegraded());
+                    battery_soc_quasi_resting_.store(false);
+                    battery_soc_voltage_reference_percent_.store(0.0f);
                     if (!read_ok) {
                         power_invalid_samples = 0;
                         if (++power_failures == 1 || power_failures % 30 == 0) {
@@ -2783,17 +2799,23 @@ private:
                                         battery_remaining_mah_.load());
                 cJSON_AddNumberToObject(root, "battery_capacity_mah",
                                         BATTERY_SOC_USABLE_CAPACITY_MAH);
-                cJSON_AddStringToObject(root, "battery_soc_method", "coulomb");
+                cJSON_AddStringToObject(root, "battery_soc_method", "coulomb_quasi_rest");
                 cJSON_AddBoolToObject(root, "battery_soc_tracking_degraded",
                                       battery_soc_tracking_degraded_.load());
+                cJSON_AddBoolToObject(root, "battery_soc_quasi_resting",
+                                      battery_soc_quasi_resting_.load());
+                cJSON_AddNumberToObject(root, "battery_soc_voltage_reference_percent",
+                                        battery_soc_voltage_reference_percent_.load());
+                cJSON_AddNumberToObject(root, "battery_soc_voltage_correction_mah",
+                                        battery_soc_voltage_correction_mah_.load());
                 cJSON_AddBoolToObject(root, "battery_conversion_ready",
                                       battery_conversion_ready_.load());
                 cJSON_AddBoolToObject(root, "battery_math_overflow", battery_math_overflow_.load());
                 const float signed_current_ma = battery_signed_current_ma_.load();
-                const char* flow_state = !battery_valid_.load()    ? "unknown"
-                                         : signed_current_ma < -20.0f  ? "charging"
+                const char* flow_state = !battery_valid_.load()       ? "unknown"
+                                         : signed_current_ma < -20.0f ? "charging"
                                          : signed_current_ma > 20.0f  ? "discharging"
-                                                                   : "near_zero";
+                                                                      : "near_zero";
                 cJSON_AddStringToObject(root, "battery_flow_state", flow_state);
                 cJSON_AddStringToObject(root, "external_power", "unknown");
                 cJSON_AddBoolToObject(root, "battery_charging", battery_charging_.load());
@@ -3072,9 +3094,15 @@ private:
                     cJSON_AddNumberToObject(result, "remaining_mah", battery_remaining_mah_.load());
                     cJSON_AddNumberToObject(result, "capacity_mah",
                                             BATTERY_SOC_USABLE_CAPACITY_MAH);
-                    cJSON_AddStringToObject(result, "soc_method", "coulomb");
+                    cJSON_AddStringToObject(result, "soc_method", "coulomb_quasi_rest");
                     cJSON_AddBoolToObject(result, "soc_tracking_degraded",
                                           battery_soc_tracking_degraded_.load());
+                    cJSON_AddBoolToObject(result, "soc_quasi_resting",
+                                          battery_soc_quasi_resting_.load());
+                    cJSON_AddNumberToObject(result, "soc_voltage_reference_percent",
+                                            battery_soc_voltage_reference_percent_.load());
+                    cJSON_AddNumberToObject(result, "soc_voltage_correction_mah",
+                                            battery_soc_voltage_correction_mah_.load());
                     cJSON_AddBoolToObject(result, "conversion_ready",
                                           battery_conversion_ready_.load());
                     cJSON_AddBoolToObject(result, "math_overflow", battery_math_overflow_.load());

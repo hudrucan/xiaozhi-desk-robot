@@ -111,6 +111,15 @@
 // Initial diagnostic limit: ten nominal INA219 periods. Hardware logs should be used to confirm
 // this still exceeds normal scheduling jitter before it is treated as a final value.
 #define BATTERY_SOC_MAX_INTEGRATION_GAP_MS 1000
+// Initial quasi-rest parameters derived from the 2026-09-14 FullHD R100 idle/motor captures.
+#define BATTERY_SOC_QUASI_REST_MAX_CURRENT_MA 850.0f
+#define BATTERY_SOC_QUASI_REST_CURRENT_STDDEV_MA 75.0f
+#define BATTERY_SOC_QUASI_REST_VOLTAGE_STDDEV_MV 8.0f
+#define BATTERY_SOC_QUASI_REST_CURRENT_TRANSITION_MA 350.0f
+#define BATTERY_SOC_QUASI_REST_VOLTAGE_TRANSITION_MV 40.0f
+#define BATTERY_SOC_QUASI_REST_QUALIFICATION_MS 60000
+#define BATTERY_SOC_QUASI_REST_CORRECTION_INTERVAL_MS 60000
+#define BATTERY_SOC_QUASI_REST_CORRECTION_TIME_CONSTANT_MS (6 * 60 * 60 * 1000)
 #define BATTERY_CAPACITY_LOW_VOLTAGE_V 3.20f
 #define BATTERY_CAPACITY_LOW_VOLTAGE_DURATION_MS 10000
 
