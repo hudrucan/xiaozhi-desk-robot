@@ -106,7 +106,13 @@
 // INA219 breakout with both A0/A1 jumpers open and an R100 (0.1 ohm) shunt.
 #define INA219_I2C_ADDRESS 0x40
 #define INA219_SHUNT_RESISTANCE_OHMS 0.1f
-#define INA219_SAMPLE_PERIOD_MS 1000
+#define INA219_SAMPLE_PERIOD_MS 100
+#define BATTERY_SOC_USABLE_CAPACITY_MAH 2862.1f
+// Initial diagnostic limit: ten nominal INA219 periods. Hardware logs should be used to confirm
+// this still exceeds normal scheduling jitter before it is treated as a final value.
+#define BATTERY_SOC_MAX_INTEGRATION_GAP_MS 1000
+#define BATTERY_CAPACITY_LOW_VOLTAGE_V 3.20f
+#define BATTERY_CAPACITY_LOW_VOLTAGE_DURATION_MS 10000
 
 // Optional MPU6050 on the shared auxiliary bus. It follows the same probe-first lifecycle as the
 // INA219; the sampling task starts only when at least one auxiliary sensor is detected.

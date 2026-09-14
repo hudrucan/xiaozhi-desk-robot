@@ -920,6 +920,7 @@ endif()
 
 if(CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT)
     list(APPEND SOURCES
+        "boards/common/desk_robot/battery_soc_estimator.cc"
         "boards/common/desk_robot/ina219_power_monitor.cc"
         "boards/common/desk_robot/mpu6050_motion_sensor.cc"
     )
