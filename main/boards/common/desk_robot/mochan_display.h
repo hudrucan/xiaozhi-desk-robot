@@ -3,6 +3,7 @@
 #include "display/lcd_display.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -88,20 +89,56 @@ private:
         EyeGeometry previous{};
         uint8_t previous_blink = 0;
         bool rendered = false;
+        bool positioned = false;
+        int displayed_x = 0;
+        int displayed_y = 0;
+        int displayed_rotation = 0;
     };
+
+    struct MouthRaster {
+        static constexpr int kWidth = 120;
+        static constexpr int kHeight = 80;
+        uint32_t* pixels = nullptr;
+        lv_image_dsc_t descriptor{};
+        std::string rendered_emotion;
+        uint16_t previous_scale_x = 0;
+        uint16_t previous_scale_y = 0;
+        uint8_t previous_opacity = 0;
+        int previous_x = 0;
+        int previous_y = 0;
+        int previous_pivot_y = -1;
+    };
+
     EyeRaster left_raster_;
     EyeRaster right_raster_;
+    MouthRaster mouth_raster_;
     bool InitializeEyeRasters();
-    void RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
+    bool InitializeMouthRaster();
+    bool RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
+    bool RenderMouthTarget(const std::string& emotion);
+    void UpdateMouth(uint8_t blink_amount, const std::string& emotion);
 
     void SetFaceState(FaceState state);
     void AdvanceEyeAnimation();
-    void UpdateEyes(uint8_t blink_amount);
+    void AdvanceFaceLayout(int64_t now_us);
+    void AdvanceIdleScheduler(std::string& emotion);
+    void AdvanceIdleMouthAnimation(bool idle_eligible);
+    void CancelIdleScheduler(bool restart_session);
+    void ApplyIdleEmotion(const char* emotion);
+    void UpdateEyes(uint8_t blink_amount, bool idle_eligible);
     void ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
                          uint8_t blink_amount);
     static bool AllowsNaturalBlink(FaceState state);
+    bool CanShowFullFace(const std::string& emotion) const;
+    bool IsIdleEligible(const std::string& emotion) const;
+    void SetFaceLayoutTarget(uint16_t target, int64_t now_us);
+    void UpdateFaceLayoutTarget(const std::string& emotion, int64_t now_us);
+    void FreezeMouthForExit();
+    void AdvanceResponseBoxTransition(int64_t now_us);
+    void RecordAnimationTiming(int64_t callback_started_us, int64_t frame_interval_us);
     void UpdateStatusDot();
     void ShowResponseBox();
+    void HideResponseBox();
     void HidePreview();
     void HideNotification();
     void StartTyping(const char* content);
@@ -115,6 +152,7 @@ private:
     lv_obj_t* right_eye_ = nullptr;
     lv_obj_t* left_eyelid_ = nullptr;
     lv_obj_t* right_eyelid_ = nullptr;
+    lv_obj_t* mouth_ = nullptr;
     lv_obj_t* response_box_ = nullptr;
     lv_obj_t* subtitle_ = nullptr;
     lv_obj_t* notification_ = nullptr;
@@ -145,6 +183,43 @@ private:
     bool eye_geometry_initialized_ = false;
     EyeGeometry left_eye_geometry_{74, 54, -48, -55, 0};
     EyeGeometry right_eye_geometry_{74, 54, 48, -55, 0};
+    uint16_t face_layout_progress_ = 0;
+    uint16_t face_layout_from_ = 0;
+    uint16_t face_layout_target_ = 0;
+    int face_layout_full_offset_y_ = 0;
+    int face_layout_full_offset_from_y_ = 0;
+    int face_layout_full_offset_target_y_ = 0;
+    int64_t face_layout_transition_started_us_ = 0;
+    int64_t face_layout_emotion_transition_started_us_ = 0;
+    uint16_t response_box_progress_ = 0;
+    uint16_t response_box_from_ = 0;
+    uint16_t response_box_target_ = 0;
+    int64_t response_box_transition_started_us_ = 0;
+    uint8_t response_box_opacity_ = 0;
+    int face_layout_offset_y_ = 0;
+    int64_t last_animation_callback_us_ = 0;
+    int64_t last_performance_log_us_ = 0;
+    int64_t max_frame_interval_us_ = 0;
+    int64_t max_callback_duration_us_ = 0;
+    int64_t idle_session_started_ms_ = 0;
+    int64_t next_idle_emotion_ms_ = 0;
+    int64_t last_yawn_ms_ = 0;
+    int64_t yawn_started_ms_ = 0;
+    int64_t next_mouth_motion_ms_ = 0;
+    int64_t mouth_motion_started_ms_ = 0;
+    uint16_t yawn_amount_ = 0;
+    int16_t mouth_motion_amount_ = 0;
+    uint16_t idle_motion_phase_ = 0;
+    int8_t idle_gaze_x_ = 0;
+    int8_t idle_gaze_y_ = 0;
+    uint8_t idle_repeat_count_ = 0;
+    bool idle_override_active_ = false;
+    bool yawn_active_ = false;
+    bool mouth_motion_active_ = false;
+    bool response_box_requested_ = false;
+    bool preview_show_pending_ = false;
+    std::string last_idle_emotion_;
+    std::string exiting_mouth_emotion_;
     bool wifi_connected_ = false;
     mutable std::mutex emotion_mutex_;
     std::string current_emotion_ = "neutral";

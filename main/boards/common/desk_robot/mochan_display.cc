@@ -27,15 +27,133 @@ constexpr int kTypingPeriodMs = 42;
 constexpr int kTypingFinishPeriodMs = 20;
 constexpr int kResponseTextScale = 210;
 constexpr int kEyeLayoutOffsetY = 10;
+// Keep full-face motion and idle cadence tunables together for hardware iteration.
+constexpr int kFaceAnimationPeriodMs = 33;
+constexpr int kFaceLayoutTransitionMs = 450;
+constexpr int kEmotionLayoutTransitionMs = 200;
+constexpr int kResponseBoxFadeMs = 200;
+constexpr int kResponseFadeInStartFaceProgress = 144;
+constexpr int kFaceReturnStartResponseProgress = 96;
+constexpr int64_t kPerformanceLogIntervalUs = 5000000;
+constexpr int kIdleStartDelayMs = 15000;
+constexpr int kIdleEarlyStageMs = 45000;
+constexpr int kIdleSleepyStageMs = 120000;
+constexpr int kIdleEmotionHoldMinMs = 9000;
+constexpr int kIdleEmotionHoldMaxMs = 16000;
+constexpr int kIdleHappyHoldMinMs = 4500;
+constexpr int kIdleHappyHoldMaxMs = 7000;
+constexpr int kIdleSurprisedHoldMs = 1800;
+constexpr int kIdleSleepyHoldMinMs = 14000;
+constexpr int kIdleSleepyHoldMaxMs = 24000;
+constexpr int kYawnMinimumIdleMs = 120000;
+constexpr int kYawnCooldownMs = 180000;
+constexpr int kYawnOpenMs = 500;
+constexpr int kYawnHoldMs = 350;
+constexpr int kYawnCloseMs = 500;
+constexpr int kYawnSettleMs = 250;
+constexpr int kMouthMotionIntervalMinMs = 8000;
+constexpr int kMouthMotionIntervalMaxMs = 14000;
+constexpr int kMouthMotionOpenMs = 350;
+constexpr int kMouthMotionHoldMs = 400;
+constexpr int kMouthMotionCloseMs = 500;
+constexpr int kMouthMotionClosedHoldMs = 350;
+constexpr int kMouthMotionSettleMs = 300;
+constexpr int kMouthMotionClosedAmount = -144;
+constexpr int kMouthIdleGapOffsetY = 8;
 constexpr char kTag[] = "MochanDisplay";
 
-constexpr std::array<const char*, 33> kSupportedEmotions = {
+constexpr std::array<const char*, 34> kSupportedEmotions = {
     "neutral",    "happy",       "laughing",  "funny",     "sad",        "angry",   "crying",
     "loving",     "embarrassed", "surprised", "shocked",   "thinking",   "winking", "cool",
     "relaxed",    "delicious",   "kissy",     "confident", "sleepy",     "silly",   "confused",
     "suspicious", "shake",       "speaking",  "listening", "left",       "right",   "up",
-    "down",       "up_left",     "up_right",  "down_left", "down_right",
+    "down",       "up_left",     "up_right",  "down_left", "down_right", "bored",
 };
+
+struct MouthPoint {
+    int8_t x;
+    int8_t y;
+};
+
+struct MouthGeometry {
+    const char* emotion;
+    int x;
+    int y;
+    int width;
+    int height;
+    int idle_eye_offset_y;
+    int base_scale_y;
+    int blink_scale_y;
+    int idle_open_scale_y;
+    const MouthPoint* points;
+    size_t point_count;
+};
+
+constexpr MouthPoint kNeutralMouth[] = {
+    {6, 3},   {15, 5},  {24, 6},  {33, 6},  {42, 6},  {50, 6},  {58, 5},  {66, 3},  {73, 1},
+    {76, 1},  {78, 2},  {79, 3},  {80, 6},  {80, 9},  {79, 12}, {76, 15}, {73, 18}, {65, 21},
+    {57, 24}, {49, 25}, {40, 25}, {30, 25}, {20, 23}, {13, 21}, {6, 18},  {3, 16},  {2, 14},
+    {0, 12},  {0, 10},  {0, 8},   {2, 6},   {3, 4},   {6, 3},
+};
+constexpr MouthPoint kHappyMouth[] = {
+    {4, 1},  {14, 5}, {23, 7}, {33, 9},  {43, 10}, {53, 10}, {64, 8},  {74, 5},  {85, 1},  {88, 0},
+    {90, 1}, {90, 3}, {90, 7}, {85, 21}, {76, 32}, {64, 39}, {48, 42}, {34, 41}, {22, 37}, {12, 30},
+    {4, 20}, {2, 16}, {1, 12}, {0, 9},   {0, 6},   {0, 4},   {1, 2},   {2, 1},   {4, 1},
+};
+constexpr MouthPoint kBoredMouth[] = {
+    {6, 4},   {19, 5},  {32, 6},  {47, 4},  {63, 2},  {68, 1},  {72, 2},  {75, 3},  {78, 5},
+    {80, 8},  {81, 11}, {82, 15}, {82, 20}, {81, 22}, {80, 24}, {78, 24}, {76, 23}, {72, 20},
+    {68, 19}, {63, 18}, {58, 19}, {19, 26}, {14, 26}, {9, 25},  {5, 22},  {2, 19},  {1, 17},
+    {0, 14},  {0, 12},  {0, 10},  {1, 8},   {2, 6},   {4, 5},   {6, 4},
+};
+constexpr MouthPoint kSleepyMouth[] = {
+    {10, 4},  {17, 2},  {25, 2},  {33, 1},  {42, 2},  {52, 3},  {60, 3},  {69, 2},  {76, 1},
+    {80, 1},  {84, 3},  {86, 6},  {88, 10}, {88, 16}, {87, 21}, {84, 26}, {78, 29}, {68, 31},
+    {58, 32}, {47, 32}, {35, 31}, {25, 30}, {16, 28}, {9, 26},  {4, 23},  {2, 20},  {0, 18},
+    {0, 14},  {1, 11},  {2, 9},   {4, 7},   {7, 5},   {10, 4},
+};
+constexpr MouthPoint kSurprisedMouth[] = {
+    {17, 4},  {26, 2},  {34, 1},  {42, 1},  {49, 3},  {56, 6},  {61, 9},  {65, 14},
+    {67, 20}, {69, 28}, {69, 35}, {67, 41}, {63, 47}, {58, 51}, {52, 54}, {45, 56},
+    {36, 56}, {27, 55}, {19, 54}, {13, 50}, {7, 46},  {3, 41},  {1, 35},  {0, 29},
+    {1, 22},  {3, 16},  {6, 11},  {11, 7},  {17, 4},
+};
+constexpr MouthPoint kAngryMouth[] = {
+    {6, 14},  {14, 10}, {23, 6},  {32, 4},  {40, 2},  {44, 1},  {49, 1},  {53, 2},
+    {57, 3},  {65, 5},  {72, 8},  {79, 11}, {86, 15}, {89, 17}, {91, 20}, {92, 23},
+    {92, 27}, {92, 30}, {90, 31}, {88, 31}, {85, 30}, {75, 26}, {66, 23}, {57, 22},
+    {48, 21}, {39, 21}, {29, 23}, {19, 26}, {8, 30},  {4, 31},  {2, 31},  {0, 30},
+    {0, 27},  {0, 23},  {2, 20},  {3, 17},  {6, 14},
+};
+
+constexpr std::array<MouthGeometry, 6> kMouthGeometries = {{
+    {"neutral", 80, 124, 80, 25, 15, 256, -28, 96, kNeutralMouth, std::size(kNeutralMouth)},
+    {"happy", 75, 109, 91, 42, 13, 224, -42, 72, kHappyMouth, std::size(kHappyMouth)},
+    {"bored", 79, 116, 83, 26, 14, 256, -20, 80, kBoredMouth, std::size(kBoredMouth)},
+    {"sleepy", 76, 120, 89, 33, -2, 256, 34, 112, kSleepyMouth, std::size(kSleepyMouth)},
+    {"surprised", 85, 116, 70, 56, -3, 256, -14, 64, kSurprisedMouth, std::size(kSurprisedMouth)},
+    {"angry", 74, 121, 93, 32, 13, 256, -24, 72, kAngryMouth, std::size(kAngryMouth)},
+}};
+
+const MouthGeometry* FindMouthGeometry(const std::string& emotion) {
+    auto found = std::find_if(kMouthGeometries.begin(), kMouthGeometries.end(),
+                              [&emotion](const auto& item) { return emotion == item.emotion; });
+    return found == kMouthGeometries.end() ? nullptr : &*found;
+}
+
+bool PointInMouth(float x, float y, const MouthGeometry& geometry) {
+    bool inside = false;
+    for (size_t i = 0, previous = geometry.point_count - 1; i < geometry.point_count;
+         previous = i++) {
+        const auto& a = geometry.points[i];
+        const auto& b = geometry.points[previous];
+        if (((a.y > y) != (b.y > y)) &&
+            x < (b.x - a.x) * (y - a.y) / static_cast<float>(b.y - a.y) + a.x) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
 
 bool EndsWithSentencePunctuation(const std::string& text) {
     if (text.empty()) {
@@ -43,6 +161,30 @@ bool EndsWithSentencePunctuation(const std::string& text) {
     }
     const char last = text.back();
     return last == '.' || last == '!' || last == '?' || last == ':' || last == ';';
+}
+
+uint16_t TimedProgress(uint16_t from, uint16_t target, int64_t started_us, int duration_ms,
+                       int64_t now_us) {
+    const int distance = std::abs(static_cast<int>(target) - static_cast<int>(from));
+    if (distance == 0) {
+        return target;
+    }
+    const int64_t duration_us =
+        std::max<int64_t>(1, static_cast<int64_t>(duration_ms) * 1000 * distance / 256);
+    const int64_t elapsed_us = std::clamp<int64_t>(now_us - started_us, 0, duration_us);
+    const int progress =
+        static_cast<int>(from) +
+        (static_cast<int>(target) - static_cast<int>(from)) * elapsed_us / duration_us;
+    return static_cast<uint16_t>(std::clamp(progress, 0, 256));
+}
+
+int TimedValue(int from, int target, int64_t started_us, int duration_ms, int64_t now_us) {
+    if (from == target) {
+        return target;
+    }
+    const int64_t duration_us = static_cast<int64_t>(duration_ms) * 1000;
+    const int64_t elapsed_us = std::clamp<int64_t>(now_us - started_us, 0, duration_us);
+    return from + (target - from) * elapsed_us / duration_us;
 }
 }  // namespace
 
@@ -80,6 +222,10 @@ MochanDisplay::~MochanDisplay() {
             lv_image_cache_drop(&raster->descriptor);
             heap_caps_free(raster->pixels);
         }
+    }
+    if (mouth_raster_.pixels != nullptr) {
+        lv_image_cache_drop(&mouth_raster_.descriptor);
+        heap_caps_free(mouth_raster_.pixels);
     }
 }
 
@@ -136,6 +282,15 @@ void MochanDisplay::SetupUI() {
         lv_obj_set_style_radius(eyelid, 22, 0);
         lv_obj_set_style_shadow_width(eyelid, 0, 0);
         lv_obj_move_to_index(eyelid, 0);
+    }
+
+    if (InitializeMouthRaster()) {
+        mouth_ = lv_image_create(face_);
+        lv_image_set_src(mouth_, &mouth_raster_.descriptor);
+        lv_obj_set_style_transform_pivot_x(mouth_, MouthRaster::kWidth / 2, 0);
+        lv_obj_set_style_transform_pivot_y(mouth_, MouthRaster::kHeight / 2, 0);
+        lv_obj_align(mouth_, LV_ALIGN_CENTER, 0, 25);
+        lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
     }
 
     wifi_icon_ = lv_label_create(container_);
@@ -238,7 +393,7 @@ void MochanDisplay::SetupUI() {
             auto* display = static_cast<MochanDisplay*>(lv_timer_get_user_data(timer));
             display->AdvanceEyeAnimation();
         },
-        50, this);
+        kFaceAnimationPeriodMs, this);
 
     typing_timer_ = lv_timer_create(
         [](lv_timer_t* timer) {
@@ -249,14 +404,21 @@ void MochanDisplay::SetupUI() {
 }
 
 void MochanDisplay::SetFaceState(FaceState state) {
-    if (face_state_ != state) {
-        animation_phase_ = 0;
-        blink_step_ = 0;
-        blink_countdown_ = static_cast<uint16_t>(80 + esp_random() % 61);
+    if (face_state_ == state) {
+        UpdateStatusDot();
+        return;
     }
+    animation_phase_ = 0;
+    blink_step_ = 0;
+    blink_countdown_ = static_cast<uint16_t>(80 + esp_random() % 61);
     face_state_ = state;
     UpdateStatusDot();
-    UpdateEyes(0);
+    std::string emotion;
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        emotion = current_emotion_;
+    }
+    UpdateEyes(0, IsIdleEligible(emotion));
 }
 
 void MochanDisplay::UpdateStatusDot() {
@@ -278,22 +440,17 @@ void MochanDisplay::UpdateStatusDot() {
 }
 
 void MochanDisplay::ShowResponseBox() {
-    if (response_box_ == nullptr || !lv_obj_has_flag(response_box_, LV_OBJ_FLAG_HIDDEN)) {
-        return;
-    }
+    FreezeMouthForExit();
+    CancelIdleScheduler(true);
+    response_box_requested_ = true;
+    const int64_t now_us = esp_timer_get_time();
+    SetFaceLayoutTarget(0, now_us);
+    AdvanceResponseBoxTransition(now_us);
+}
 
-    lv_obj_remove_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_opa(response_box_, LV_OPA_TRANSP, 0);
-    lv_anim_t animation;
-    lv_anim_init(&animation);
-    lv_anim_set_var(&animation, response_box_);
-    lv_anim_set_values(&animation, LV_OPA_TRANSP, LV_OPA_COVER);
-    lv_anim_set_duration(&animation, 200);
-    LV_ANIM_SET_EASE_OUT_CUBIC(&animation);
-    lv_anim_set_exec_cb(&animation, [](void* object, int32_t opacity) {
-        lv_obj_set_style_opa(static_cast<lv_obj_t*>(object), opacity, 0);
-    });
-    lv_anim_start(&animation);
+void MochanDisplay::HideResponseBox() {
+    response_box_requested_ = false;
+    AdvanceResponseBoxTransition(esp_timer_get_time());
 }
 
 bool MochanDisplay::AllowsNaturalBlink(FaceState state) {
@@ -303,10 +460,367 @@ bool MochanDisplay::AllowsNaturalBlink(FaceState state) {
            state == FaceState::kSpeaking || state >= FaceState::kLookLeft;
 }
 
+bool MochanDisplay::CanShowFullFace(const std::string& emotion) const {
+    if (mouth_ == nullptr || activity_state_ != FaceState::kIdle || response_box_ == nullptr ||
+        response_box_requested_ || response_box_progress_ > kFaceReturnStartResponseProgress) {
+        return false;
+    }
+    return FindMouthGeometry(emotion) != nullptr;
+}
+
+bool MochanDisplay::IsIdleEligible(const std::string& emotion) const {
+    return CanShowFullFace(emotion) && response_box_progress_ == 0 && !emotion_active_ &&
+           splash_ == nullptr &&
+           (camera_image_ == nullptr || lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN)) &&
+           (notification_ == nullptr || lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN));
+}
+
+void MochanDisplay::SetFaceLayoutTarget(uint16_t target, int64_t now_us) {
+    if (target == face_layout_target_) {
+        return;
+    }
+    face_layout_from_ = face_layout_progress_;
+    face_layout_target_ = target;
+    face_layout_transition_started_us_ = now_us;
+}
+
+void MochanDisplay::UpdateFaceLayoutTarget(const std::string& emotion, int64_t now_us) {
+    const uint16_t target = CanShowFullFace(emotion) ? 256 : 0;
+    const std::string& layout_emotion =
+        target == 0 && !exiting_mouth_emotion_.empty() ? exiting_mouth_emotion_ : emotion;
+    if (const auto* geometry = FindMouthGeometry(layout_emotion); geometry != nullptr) {
+        face_layout_full_offset_y_ = TimedValue(
+            face_layout_full_offset_from_y_, face_layout_full_offset_target_y_,
+            face_layout_emotion_transition_started_us_, kEmotionLayoutTransitionMs, now_us);
+        if (geometry->idle_eye_offset_y != face_layout_full_offset_target_y_) {
+            if (face_layout_progress_ == 0) {
+                face_layout_full_offset_y_ = geometry->idle_eye_offset_y;
+                face_layout_full_offset_from_y_ = geometry->idle_eye_offset_y;
+                face_layout_full_offset_target_y_ = geometry->idle_eye_offset_y;
+            } else {
+                face_layout_full_offset_from_y_ = face_layout_full_offset_y_;
+                face_layout_full_offset_target_y_ = geometry->idle_eye_offset_y;
+            }
+            face_layout_emotion_transition_started_us_ = now_us;
+        }
+    }
+    SetFaceLayoutTarget(target, now_us);
+    if (target != 0 && mouth_ != nullptr) {
+        exiting_mouth_emotion_.clear();
+        if (lv_obj_has_flag(mouth_, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void MochanDisplay::FreezeMouthForExit() {
+    if (face_layout_progress_ == 0 || !exiting_mouth_emotion_.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+    if (FindMouthGeometry(current_emotion_) != nullptr) {
+        exiting_mouth_emotion_ = current_emotion_;
+    }
+}
+
+void MochanDisplay::AdvanceResponseBoxTransition(int64_t now_us) {
+    if (response_box_ == nullptr) {
+        return;
+    }
+
+    // Let the panel fade overlap the latter part of the face movement. On the
+    // way back, the face starts returning while the last of the panel fades.
+    const uint16_t target =
+        response_box_requested_ && face_layout_progress_ <= kResponseFadeInStartFaceProgress ? 256
+                                                                                             : 0;
+    if (target != response_box_target_) {
+        response_box_from_ = response_box_progress_;
+        response_box_target_ = target;
+        response_box_transition_started_us_ = now_us;
+        if (target != 0 && response_box_progress_ == 0) {
+            lv_obj_remove_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    response_box_progress_ =
+        TimedProgress(response_box_from_, response_box_target_, response_box_transition_started_us_,
+                      kResponseBoxFadeMs, now_us);
+
+    const uint32_t progress = response_box_progress_;
+    const uint32_t eased = progress * progress * (3 * 256 - 2 * progress) / (256 * 256);
+    const uint8_t opacity = eased * LV_OPA_COVER / 256;
+    if (response_box_opacity_ != opacity) {
+        response_box_opacity_ = opacity;
+        lv_obj_set_style_opa(response_box_, opacity, 0);
+    }
+    if (preview_show_pending_ && response_box_progress_ == 256) {
+        preview_show_pending_ = false;
+        if (camera_image_cached_ != nullptr) {
+            lv_obj_remove_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(camera_image_);
+            lv_obj_invalidate(camera_image_);
+        }
+        esp_timer_stop(preview_timer_);
+        ESP_ERROR_CHECK(esp_timer_start_once(preview_timer_, kPreviewDurationMs * 1000));
+    }
+    if (!response_box_requested_ && response_box_progress_ == 0) {
+        if (!lv_obj_has_flag(response_box_, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void MochanDisplay::AdvanceFaceLayout(int64_t now_us) {
+    face_layout_full_offset_y_ =
+        TimedValue(face_layout_full_offset_from_y_, face_layout_full_offset_target_y_,
+                   face_layout_emotion_transition_started_us_, kEmotionLayoutTransitionMs, now_us);
+    face_layout_progress_ =
+        TimedProgress(face_layout_from_, face_layout_target_, face_layout_transition_started_us_,
+                      kFaceLayoutTransitionMs, now_us);
+    const uint32_t progress = face_layout_progress_;
+    const uint32_t eased = progress * progress * (3 * 256 - 2 * progress) / (256 * 256);
+    face_layout_offset_y_ = face_layout_full_offset_y_ * static_cast<int>(eased) / 256;
+}
+
+void MochanDisplay::CancelIdleScheduler(bool restart_session) {
+    const bool restore_activity = idle_override_active_;
+    idle_override_active_ = false;
+    yawn_active_ = false;
+    yawn_amount_ = 0;
+    yawn_started_ms_ = 0;
+    mouth_motion_active_ = false;
+    mouth_motion_amount_ = 0;
+    mouth_motion_started_ms_ = 0;
+    next_mouth_motion_ms_ = 0;
+    next_idle_emotion_ms_ = 0;
+    if (restart_session) {
+        idle_session_started_ms_ = 0;
+        idle_motion_phase_ = 0;
+        last_idle_emotion_.clear();
+        idle_repeat_count_ = 0;
+    }
+    if (restore_activity) {
+        const char* activity_emotion = "neutral";
+        if (activity_state_ == FaceState::kListening) {
+            activity_emotion = "listening";
+        } else if (activity_state_ == FaceState::kSpeaking) {
+            activity_emotion = "speaking";
+        } else if (activity_state_ == FaceState::kThinking) {
+            activity_emotion = "thinking";
+        }
+        {
+            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+            current_emotion_ = activity_emotion;
+        }
+        SetFaceState(activity_state_);
+    }
+}
+
+void MochanDisplay::AdvanceIdleMouthAnimation(bool idle_eligible) {
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    if (!idle_eligible || yawn_active_) {
+        mouth_motion_active_ = false;
+        mouth_motion_amount_ = 0;
+        mouth_motion_started_ms_ = 0;
+        if (!idle_eligible) {
+            next_mouth_motion_ms_ = 0;
+        }
+        return;
+    }
+
+    if (!mouth_motion_active_) {
+        if (next_mouth_motion_ms_ == 0) {
+            const int interval =
+                kMouthMotionIntervalMinMs +
+                esp_random() % (kMouthMotionIntervalMaxMs - kMouthMotionIntervalMinMs + 1);
+            next_mouth_motion_ms_ = now_ms + interval;
+        }
+        if (now_ms < next_mouth_motion_ms_) {
+            return;
+        }
+        mouth_motion_active_ = true;
+        mouth_motion_started_ms_ = now_ms;
+    }
+
+    const int64_t elapsed = now_ms - mouth_motion_started_ms_;
+    if (elapsed < kMouthMotionOpenMs) {
+        mouth_motion_amount_ = static_cast<int16_t>(elapsed * 256 / kMouthMotionOpenMs);
+    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs) {
+        mouth_motion_amount_ = 256;
+    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs + kMouthMotionCloseMs) {
+        const int64_t close_elapsed = elapsed - kMouthMotionOpenMs - kMouthMotionHoldMs;
+        mouth_motion_amount_ = static_cast<int16_t>(256 + (kMouthMotionClosedAmount - 256) *
+                                                              close_elapsed / kMouthMotionCloseMs);
+    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs + kMouthMotionCloseMs +
+                             kMouthMotionClosedHoldMs) {
+        mouth_motion_amount_ = kMouthMotionClosedAmount;
+    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs + kMouthMotionCloseMs +
+                             kMouthMotionClosedHoldMs + kMouthMotionSettleMs) {
+        const int64_t settle_elapsed = elapsed - kMouthMotionOpenMs - kMouthMotionHoldMs -
+                                       kMouthMotionCloseMs - kMouthMotionClosedHoldMs;
+        mouth_motion_amount_ =
+            static_cast<int16_t>(kMouthMotionClosedAmount *
+                                 (kMouthMotionSettleMs - settle_elapsed) / kMouthMotionSettleMs);
+    } else {
+        mouth_motion_active_ = false;
+        mouth_motion_amount_ = 0;
+        mouth_motion_started_ms_ = 0;
+        const int interval =
+            kMouthMotionIntervalMinMs +
+            esp_random() % (kMouthMotionIntervalMaxMs - kMouthMotionIntervalMinMs + 1);
+        next_mouth_motion_ms_ = now_ms + interval;
+    }
+}
+
+void MochanDisplay::ApplyIdleEmotion(const char* emotion) {
+    FaceState state = FaceState::kIdle;
+    if (std::strcmp(emotion, "happy") == 0) {
+        state = FaceState::kHappy;
+    } else if (std::strcmp(emotion, "bored") == 0) {
+        state = FaceState::kCool;
+    } else if (std::strcmp(emotion, "sleepy") == 0) {
+        state = FaceState::kSleepy;
+    } else if (std::strcmp(emotion, "surprised") == 0) {
+        state = FaceState::kSurprised;
+    }
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        current_emotion_ = emotion;
+    }
+    idle_override_active_ = std::strcmp(emotion, "neutral") != 0;
+    SetFaceState(state);
+}
+
+void MochanDisplay::AdvanceIdleScheduler(std::string& emotion) {
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    if (!IsIdleEligible(emotion)) {
+        const bool restores_activity_emotion = idle_override_active_;
+        CancelIdleScheduler(true);
+        if (restores_activity_emotion) {
+            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+            emotion = current_emotion_;
+        }
+        return;
+    }
+    if (idle_session_started_ms_ == 0) {
+        idle_session_started_ms_ = now_ms;
+        next_idle_emotion_ms_ = now_ms + kIdleStartDelayMs;
+        return;
+    }
+
+    if (yawn_active_) {
+        const int64_t elapsed = now_ms - yawn_started_ms_;
+        if (elapsed < kYawnOpenMs) {
+            yawn_amount_ = static_cast<uint16_t>(elapsed * 256 / kYawnOpenMs);
+        } else if (elapsed < kYawnOpenMs + kYawnHoldMs) {
+            yawn_amount_ = 256;
+        } else if (elapsed < kYawnOpenMs + kYawnHoldMs + kYawnCloseMs) {
+            yawn_amount_ = static_cast<uint16_t>(
+                (kYawnOpenMs + kYawnHoldMs + kYawnCloseMs - elapsed) * 256 / kYawnCloseMs);
+        } else if (elapsed < kYawnOpenMs + kYawnHoldMs + kYawnCloseMs + kYawnSettleMs) {
+            yawn_amount_ = 0;
+        } else {
+            yawn_active_ = false;
+            yawn_amount_ = 0;
+            next_idle_emotion_ms_ = now_ms + kIdleSleepyHoldMinMs;
+        }
+        return;
+    }
+    if (now_ms < next_idle_emotion_ms_) {
+        return;
+    }
+
+    struct WeightedEmotion {
+        const char* name;
+        uint8_t weight;
+    };
+    constexpr std::array<WeightedEmotion, 5> early = {
+        {{"neutral", 56}, {"bored", 25}, {"sleepy", 0}, {"happy", 16}, {"surprised", 3}}};
+    constexpr std::array<WeightedEmotion, 5> settled = {
+        {{"neutral", 31}, {"bored", 36}, {"sleepy", 23}, {"happy", 8}, {"surprised", 2}}};
+    constexpr std::array<WeightedEmotion, 5> long_idle = {
+        {{"neutral", 15}, {"bored", 30}, {"sleepy", 50}, {"happy", 4}, {"surprised", 1}}};
+    const int64_t idle_elapsed = now_ms - idle_session_started_ms_;
+    const auto& choices = idle_elapsed < kIdleEarlyStageMs
+                              ? early
+                              : (idle_elapsed < kIdleSleepyStageMs ? settled : long_idle);
+    const char* selected = "neutral";
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        int pick = esp_random() % 100;
+        for (const auto& choice : choices) {
+            if (pick < choice.weight) {
+                selected = choice.name;
+                break;
+            }
+            pick -= choice.weight;
+        }
+        if (last_idle_emotion_ != selected || idle_repeat_count_ < 2) {
+            break;
+        }
+    }
+    if (last_idle_emotion_ == selected && idle_repeat_count_ >= 2) {
+        selected = last_idle_emotion_ == "bored" ? "neutral" : "bored";
+    }
+    if (last_idle_emotion_ == selected) {
+        ++idle_repeat_count_;
+    } else {
+        last_idle_emotion_ = selected;
+        idle_repeat_count_ = 1;
+    }
+
+    ApplyIdleEmotion(selected);
+    emotion = selected;
+    int hold_min = kIdleEmotionHoldMinMs;
+    int hold_max = kIdleEmotionHoldMaxMs;
+    if (std::strcmp(selected, "happy") == 0) {
+        hold_min = kIdleHappyHoldMinMs;
+        hold_max = kIdleHappyHoldMaxMs;
+    } else if (std::strcmp(selected, "surprised") == 0) {
+        hold_min = hold_max = kIdleSurprisedHoldMs;
+    } else if (std::strcmp(selected, "sleepy") == 0) {
+        hold_min = kIdleSleepyHoldMinMs;
+        hold_max = kIdleSleepyHoldMaxMs;
+        const bool yawn_ready = idle_elapsed >= kYawnMinimumIdleMs &&
+                                (last_yawn_ms_ == 0 || now_ms - last_yawn_ms_ >= kYawnCooldownMs);
+        if (yawn_ready && esp_random() % 5 == 0) {
+            yawn_active_ = true;
+            yawn_started_ms_ = now_ms;
+            last_yawn_ms_ = now_ms;
+        }
+    }
+    const int hold_range = std::max(1, hold_max - hold_min + 1);
+    next_idle_emotion_ms_ = now_ms + hold_min + esp_random() % hold_range;
+}
+
 void MochanDisplay::AdvanceEyeAnimation() {
+    const int64_t callback_started_us = esp_timer_get_time();
+    const int64_t frame_interval_us =
+        last_animation_callback_us_ == 0 ? 0 : callback_started_us - last_animation_callback_us_;
+    last_animation_callback_us_ = callback_started_us;
+    max_frame_interval_us_ = std::max(max_frame_interval_us_, frame_interval_us);
+    if (splash_ != nullptr) {
+        RecordAnimationTiming(callback_started_us, frame_interval_us);
+        return;
+    }
+    std::string emotion;
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        emotion = current_emotion_;
+    }
     ++animation_phase_;
+    AdvanceIdleScheduler(emotion);
+    const bool idle_eligible = IsIdleEligible(emotion);
+    if (idle_eligible) {
+        ++idle_motion_phase_;
+    }
+    AdvanceIdleMouthAnimation(idle_eligible);
+    UpdateFaceLayoutTarget(emotion, callback_started_us);
+    AdvanceFaceLayout(callback_started_us);
+    AdvanceResponseBoxTransition(callback_started_us);
+    // If the response fade crossed the return threshold in this callback,
+    // start the face transition timestamp now rather than one frame later.
+    UpdateFaceLayoutTarget(emotion, callback_started_us);
     uint8_t blink_amount = 0;
-    if (AllowsNaturalBlink(face_state_)) {
+    if (AllowsNaturalBlink(face_state_) || idle_eligible) {
         static constexpr uint8_t kBlinkCurve[] = {35, 75, 100, 70, 30};
         if (blink_step_ != 0) {
             blink_amount = kBlinkCurve[blink_step_ - 1];
@@ -321,7 +835,32 @@ void MochanDisplay::AdvanceEyeAnimation() {
             blink_step_ = 1;
         }
     }
-    UpdateEyes(blink_amount);
+    if (yawn_active_) {
+        blink_amount = std::max<uint8_t>(blink_amount, yawn_amount_ * 72 / 256);
+    }
+    UpdateEyes(blink_amount, idle_eligible);
+    UpdateMouth(blink_amount, emotion);
+    RecordAnimationTiming(callback_started_us, frame_interval_us);
+}
+
+void MochanDisplay::RecordAnimationTiming(int64_t callback_started_us, int64_t frame_interval_us) {
+    const int64_t callback_duration_us = esp_timer_get_time() - callback_started_us;
+    max_callback_duration_us_ = std::max(max_callback_duration_us_, callback_duration_us);
+    if (last_performance_log_us_ == 0) {
+        last_performance_log_us_ = callback_started_us;
+        return;
+    }
+    if (callback_started_us - last_performance_log_us_ < kPerformanceLogIntervalUs) {
+        return;
+    }
+    ESP_LOGI(kTag, "Face perf: frame=%lld us (max %lld), callback=%lld us (max %lld)",
+             static_cast<long long>(frame_interval_us),
+             static_cast<long long>(max_frame_interval_us_),
+             static_cast<long long>(callback_duration_us),
+             static_cast<long long>(max_callback_duration_us_));
+    last_performance_log_us_ = callback_started_us;
+    max_frame_interval_us_ = 0;
+    max_callback_duration_us_ = 0;
 }
 
 bool MochanDisplay::InitializeEyeRasters() {
@@ -350,7 +889,139 @@ bool MochanDisplay::InitializeEyeRasters() {
     return true;
 }
 
-void MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry,
+bool MochanDisplay::InitializeMouthRaster() {
+    constexpr size_t bytes = MouthRaster::kWidth * MouthRaster::kHeight * sizeof(uint32_t);
+    mouth_raster_.pixels =
+        static_cast<uint32_t*>(heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (mouth_raster_.pixels == nullptr) {
+        heap_caps_free(mouth_raster_.pixels);
+        mouth_raster_.pixels = nullptr;
+        ESP_LOGW(kTag, "Mouth raster allocation unavailable; keeping the legacy eye-only face");
+        return false;
+    }
+    mouth_raster_.descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+    mouth_raster_.descriptor.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    mouth_raster_.descriptor.header.w = MouthRaster::kWidth;
+    mouth_raster_.descriptor.header.h = MouthRaster::kHeight;
+    mouth_raster_.descriptor.header.stride = MouthRaster::kWidth * sizeof(uint32_t);
+    mouth_raster_.descriptor.data_size = bytes;
+    mouth_raster_.descriptor.data = reinterpret_cast<const uint8_t*>(mouth_raster_.pixels);
+    return true;
+}
+
+bool MochanDisplay::RenderMouthTarget(const std::string& emotion) {
+    const auto* geometry = FindMouthGeometry(emotion);
+    if (geometry == nullptr || mouth_raster_.pixels == nullptr) {
+        return false;
+    }
+    if (mouth_raster_.rendered_emotion == emotion) {
+        return false;
+    }
+    const int64_t render_started_us = esp_timer_get_time();
+    mouth_raster_.rendered_emotion = emotion;
+
+    constexpr int kRasterScreenX = (240 - MouthRaster::kWidth) / 2;
+    constexpr int kRasterScreenY = (240 - MouthRaster::kHeight) / 2 + 25;
+    constexpr std::array<float, 2> kSamples = {0.25f, 0.75f};
+    const int local_x = geometry->x - kRasterScreenX;
+    const int local_y = geometry->y - kRasterScreenY;
+
+    std::fill_n(mouth_raster_.pixels, MouthRaster::kWidth * MouthRaster::kHeight, 0);
+    for (int y = std::max(0, local_y - 10); y < std::min(MouthRaster::kHeight, local_y + 72); ++y) {
+        for (int x = std::max(0, local_x - 2); x < std::min(MouthRaster::kWidth, local_x + 96);
+             ++x) {
+            int dark_samples = 0;
+            int bright_samples = 0;
+            for (float sample_y : kSamples) {
+                for (float sample_x : kSamples) {
+                    const float shape_x = x + sample_x - local_x;
+                    const float shape_y = y + sample_y - local_y;
+                    if (!PointInMouth(shape_x, shape_y, *geometry)) {
+                        continue;
+                    }
+                    ++dark_samples;
+                    // The approved mock clips a brighter copy of the same solid shape,
+                    // shifted four pixels right and up, matching the eye's layered brass.
+                    if (PointInMouth(shape_x - 4, shape_y + 4, *geometry)) {
+                        ++bright_samples;
+                    }
+                }
+            }
+            if (dark_samples == 0) {
+                continue;
+            }
+            const uint32_t color = bright_samples * 2 >= dark_samples ? 0xc6a15b : 0x896a36;
+            const uint32_t alpha = static_cast<uint32_t>(dark_samples * 255 / 4);
+            mouth_raster_.pixels[y * MouthRaster::kWidth + x] = (alpha << 24) | color;
+        }
+    }
+    lv_image_cache_drop(&mouth_raster_.descriptor);
+    ESP_LOGI(kTag, "Mouth raster %s: %lld us", emotion.c_str(),
+             static_cast<long long>(esp_timer_get_time() - render_started_us));
+    return true;
+}
+
+void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current_emotion) {
+    if (mouth_ == nullptr || mouth_raster_.pixels == nullptr) {
+        return;
+    }
+    std::string emotion = current_emotion;
+    if (face_layout_target_ == 0 && !exiting_mouth_emotion_.empty()) {
+        emotion = exiting_mouth_emotion_;
+    }
+    if (FindMouthGeometry(emotion) == nullptr || face_layout_progress_ == 0) {
+        if (!lv_obj_has_flag(mouth_, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (face_layout_progress_ == 0) {
+            exiting_mouth_emotion_.clear();
+        }
+        return;
+    }
+
+    const auto* geometry = FindMouthGeometry(emotion);
+    if (RenderMouthTarget(emotion)) {
+        lv_obj_invalidate(mouth_);
+    }
+    constexpr int kRasterScreenY = (240 - MouthRaster::kHeight) / 2 + 25;
+    const int pivot_y = geometry->y - kRasterScreenY + geometry->height / 2;
+    if (mouth_raster_.previous_pivot_y != pivot_y) {
+        mouth_raster_.previous_pivot_y = pivot_y;
+        lv_obj_set_style_transform_pivot_y(mouth_, pivot_y, 0);
+    }
+    const int layout_scale = 192 + face_layout_progress_ * 64 / 256;
+    const int scale_x = layout_scale * (256 - yawn_amount_ * 24 / 256) / 256;
+    const int deformation_y = geometry->base_scale_y + yawn_amount_ * 160 / 256 +
+                              mouth_motion_amount_ * geometry->idle_open_scale_y / 256 +
+                              blink_amount * geometry->blink_scale_y / 100;
+    const int scale_y = layout_scale * deformation_y / 256;
+    if (mouth_raster_.previous_scale_x != scale_x) {
+        mouth_raster_.previous_scale_x = scale_x;
+        lv_image_set_scale_x(mouth_, scale_x);
+    }
+    if (mouth_raster_.previous_scale_y != scale_y) {
+        mouth_raster_.previous_scale_y = scale_y;
+        lv_image_set_scale_y(mouth_, scale_y);
+    }
+    const uint8_t opacity = face_layout_progress_ * LV_OPA_COVER / 256;
+    if (mouth_raster_.previous_opacity != opacity) {
+        mouth_raster_.previous_opacity = opacity;
+        lv_obj_set_style_opa(mouth_, opacity, 0);
+    }
+    const int mouth_x = idle_gaze_x_ * 3 / 4;
+    const int mouth_y = 25 + kMouthIdleGapOffsetY + face_layout_offset_y_ + idle_gaze_y_ * 3 / 4 -
+                        yawn_amount_ * 4 / 256 - mouth_motion_amount_ * 2 / 256 + blink_amount / 65;
+    if (mouth_raster_.previous_x != mouth_x || mouth_raster_.previous_y != mouth_y) {
+        mouth_raster_.previous_x = mouth_x;
+        mouth_raster_.previous_y = mouth_y;
+        lv_obj_align(mouth_, LV_ALIGN_CENTER, mouth_x, mouth_y);
+    }
+    if (lv_obj_has_flag(mouth_, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_remove_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+bool MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry,
                                     uint8_t blink_amount) {
     const auto& previous = raster.previous;
     if (raster.rendered && raster.previous_blink == blink_amount &&
@@ -358,7 +1029,7 @@ void MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
         previous.top_curve == geometry.top_curve &&
         previous.bottom_curve == geometry.bottom_curve && previous.slope == geometry.slope &&
         previous.water == geometry.water) {
-        return;
+        return false;
     }
     raster.previous = geometry;
     raster.previous_blink = blink_amount;
@@ -428,21 +1099,49 @@ void MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
                 (static_cast<uint32_t>(coverage * 255.0f) << 24) | color;
         }
     }
+    return true;
 }
 
 void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
                                     uint8_t blink_amount) {
     auto& raster = eye == left_eye_ ? left_raster_ : right_raster_;
     if (raster.pixels != nullptr) {
-        lv_obj_add_flag(shadow, LV_OBJ_FLAG_HIDDEN);
-        RenderEyeRaster(raster, geometry, blink_amount);
-        lv_obj_set_style_transform_pivot_x(eye, EyeRaster::kWidth / 2, 0);
-        lv_obj_set_style_transform_pivot_y(eye, EyeRaster::kHeight / 2, 0);
-        lv_obj_set_style_transform_rotation(eye, geometry.rotation, 0);
-        lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x, geometry.y);
-        lv_obj_invalidate(eye);
+        if (!lv_obj_has_flag(shadow, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(shadow, LV_OBJ_FLAG_HIDDEN);
+        }
+        const bool pixels_changed = RenderEyeRaster(raster, geometry, blink_amount);
+        if (!raster.positioned) {
+            lv_obj_set_style_transform_pivot_x(eye, EyeRaster::kWidth / 2, 0);
+            lv_obj_set_style_transform_pivot_y(eye, EyeRaster::kHeight / 2, 0);
+        }
+        if (!raster.positioned || raster.displayed_rotation != geometry.rotation) {
+            raster.displayed_rotation = geometry.rotation;
+            lv_obj_set_style_transform_rotation(eye, geometry.rotation, 0);
+        }
+        if (!raster.positioned || raster.displayed_x != geometry.x ||
+            raster.displayed_y != geometry.y) {
+            raster.displayed_x = geometry.x;
+            raster.displayed_y = geometry.y;
+            lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x, geometry.y);
+        }
+        raster.positioned = true;
+        if (pixels_changed) {
+            lv_obj_invalidate(eye);
+        }
         return;
     }
+    if (raster.rendered && raster.previous_blink == blink_amount &&
+        raster.previous.width == geometry.width && raster.previous.height == geometry.height &&
+        raster.previous.x == geometry.x && raster.previous.y == geometry.y &&
+        raster.previous.rotation == geometry.rotation &&
+        raster.previous.top_curve == geometry.top_curve &&
+        raster.previous.bottom_curve == geometry.bottom_curve &&
+        raster.previous.slope == geometry.slope && raster.previous.water == geometry.water) {
+        return;
+    }
+    raster.previous = geometry;
+    raster.previous_blink = blink_amount;
+    raster.rendered = true;
     const int height = std::max(7, geometry.height - (geometry.height - 7) * blink_amount / 100);
     const int inset_x = std::min(4, std::max(2, geometry.width / 8));
     const int inset_y = std::min(6, std::max(2, height / 4));
@@ -467,7 +1166,7 @@ void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGe
     lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x - inset_x / 2, geometry.y - inset_y / 2);
 }
 
-void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
+void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
     if (left_eye_ == nullptr || right_eye_ == nullptr) {
         return;
     }
@@ -639,26 +1338,64 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
             left.geometry.y = -35;
             right.geometry.y = -35;
             break;
-        case FaceState::kIdle: {
-            const int idle_phase = animation_phase_ % 160;
-            if (idle_phase >= 35 && idle_phase < 65) {
-                left.geometry.x -= 8;
-                right.geometry.x -= 8;
-                left.geometry.y += 2;
-                right.geometry.y += 2;
-            } else if (idle_phase >= 95 && idle_phase < 125) {
-                left.geometry.x += 8;
-                right.geometry.x += 8;
-                left.geometry.y += 5;
-                right.geometry.y += 5;
-            }
+        case FaceState::kIdle:
             break;
+    }
+
+    int target_gaze_x = 0;
+    int target_gaze_y = 0;
+    if (idle_eligible) {
+        int gaze_amplitude = 8;
+        int gaze_down = 4;
+        if (face_state_ == FaceState::kHappy) {
+            gaze_amplitude = 6;
+            gaze_down = 3;
+        } else if (face_state_ == FaceState::kCool) {
+            gaze_amplitude = 7;
+            gaze_down = 3;
+        } else if (face_state_ == FaceState::kSleepy) {
+            gaze_amplitude = 4;
+            gaze_down = 2;
+        } else if (face_state_ == FaceState::kSurprised) {
+            gaze_amplitude = 5;
+            gaze_down = 1;
+        }
+        const int idle_phase = idle_motion_phase_ % 240;
+        if (idle_phase >= 45 && idle_phase < 85) {
+            target_gaze_x = -gaze_amplitude;
+            target_gaze_y = std::max(1, gaze_down - 1);
+        } else if (idle_phase >= 145 && idle_phase < 185) {
+            target_gaze_x = gaze_amplitude;
+            target_gaze_y = gaze_down;
+        }
+    }
+    idle_gaze_x_ += std::clamp(target_gaze_x - idle_gaze_x_, -1, 1);
+    idle_gaze_y_ += std::clamp(target_gaze_y - idle_gaze_y_, -1, 1);
+    left.geometry.x += idle_gaze_x_;
+    right.geometry.x += idle_gaze_x_;
+    left.geometry.y += idle_gaze_y_;
+    right.geometry.y += idle_gaze_y_;
+
+    if (idle_eligible) {
+        const int positive_mouth_motion = std::max<int>(0, mouth_motion_amount_);
+        const int mouth_reaction = positive_mouth_motion * 2 / 256;
+        if (face_state_ == FaceState::kSurprised) {
+            left.geometry.height += mouth_reaction;
+            right.geometry.height += mouth_reaction;
+        } else {
+            left.geometry.height = std::max(7, left.geometry.height - mouth_reaction);
+            right.geometry.height = std::max(7, right.geometry.height - mouth_reaction);
+            left.geometry.y -= positive_mouth_motion / 256;
+            right.geometry.y -= positive_mouth_motion / 256;
         }
     }
 
     left.geometry.y += kEyeLayoutOffsetY;
     right.geometry.y += kEyeLayoutOffsetY;
 
+    // Keep the existing smoothing for intrinsic eye/emotion geometry. The
+    // layout offset is applied after this block so it follows elapsed time
+    // directly and does not acquire a second transition tail.
     const auto smooth = [](int current, int target) {
         const int delta = target - current;
         if (delta >= -1 && delta <= 1) {
@@ -687,27 +1424,39 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount) {
         approach(right_eye_geometry_, right.geometry);
     }
 
-    ApplyRoundedEye(left_eye_, left_eyelid_, left_eye_geometry_, blink_amount);
-    ApplyRoundedEye(right_eye_, right_eyelid_, right_eye_geometry_, blink_amount);
+    EyeGeometry displayed_left = left_eye_geometry_;
+    EyeGeometry displayed_right = right_eye_geometry_;
+    displayed_left.y += face_layout_offset_y_;
+    displayed_right.y += face_layout_offset_y_;
+    ApplyRoundedEye(left_eye_, left_eyelid_, displayed_left, blink_amount);
+    ApplyRoundedEye(right_eye_, right_eyelid_, displayed_right, blink_amount);
 }
 
 void MochanDisplay::SetStatus(const char* status) {
     if (status == nullptr) {
         return;
     }
-    DisplayLockGuard lock(this);
+    FaceState next_activity = FaceState::kIdle;
+    bool clear_emotion = false;
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
-        activity_state_ = FaceState::kListening;
-        emotion_active_ = false;
+        next_activity = FaceState::kListening;
+        clear_emotion = true;
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
-        activity_state_ = FaceState::kSpeaking;
+        next_activity = FaceState::kSpeaking;
     } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0 ||
                std::strcmp(status, Lang::Strings::REGISTERING_NETWORK) == 0) {
-        activity_state_ = FaceState::kThinking;
+        next_activity = FaceState::kThinking;
     } else {
-        activity_state_ = FaceState::kIdle;
+        clear_emotion = true;
+    }
+
+    DisplayLockGuard lock(this);
+    FreezeMouthForExit();
+    activity_state_ = next_activity;
+    if (clear_emotion) {
         emotion_active_ = false;
     }
+    CancelIdleScheduler(true);
     if (activity_state_ != FaceState::kSpeaking) {
         FinishTyping();
     }
@@ -727,6 +1476,12 @@ void MochanDisplay::SetStatus(const char* status) {
         }
         SetFaceState(activity_state_);
     }
+    std::string emotion;
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        emotion = current_emotion_;
+    }
+    UpdateFaceLayoutTarget(emotion, esp_timer_get_time());
 }
 
 void MochanDisplay::RenderTypingText() {
@@ -980,6 +1735,8 @@ void MochanDisplay::ShowNotification(const char* notification, int duration_ms) 
         return;
     }
     DisplayLockGuard lock(this);
+    FreezeMouthForExit();
+    CancelIdleScheduler(true);
     lv_label_set_text(notification_, notification);
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     ShowResponseBox();
@@ -1000,11 +1757,12 @@ void MochanDisplay::SetEmotion(const char* emotion) {
         return;
     }
     const std::string requested(emotion);
+    DisplayLockGuard lock(this);
+    CancelIdleScheduler(true);
     {
         std::lock_guard<std::mutex> state_lock(emotion_mutex_);
         current_emotion_ = requested;
     }
-    DisplayLockGuard lock(this);
     if (requested == "happy") {
         emotion_active_ = true;
         SetFaceState(FaceState::kHappy);
@@ -1038,7 +1796,7 @@ void MochanDisplay::SetEmotion(const char* emotion) {
     } else if (requested == "winking") {
         emotion_active_ = true;
         SetFaceState(FaceState::kWinking);
-    } else if (requested == "cool") {
+    } else if (requested == "cool" || requested == "bored") {
         emotion_active_ = true;
         SetFaceState(FaceState::kCool);
     } else if (requested == "relaxed") {
@@ -1117,6 +1875,12 @@ void MochanDisplay::SetEmotion(const char* emotion) {
         emotion_active_ = false;
         SetFaceState(activity_state_);
     }
+    std::string current_emotion;
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        current_emotion = current_emotion_;
+    }
+    UpdateFaceLayoutTarget(current_emotion, esp_timer_get_time());
 }
 
 std::string MochanDisplay::GetCurrentEmotion() const {
@@ -1134,6 +1898,10 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
         return;
     }
     DisplayLockGuard lock(this);
+    if (content[0] != '\0') {
+        FreezeMouthForExit();
+    }
+    CancelIdleScheduler(true);
     const bool is_assistant = role != nullptr && std::strcmp(role, "assistant") == 0;
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
@@ -1142,7 +1910,7 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
         lv_label_set_text(subtitle_, "");
         lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
         if (lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
+            HideResponseBox();
         }
     } else {
         if (is_assistant) {
@@ -1164,16 +1932,21 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
         return;
     }
     DisplayLockGuard lock(this);
+    if (image != nullptr) {
+        FreezeMouthForExit();
+    }
+    CancelIdleScheduler(true);
     if (image == nullptr) {
         esp_timer_stop(preview_timer_);
-        camera_image_cached_.reset();
+        preview_show_pending_ = false;
         lv_obj_add_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
+        camera_image_cached_.reset();
         if (lv_label_get_text(subtitle_)[0] != '\0') {
             RenderTypingText();
             ShowResponseBox();
             lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
         } else if (lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
+            HideResponseBox();
         }
         return;
     }
@@ -1195,12 +1968,11 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     response_scroll_target_ = 0;
     lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
     ShowResponseBox();
-    lv_obj_set_style_opa(response_box_, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(camera_image_);
-    lv_obj_invalidate(response_box_);
+    if (response_box_progress_ < 256) {
+        lv_obj_add_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
+    }
     esp_timer_stop(preview_timer_);
-    ESP_ERROR_CHECK(esp_timer_start_once(preview_timer_, kPreviewDurationMs * 1000));
+    preview_show_pending_ = true;
 }
 
 void MochanDisplay::HidePreview() { SetPreviewImage(nullptr); }
@@ -1212,7 +1984,7 @@ void MochanDisplay::HideNotification() {
     if (response_box_ != nullptr && subtitle_ != nullptr &&
         lv_label_get_text(subtitle_)[0] == '\0') {
         lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
+        HideResponseBox();
     } else if (subtitle_ != nullptr) {
         lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1224,6 +1996,8 @@ void MochanDisplay::ShowBootSplash() {
         return;
     }
     DisplayLockGuard lock(this);
+    CancelIdleScheduler(true);
+    SetFaceLayoutTarget(0, esp_timer_get_time());
     splash_ = lv_obj_create(lv_layer_top());
     lv_obj_set_size(splash_, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(splash_, kFaceBackground, 0);
@@ -1276,4 +2050,10 @@ void MochanDisplay::HideBootSplash() {
     DisplayLockGuard lock(this);
     lv_obj_delete(splash_);
     splash_ = nullptr;
+    std::string emotion;
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        emotion = current_emotion_;
+    }
+    UpdateFaceLayoutTarget(emotion, esp_timer_get_time());
 }

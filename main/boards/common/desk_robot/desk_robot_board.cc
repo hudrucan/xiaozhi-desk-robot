@@ -2975,7 +2975,8 @@ private:
         mcp_server.AddTool(
             "self.face.set_emotion",
             "Temporarily show a face emotion, then return to the current assistant state. "
-            "Supported emotions: neutral, happy, laughing, funny, sad, angry, crying, loving, "
+            "Supported emotions: neutral, happy, bored, laughing, funny, sad, angry, crying, "
+            "loving, "
             "embarrassed, surprised, shocked, thinking, winking, cool, relaxed, delicious, "
             "kissy, confident, sleepy, silly, confused, suspicious, and shake.",
             PropertyList({
