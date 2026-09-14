@@ -20,9 +20,12 @@ Motor speed, manual-drive duration, and this switch are persisted in the `desk_r
 conservative default motor limit is 70%. Four gyro buttons around Forward/Backward provide bounded
 left/right 90- and 180-degree turns when the MPU6050 is calibrated and the floor is safe.
 Display settings persist in NVS and cover 180-degree rotation of both screens plus secondary-OLED
-widget visibility, order, S/M/L footprint, display mode, brand, and distance-prefix text. The Web UI
-includes a multi-page layout preview. The secondary OLED uses readable one-, two-, or three-panel
-templates and paginates additional widgets instead of shrinking them or using a marquee.
+contrast, widget visibility, order, S/M/L footprint, display mode, brand, and distance-prefix text.
+The Web UI includes a multi-page layout preview. The secondary OLED uses readable one-, two-, or
+three-panel templates and paginates additional widgets instead of shrinking them or using a marquee.
+Cliff, low-battery, Wi-Fi, gyro-turn, MPU-calibration, gesture, and requested temporary messages
+override the full OLED by priority; low-battery and gesture use bounded edge-triggered pulses, and
+the exact previous dashboard page returns when an event clears.
 
 Build with:
 

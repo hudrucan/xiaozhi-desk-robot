@@ -14,6 +14,10 @@
 
 namespace {
 
+constexpr int kSsd1306SetContrast = 0x81;
+constexpr int64_t kGestureEventDurationUs = 1500000LL;
+constexpr int64_t kLowBatteryEventDurationUs = 2500000LL;
+
 using secondary_oled_layout::BuildLayout;
 using secondary_oled_layout::WidgetSize;
 
@@ -102,6 +106,15 @@ constexpr uint8_t kMotionIcon[8] = {
 };
 constexpr uint8_t kCapacityIcon[8] = {
     0x18, 0x7e, 0x42, 0x5a, 0x5a, 0x5a, 0x7e, 0x00,
+};
+constexpr uint8_t kWarningIcon[8] = {
+    0x40, 0x30, 0x0c, 0x03, 0x0c, 0x30, 0x40, 0x00,
+};
+constexpr uint8_t kWifiIcon[8] = {
+    0x02, 0x05, 0x29, 0x55, 0x29, 0x05, 0x02, 0x00,
+};
+constexpr uint8_t kTurnIcon[8] = {
+    0x18, 0x24, 0x42, 0x42, 0x52, 0x32, 0x70, 0x00,
 };
 constexpr uint8_t kDigits[][5] = {
     {0x3e, 0x51, 0x49, 0x45, 0x3e}, {0x00, 0x42, 0x7f, 0x40, 0x00}, {0x42, 0x61, 0x51, 0x49, 0x46},
@@ -390,18 +403,17 @@ void SecondaryOled::DrawHorizontalLine(int x, int y, int width) {
 
 void SecondaryOled::DrawIconTextFitted(int x, int y, int width, int height, const uint8_t* icon,
                                        const std::string& text, FontSize preferred,
-                                       bool allow_icon) {
-    constexpr int kIconTextOffset = 12;
-    if (allow_icon && icon != nullptr && width > kIconTextOffset) {
-        const int text_area_width = width - kIconTextOffset;
+                                       bool allow_icon, int icon_text_offset) {
+    if (allow_icon && icon != nullptr && width > icon_text_offset) {
+        const int text_area_width = width - icon_text_offset;
         const FontSize selected =
             SelectSingleLineFont(text, text_area_width, height, preferred);
         const int text_width = MeasureTextWidth(text, selected);
         if (text_width <= text_area_width && FontHeight(selected) <= height) {
-            const int group_width = kIconTextOffset + text_width;
+            const int group_width = icon_text_offset + text_width;
             const int group_left = x + std::max(0, (width - group_width) / 2);
             DrawBitmap(group_left, y + std::max(0, (height - 8) / 2), icon, 8, 8);
-            DrawTextFitted(group_left + kIconTextOffset, y, text_width, height, text, selected,
+            DrawTextFitted(group_left + icon_text_offset, y, text_width, height, text, selected,
                            false);
             return;
         }
@@ -412,25 +424,40 @@ void SecondaryOled::DrawIconTextFitted(int x, int y, int width, int height, cons
 void SecondaryOled::DrawIconTwoLinesFitted(int x, int y, int width, int height,
                                            const uint8_t* icon, const std::string& first,
                                            const std::string& second, FontSize preferred,
-                                           bool allow_icon) {
-    constexpr int kIconTextOffset = 12;
-    if (allow_icon && icon != nullptr && width > kIconTextOffset) {
-        const int text_area_width = width - kIconTextOffset;
+                                           bool allow_icon, int icon_text_offset) {
+    if (allow_icon && icon != nullptr && width > icon_text_offset) {
+        const int text_area_width = width - icon_text_offset;
         const FontSize selected =
             SelectTwoLineFont(first, second, text_area_width, height, preferred);
         const int first_width = MeasureTextWidth(first, selected);
         const int second_width = MeasureTextWidth(second, selected);
         const int text_width = std::max(first_width, second_width);
         if (text_width <= text_area_width && 2 * FontHeight(selected) + 5 <= height) {
-            const int group_width = kIconTextOffset + text_width;
+            const int group_width = icon_text_offset + text_width;
             const int group_left = x + std::max(0, (width - group_width) / 2);
             DrawBitmap(group_left, y + std::max(0, (height - 8) / 2), icon, 8, 8);
-            DrawTwoLinesFitted(group_left + kIconTextOffset, y, text_width, height, first, second,
+            DrawTwoLinesFitted(group_left + icon_text_offset, y, text_width, height, first, second,
                                selected, true);
             return;
         }
     }
     DrawTwoLinesFitted(x, y, width, height, first, second, preferred);
+}
+
+void SecondaryOled::DrawEventMessageFitted(const uint8_t* icon, const std::string& first,
+                                           const std::string& second) {
+    constexpr int kOuterPadding = 2;
+    constexpr int kEventIconTextOffset = 16;
+    const int content_width = width_ - 2 * kOuterPadding;
+    const std::string combined = second.empty() ? first : first + " " + second;
+    if (MeasureTextWidth(combined, FontSize::kRegular) <=
+        content_width - kEventIconTextOffset) {
+        DrawIconTextFitted(kOuterPadding, 0, content_width, height_, icon, combined,
+                           FontSize::kEmphasis, true, kEventIconTextOffset);
+        return;
+    }
+    DrawIconTwoLinesFitted(kOuterPadding, 0, content_width, height_, icon, first, second,
+                           FontSize::kRegular, true, kEventIconTextOffset);
 }
 
 void SecondaryOled::DrawVerticalLine(int x, int y, int height) {
@@ -533,8 +560,19 @@ bool SecondaryOled::Configure(const Config& config) {
         }
         flip_180_ = normalized.flip_180;
     }
+    if (io_ != nullptr && normalized.contrast != contrast_) {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        const esp_err_t error =
+            esp_lcd_panel_io_tx_param(io_, kSsd1306SetContrast, &normalized.contrast, 1);
+        if (error != ESP_OK) {
+            ESP_LOGW(TAG, "Cannot set SSD1306 contrast: %s", esp_err_to_name(error));
+            return false;
+        }
+        contrast_ = normalized.contrast;
+    }
     config_ = std::move(normalized);
     config_.flip_180 = flip_180_;
+    config_.contrast = static_cast<uint8_t>(contrast_ >= 0 ? contrast_ : config_.contrast);
     RebuildLayoutLocked();
     current_page_ = 0;
     next_page_at_us_ = 0;
@@ -605,6 +643,25 @@ bool SecondaryOled::Flush() {
 
 void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
     std::lock_guard<std::mutex> lock(mutex_);
+    const bool is_gesture = telemetry.motion_valid && telemetry.motion_state != "steady" &&
+                            telemetry.motion_state != "calibrating";
+    const std::string observed_gesture = is_gesture ? telemetry.motion_state : std::string();
+    bool pulse_triggered = false;
+    if (observed_gesture != observed_gesture_) {
+        observed_gesture_ = observed_gesture;
+        if (!observed_gesture.empty()) {
+            gesture_event_text_ = observed_gesture;
+            gesture_event_until_us_ = esp_timer_get_time() + kGestureEventDurationUs;
+            pulse_triggered = true;
+        }
+    }
+    if (telemetry.low_battery && !previous_low_battery_) {
+        low_battery_percent_ = telemetry.battery_percent;
+        low_battery_voltage_mv_ = telemetry.battery_voltage_mv;
+        low_battery_event_until_us_ = esp_timer_get_time() + kLowBatteryEventDurationUs;
+        pulse_triggered = true;
+    }
+    previous_low_battery_ = telemetry.low_battery;
     const bool changed = telemetry.distance_valid != telemetry_.distance_valid ||
                          telemetry.distance_mm != telemetry_.distance_mm ||
                          telemetry.power_valid != telemetry_.power_valid ||
@@ -617,17 +674,61 @@ void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
                          telemetry.capacity_active != telemetry_.capacity_active ||
                          telemetry.capacity_measuring != telemetry_.capacity_measuring ||
                          telemetry.capacity_uah != telemetry_.capacity_uah ||
-                         telemetry.capacity_seconds != telemetry_.capacity_seconds;
-    if (changed) {
+                         telemetry.capacity_seconds != telemetry_.capacity_seconds ||
+                         telemetry.cliff_detected != telemetry_.cliff_detected ||
+                         telemetry.network_state != telemetry_.network_state ||
+                         telemetry.gyro_turn_pending != telemetry_.gyro_turn_pending ||
+                         telemetry.gyro_turn_active != telemetry_.gyro_turn_active ||
+                         telemetry.gyro_turn_target_deg != telemetry_.gyro_turn_target_deg ||
+                         telemetry.gyro_turn_progress_deg != telemetry_.gyro_turn_progress_deg ||
+                         telemetry.gyro_turn_intensity_percent !=
+                             telemetry_.gyro_turn_intensity_percent ||
+                         telemetry.motion_calibrating != telemetry_.motion_calibrating ||
+                         telemetry.low_battery != telemetry_.low_battery ||
+                         telemetry.battery_percent != telemetry_.battery_percent ||
+                         telemetry.battery_voltage_mv != telemetry_.battery_voltage_mv;
+    if (changed || pulse_triggered) {
         telemetry_ = telemetry;
         dirty_ = true;
     }
 }
 
+SecondaryOled::EventType SecondaryOled::ActiveEventLocked(int64_t now_us) const {
+    // This order is the event priority contract: safety, system warnings, active motion,
+    // informational events, then the base dashboard.
+    if (telemetry_.cliff_detected) {
+        return EventType::kCliff;
+    }
+    if (telemetry_.network_state != NetworkState::kConnected) {
+        return EventType::kNetwork;
+    }
+    if (now_us < low_battery_event_until_us_) {
+        return EventType::kLowBattery;
+    }
+    if (telemetry_.gyro_turn_pending || telemetry_.gyro_turn_active) {
+        return EventType::kGyroTurn;
+    }
+    if (telemetry_.motion_calibrating) {
+        return EventType::kCalibration;
+    }
+    if (!temporary_text_.empty()) {
+        return EventType::kTemporaryText;
+    }
+    if (now_us < gesture_event_until_us_) {
+        return EventType::kGesture;
+    }
+    return EventType::kNone;
+}
+
 void SecondaryOled::Tick() {
     std::lock_guard<std::mutex> lock(mutex_);
     const int64_t now_us = esp_timer_get_time();
-    if (temporary_text_.empty() && layout_.page_count > 1) {
+    const EventType resolved_event = ActiveEventLocked(now_us);
+    if (resolved_event != active_event_) {
+        active_event_ = resolved_event;
+        dirty_ = true;
+    }
+    if (active_event_ == EventType::kNone && layout_.page_count > 1) {
         if (next_page_at_us_ == 0) {
             next_page_at_us_ = now_us + 5000000LL;
         } else if (now_us >= next_page_at_us_) {
@@ -950,14 +1051,90 @@ void SecondaryOled::RenderTemporaryTextLocked() {
                        FontSize::kRegular);
 }
 
+void SecondaryOled::RenderEventLocked(EventType event) {
+    Clear();
+    char detail[40] = {};
+    switch (event) {
+        case EventType::kCliff:
+            if (telemetry_.distance_valid) {
+                std::snprintf(detail, sizeof(detail), "%dmm STOP",
+                              std::clamp(telemetry_.distance_mm, 0, 9999));
+            } else {
+                std::snprintf(detail, sizeof(detail), "STOP");
+            }
+            DrawEventMessageFitted(kWarningIcon, "CLIFF!", detail);
+            break;
+        case EventType::kLowBattery: {
+            const int voltage_mv = std::clamp(low_battery_voltage_mv_, 0, 9999);
+            std::snprintf(detail, sizeof(detail), "%d%% %d.%02dV",
+                          std::clamp(low_battery_percent_, 0, 100), voltage_mv / 1000,
+                          (voltage_mv % 1000) / 10);
+            DrawEventMessageFitted(kCapacityIcon, "LOW BATTERY", detail);
+            break;
+        }
+        case EventType::kNetwork: {
+            const char* title = "WiFi Lost";
+            const char* status = "Reconnecting...";
+            if (telemetry_.network_state == NetworkState::kScanning) {
+                title = "WiFi Scan";
+                status = "Searching...";
+            } else if (telemetry_.network_state == NetworkState::kConnecting) {
+                title = "WiFi Connecting";
+            } else if (telemetry_.network_state == NetworkState::kConfigMode) {
+                title = "WiFi Setup";
+                status = "Config mode";
+            }
+            DrawEventMessageFitted(kWifiIcon, title, status);
+            break;
+        }
+        case EventType::kGyroTurn: {
+            const int target = std::clamp(telemetry_.gyro_turn_target_deg, -180, 180);
+            const int progress = std::clamp(telemetry_.gyro_turn_progress_deg, -180, 180);
+            const char* title = target < 0 ? "TURN LEFT" : "TURN RIGHT";
+            if (telemetry_.gyro_turn_pending && !telemetry_.gyro_turn_active) {
+                title = "TURN STARTING";
+            }
+            std::snprintf(detail, sizeof(detail), "%d/%ddeg PWM %d", std::abs(progress),
+                          std::abs(target),
+                          std::clamp(telemetry_.gyro_turn_intensity_percent, 0, 100));
+            DrawIconTextFitted(2, 0, width_ - 4, 13, kTurnIcon, title, FontSize::kRegular, true,
+                               16);
+            DrawTextFitted(2, 13, width_ - 4, 10, detail, FontSize::kRegular);
+            const int target_magnitude = std::max(1, std::abs(target));
+            const int progress_width =
+                std::clamp(std::abs(progress) * (width_ - 10) / target_magnitude, 0, width_ - 10);
+            DrawHorizontalLine(4, 26, width_ - 8);
+            DrawHorizontalLine(4, 30, width_ - 8);
+            for (int y = 27; y < 30; ++y) {
+                for (int x = 5; x < 5 + progress_width; ++x) {
+                    SetPixel(x, y);
+                }
+            }
+            break;
+        }
+        case EventType::kCalibration:
+            DrawEventMessageFitted(kMotionIcon, "Calibrating MPU", "Keep robot still");
+            break;
+        case EventType::kTemporaryText:
+            RenderTemporaryTextLocked();
+            break;
+        case EventType::kGesture:
+            DrawEventMessageFitted(kMotionIcon, "Gesture", gesture_event_text_);
+            break;
+        case EventType::kNone:
+            RenderDashboardLocked();
+            break;
+    }
+}
+
 void SecondaryOled::RenderLocked() {
     if (panel_ == nullptr) {
         return;
     }
-    if (temporary_text_.empty()) {
+    if (active_event_ == EventType::kNone) {
         RenderDashboardLocked();
     } else {
-        RenderTemporaryTextLocked();
+        RenderEventLocked(active_event_);
     }
     dirty_ = !Flush();
 }

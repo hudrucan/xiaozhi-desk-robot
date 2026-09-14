@@ -39,6 +39,14 @@ public:
         kMahAndElapsed,
     };
 
+    enum class NetworkState : uint8_t {
+        kConnected,
+        kScanning,
+        kConnecting,
+        kDisconnected,
+        kConfigMode,
+    };
+
     using WidgetSize = secondary_oled_layout::WidgetSize;
 
     struct WidgetConfig {
@@ -50,6 +58,7 @@ public:
 
     struct Config {
         bool flip_180 = false;
+        uint8_t contrast = 128;
         std::string brand = "Desk Robot";
         std::string distance_prefix = "Dist";
         std::array<WidgetConfig, secondary_oled_layout::kMaxWidgets> widgets = {{
@@ -75,6 +84,17 @@ public:
         bool capacity_measuring = false;
         uint32_t capacity_uah = 0;
         uint32_t capacity_seconds = 0;
+        bool cliff_detected = false;
+        NetworkState network_state = NetworkState::kConnecting;
+        bool gyro_turn_pending = false;
+        bool gyro_turn_active = false;
+        int gyro_turn_target_deg = 0;
+        int gyro_turn_progress_deg = 0;
+        int gyro_turn_intensity_percent = 0;
+        bool motion_calibrating = false;
+        bool low_battery = false;
+        int battery_percent = 0;
+        int battery_voltage_mv = 0;
     };
 
     bool Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, uint8_t address, int width,
@@ -89,6 +109,17 @@ public:
     bool IsAvailable() const { return panel_ != nullptr; }
 
 private:
+    enum class EventType : uint8_t {
+        kNone,
+        kCliff,
+        kLowBattery,
+        kNetwork,
+        kGyroTurn,
+        kCalibration,
+        kTemporaryText,
+        kGesture,
+    };
+
     enum class FontSize : uint8_t {
         kMicro,
         kCompact,
@@ -108,10 +139,14 @@ private:
     void DrawBitmap(int x, int y, const uint8_t* bitmap, int width, int height);
     void DrawHorizontalLine(int x, int y, int width);
     void DrawIconTextFitted(int x, int y, int width, int height, const uint8_t* icon,
-                            const std::string& text, FontSize preferred, bool allow_icon);
+                            const std::string& text, FontSize preferred, bool allow_icon,
+                            int icon_text_offset = 12);
     void DrawIconTwoLinesFitted(int x, int y, int width, int height, const uint8_t* icon,
                                 const std::string& first, const std::string& second,
-                                FontSize preferred, bool allow_icon);
+                                FontSize preferred, bool allow_icon,
+                                int icon_text_offset = 12);
+    void DrawEventMessageFitted(const uint8_t* icon, const std::string& first,
+                                const std::string& second);
     void DrawText(int x, int y, const std::string& text, FontSize font, int max_width);
     void DrawTextFitted(int x, int y, int width, int height, const std::string& text,
                         FontSize preferred = FontSize::kRegular, bool center_horizontal = true);
@@ -120,8 +155,10 @@ private:
                             FontSize preferred = FontSize::kCompact,
                             bool center_horizontal = true);
     void DrawVerticalLine(int x, int y, int height);
+    EventType ActiveEventLocked(int64_t now_us) const;
     void RebuildLayoutLocked();
     void RenderDashboardLocked();
+    void RenderEventLocked(EventType event);
     void RenderLocked();
     void RenderSingleLineWidgetLocked(const secondary_oled_layout::Placement& placement,
                                       const WidgetConfig& widget);
@@ -137,12 +174,21 @@ private:
     int width_ = 0;
     int height_ = 0;
     bool flip_180_ = false;
+    int contrast_ = -1;
     unsigned consecutive_flush_failures_ = 0;
     Config config_;
     secondary_oled_layout::Layout layout_;
     Telemetry telemetry_;
     uint8_t current_page_ = 0;
     int64_t next_page_at_us_ = 0;
+    int64_t gesture_event_until_us_ = 0;
+    int64_t low_battery_event_until_us_ = 0;
+    bool previous_low_battery_ = false;
+    std::string observed_gesture_;
+    std::string gesture_event_text_;
+    int low_battery_percent_ = 0;
+    int low_battery_voltage_mv_ = 0;
+    EventType active_event_ = EventType::kNone;
     bool dirty_ = true;
     std::string temporary_text_;
     mutable std::mutex mutex_;
