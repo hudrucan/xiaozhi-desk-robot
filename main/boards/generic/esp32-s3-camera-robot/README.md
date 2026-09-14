@@ -19,9 +19,10 @@ Motor speed, manual-drive duration, and this switch are persisted in the `desk_r
 (`motor_speed`, `drive_time`, and `emotion_move`); emotion movement defaults off and the
 conservative default motor limit is 70%. Four gyro buttons around Forward/Backward provide bounded
 left/right 90- and 180-degree turns when the MPU6050 is calibrated and the floor is safe.
-Display settings persist in NVS and cover 180-degree rotation of both screens, OLED segment
-visibility, custom brand and distance-prefix text, and 1x-3x OLED text scaling. The OLED centers
-text that fits its width and only starts the marquee when the composed line overflows.
+Display settings persist in NVS and cover 180-degree rotation of both screens plus secondary-OLED
+widget visibility, order, S/M/L footprint, display mode, brand, and distance-prefix text. The Web UI
+includes a multi-page layout preview. The secondary OLED uses readable one-, two-, or three-panel
+templates and paginates additional widgets instead of shrinking them or using a marquee.
 
 Build with:
 
@@ -34,9 +35,9 @@ python3 scripts/build.py generic/esp32-s3-camera-robot --name esp32-s3-camera-ro
 - ST7789: SCLK GPIO19, MOSI GPIO20, RST GPIO21, DC GPIO47, CS permanently tied to GND,
   and BL GPIO45. The firmware keeps SPI mode 3 and rotates the panel 270 degrees.
 - SSD1306 OLED: SDA GPIO38, SCL GPIO14, powered from 3.3 V. The firmware tries address
-  `0x3C` and then `0x3D`. Its brand, assistant state, distance, and battery segments can be
-  independently hidden or customized from the dashboard. Text that fits the 128-pixel width is
-  centered and static; longer text scrolls continuously.
+  `0x3C` and then `0x3D`. Branding, distance, current/power, motion, and capacity-measuring widgets
+  can be enabled, reordered, resized, and customized from the dashboard. Content is static within
+  each page; additional readable panels are shown through pagination rather than marquee text.
 - INA219: VCC 3.3 V, GND common, SDA GPIO38, SCL GPIO14, address `0x40` with both A0/A1
   jumpers open. The high-side current path is battery positive -> VIN+ -> VIN- -> charger/boost
   battery-positive input. Battery negative remains directly on common GND; VIN- is not GND.
@@ -79,8 +80,8 @@ The board also exposes expressive MCP tools for conversation-driven behavior:
 - `self.face.set_emotion` supports all 21 standard Xiaozhi emotions plus `suspicious` and
   `shake`, with a bounded duration before the face returns to its assistant state.
 - `self.face.look` supports the four cardinal and four diagonal gaze directions.
-- `self.secondary_display.show_text` temporarily replaces the OLED marquee with a sanitized
-  short message, then restores automatic status content.
+- `self.secondary_display.show_text` temporarily replaces the OLED dashboard with a sanitized
+  short message, then restores the configured widgets.
 - `self.status_light.set_effect` temporarily applies `steady`, `breathe`, `blink`, or `off`;
   active motor movement retains priority and the normal status profile resumes afterward.
 - `self.battery.get_status` returns INA219 percentage, voltage, current, charge direction,

@@ -2,6 +2,7 @@
 
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include <algorithm>
 #include <cctype>
@@ -13,11 +14,95 @@
 
 namespace {
 
+using secondary_oled_layout::BuildLayout;
+using secondary_oled_layout::WidgetSize;
+
+constexpr uint8_t kSmallCapabilities =
+    secondary_oled_layout::kFits42x32 | secondary_oled_layout::kFits64x32 |
+    secondary_oled_layout::kFits128x16 | secondary_oled_layout::kFits128x32;
+constexpr uint8_t kMediumCapabilities = secondary_oled_layout::kFits64x32 |
+                                        secondary_oled_layout::kFits128x16 |
+                                        secondary_oled_layout::kFits128x32;
+constexpr uint8_t kLargeCapabilities = secondary_oled_layout::kFits128x32;
+
+constexpr std::array<secondary_oled_layout::WidgetSpec, secondary_oled_layout::kMaxWidgets>
+    kDefaultLayoutWidgets = {{
+        {0, WidgetSize::kSmall, true, kSmallCapabilities},
+        {1, WidgetSize::kSmall, true, kSmallCapabilities},
+        {2, WidgetSize::kSmall, true, kSmallCapabilities},
+        {3, WidgetSize::kMedium, true, kMediumCapabilities},
+        {4, WidgetSize::kMedium, true, kMediumCapabilities},
+    }};
+constexpr auto kDefaultLayout = BuildLayout(kDefaultLayoutWidgets);
+static_assert(secondary_oled_layout::IsValid(kDefaultLayout));
+static_assert(kDefaultLayout.page_count == 2);
+static_assert(kDefaultLayout.placement_count == 5);
+static_assert(kDefaultLayout.placements[0].page == 0 &&
+              kDefaultLayout.placements[0].width == 42 &&
+              kDefaultLayout.placements[1].width == 43 &&
+              kDefaultLayout.placements[2].width == 43);
+static_assert(kDefaultLayout.placements[3].page == 1 &&
+              kDefaultLayout.placements[3].width == 64 &&
+              kDefaultLayout.placements[4].page == 1 &&
+              kDefaultLayout.placements[4].x == 64 &&
+              kDefaultLayout.placements[4].width == 64);
+
+constexpr auto kSingleSmallLayout =
+    BuildLayout({{{0, WidgetSize::kSmall, true, kSmallCapabilities}}});
+static_assert(secondary_oled_layout::IsValid(kSingleSmallLayout));
+static_assert(kSingleSmallLayout.page_count == 1 &&
+              kSingleSmallLayout.placements[0].width == 128 &&
+              kSingleSmallLayout.placements[0].height == 32);
+
+constexpr auto kTwoRowLayout = BuildLayout(
+    {{{0, WidgetSize::kMedium, true,
+       secondary_oled_layout::kFits128x16 | secondary_oled_layout::kFits128x32},
+      {1, WidgetSize::kMedium, true,
+       secondary_oled_layout::kFits128x16 | secondary_oled_layout::kFits128x32}}});
+static_assert(secondary_oled_layout::IsValid(kTwoRowLayout));
+static_assert(kTwoRowLayout.page_count == 1);
+static_assert(kTwoRowLayout.placements[0].width == 128 &&
+              kTwoRowLayout.placements[0].height == 16 &&
+              kTwoRowLayout.placements[1].y == 16 &&
+              kTwoRowLayout.placements[1].height == 16);
+
+constexpr auto kThreeLargeLayout =
+    BuildLayout({{{0, WidgetSize::kLarge, true, kLargeCapabilities},
+                  {1, WidgetSize::kLarge, true, kLargeCapabilities},
+                  {2, WidgetSize::kLarge, true, kLargeCapabilities}}});
+static_assert(secondary_oled_layout::IsValid(kThreeLargeLayout));
+static_assert(kThreeLargeLayout.page_count == 3);
+static_assert(kThreeLargeLayout.placements[0].page == 0 &&
+              kThreeLargeLayout.placements[1].page == 1 &&
+              kThreeLargeLayout.placements[2].page == 2);
+
 // Compact 5x7 uppercase font. Columns are stored least-significant bit at the top.
 constexpr uint8_t kBlank[5] = {};
 constexpr uint8_t kHyphen[5] = {0x08, 0x08, 0x08, 0x08, 0x08};
 constexpr uint8_t kPeriod[5] = {0x00, 0x60, 0x60, 0x00, 0x00};
 constexpr uint8_t kPercent[5] = {0x63, 0x13, 0x08, 0x64, 0x63};
+constexpr uint8_t kColon[5] = {0x00, 0x36, 0x36, 0x00, 0x00};
+constexpr uint8_t kSlash[5] = {0x60, 0x18, 0x06, 0x01, 0x00};
+constexpr uint8_t kPlus[5] = {0x08, 0x08, 0x3e, 0x08, 0x08};
+constexpr uint8_t kExclamation[5] = {0x00, 0x00, 0x5f, 0x00, 0x00};
+constexpr uint8_t kQuestion[5] = {0x02, 0x01, 0x51, 0x09, 0x06};
+constexpr uint8_t kUnderscore[5] = {0x40, 0x40, 0x40, 0x40, 0x40};
+
+constexpr uint8_t kRobotIcon[8] = {
+    0x18, 0x18, 0x7e, 0x5a, 0xff, 0x81, 0xff, 0x66,
+};
+constexpr uint8_t kDistanceIcon[8] = {
+    0x08, 0x12, 0x24, 0x49, 0x24, 0x12, 0x08, 0x00,
+};
+constexpr uint8_t kPowerIcon[8] = {
+    0x18, 0x18, 0x30, 0x7e, 0x0c, 0x18, 0x18, 0x00,
+};
+constexpr uint8_t kMotionIcon[8] = {
+    0x18, 0x5a, 0x3c, 0xff, 0x3c, 0x5a, 0x18, 0x00,
+};
+constexpr uint8_t kCapacityIcon[8] = {
+    0x18, 0x7e, 0x42, 0x5a, 0x5a, 0x5a, 0x7e, 0x00,
+};
 constexpr uint8_t kDigits[][5] = {
     {0x3e, 0x51, 0x49, 0x45, 0x3e}, {0x00, 0x42, 0x7f, 0x40, 0x00}, {0x42, 0x61, 0x51, 0x49, 0x46},
     {0x21, 0x41, 0x45, 0x4b, 0x31}, {0x18, 0x14, 0x12, 0x7f, 0x10}, {0x27, 0x45, 0x45, 0x45, 0x39},
@@ -46,6 +131,61 @@ constexpr uint8_t kLowercase[][5] = {
     {0x1c, 0x20, 0x40, 0x20, 0x1c}, {0x3c, 0x40, 0x30, 0x40, 0x3c}, {0x44, 0x28, 0x10, 0x28, 0x44},
     {0x0c, 0x50, 0x50, 0x50, 0x3c}, {0x44, 0x64, 0x54, 0x4c, 0x44},
 };
+
+std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
+    if (text.empty()) {
+        return {"", ""};
+    }
+    if (text.size() <= 10 && text.find(' ') == std::string::npos) {
+        return {text, ""};
+    }
+    // Keep both halves balanced. A distant word boundary can make one half overflow a 42-pixel
+    // panel, so only use whitespace immediately adjacent to the midpoint.
+    const size_t middle = text.size() / 2;
+    size_t split = middle;
+    if (middle < text.size() && text[middle] == ' ') {
+        split = middle;
+    } else if (middle > 0 && text[middle - 1] == ' ') {
+        split = middle - 1;
+    }
+    std::string first = text.substr(0, split);
+    std::string second = text.substr(split);
+    while (!second.empty() && second.front() == ' ') {
+        second.erase(second.begin());
+    }
+    return {std::move(first), std::move(second)};
+}
+
+std::string FormatCapacityMah(uint32_t capacity_uah) {
+    char text[16] = {};
+    const uint32_t capacity_mah =
+        static_cast<uint32_t>((static_cast<uint64_t>(capacity_uah) + 500) / 1000);
+    std::snprintf(text, sizeof(text), "%lumAh", static_cast<unsigned long>(capacity_mah));
+    return text;
+}
+
+std::string FormatElapsed(uint32_t seconds) {
+    char text[16] = {};
+    const uint32_t hours = seconds / 3600;
+    if (hours >= 100000) {
+        const uint32_t days = seconds / 86400;
+        std::snprintf(text, sizeof(text), "%lud", static_cast<unsigned long>(days));
+    } else {
+        const uint32_t minutes = (seconds % 3600) / 60;
+        std::snprintf(text, sizeof(text), "%luh%02lum", static_cast<unsigned long>(hours),
+                      static_cast<unsigned long>(minutes));
+    }
+    return text;
+}
+
+std::string FormatPowerWatts(int power_mw) {
+    char text[16] = {};
+    const int limited = std::clamp(power_mw, -99999, 99999);
+    const int magnitude = std::abs(limited);
+    std::snprintf(text, sizeof(text), "%s%d.%02dW", limited < 0 ? "-" : "", magnitude / 1000,
+                  (magnitude % 1000) / 10);
+    return text;
+}
 
 }  // namespace
 
@@ -120,7 +260,9 @@ bool SecondaryOled::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mute
     height_ = height;
     flip_180_ = flip_180;
     config_.flip_180 = flip_180;
-    ShowStatus("STARTING", 0, false);
+    RebuildLayoutLocked();
+    Clear();
+    Flush();
     ESP_LOGI(TAG, "SSD1306 status display ready on shared I2C bus");
     return true;
 }
@@ -134,6 +276,24 @@ const uint8_t* SecondaryOled::Glyph(char character) {
     }
     if (character == '%') {
         return kPercent;
+    }
+    if (character == ':') {
+        return kColon;
+    }
+    if (character == '/') {
+        return kSlash;
+    }
+    if (character == '+') {
+        return kPlus;
+    }
+    if (character == '!') {
+        return kExclamation;
+    }
+    if (character == '?') {
+        return kQuestion;
+    }
+    if (character == '_') {
+        return kUnderscore;
     }
     if (character >= '0' && character <= '9') {
         return kDigits[character - '0'];
@@ -155,36 +315,212 @@ void SecondaryOled::SetPixel(int x, int y) {
     }
 }
 
-void SecondaryOled::DrawTextScaled(int x, int y, const std::string& text, int scale) {
+int SecondaryOled::FontWidth(FontSize font) {
+    switch (font) {
+        case FontSize::kMicro:
+            return 3;
+        case FontSize::kCompact:
+            return 4;
+        case FontSize::kRegular:
+            return 5;
+        case FontSize::kEmphasis:
+            return 6;
+    }
+    return 5;
+}
+
+int SecondaryOled::FontHeight(FontSize font) {
+    switch (font) {
+        case FontSize::kMicro:
+            return 6;
+        case FontSize::kCompact:
+            return 8;
+        case FontSize::kRegular:
+            return 10;
+        case FontSize::kEmphasis:
+            return 12;
+    }
+    return 10;
+}
+
+int SecondaryOled::MeasureTextWidth(const std::string& text, FontSize font) {
+    if (text.empty()) {
+        return 0;
+    }
+    return static_cast<int>(text.size()) * (FontWidth(font) + 1) - 1;
+}
+
+SecondaryOled::FontSize SecondaryOled::SelectSingleLineFont(const std::string& text, int width,
+                                                            int height, FontSize preferred) {
+    FontSize selected = preferred;
+    while ((MeasureTextWidth(text, selected) > width || FontHeight(selected) > height) &&
+           selected != FontSize::kMicro) {
+        selected = static_cast<FontSize>(static_cast<uint8_t>(selected) - 1);
+    }
+    return selected;
+}
+
+SecondaryOled::FontSize SecondaryOled::SelectTwoLineFont(const std::string& first,
+                                                         const std::string& second, int width,
+                                                         int height, FontSize preferred) {
+    FontSize selected = preferred;
+    while ((MeasureTextWidth(first, selected) > width ||
+            MeasureTextWidth(second, selected) > width || 2 * FontHeight(selected) + 5 > height) &&
+           selected != FontSize::kMicro) {
+        selected = static_cast<FontSize>(static_cast<uint8_t>(selected) - 1);
+    }
+    return selected;
+}
+
+void SecondaryOled::DrawBitmap(int x, int y, const uint8_t* bitmap, int width, int height) {
+    for (int row = 0; row < height; ++row) {
+        for (int column = 0; column < width; ++column) {
+            if ((bitmap[row] & (1U << (width - column - 1))) != 0) {
+                SetPixel(x + column, y + row);
+            }
+        }
+    }
+}
+
+void SecondaryOled::DrawHorizontalLine(int x, int y, int width) {
+    for (int offset = 0; offset < width; ++offset) {
+        SetPixel(x + offset, y);
+    }
+}
+
+void SecondaryOled::DrawIconTextFitted(int x, int y, int width, int height, const uint8_t* icon,
+                                       const std::string& text, FontSize preferred,
+                                       bool allow_icon) {
+    constexpr int kIconTextOffset = 12;
+    if (allow_icon && icon != nullptr && width > kIconTextOffset) {
+        const int text_area_width = width - kIconTextOffset;
+        const FontSize selected =
+            SelectSingleLineFont(text, text_area_width, height, preferred);
+        const int text_width = MeasureTextWidth(text, selected);
+        if (text_width <= text_area_width && FontHeight(selected) <= height) {
+            const int group_width = kIconTextOffset + text_width;
+            const int group_left = x + std::max(0, (width - group_width) / 2);
+            DrawBitmap(group_left, y + std::max(0, (height - 8) / 2), icon, 8, 8);
+            DrawTextFitted(group_left + kIconTextOffset, y, text_width, height, text, selected,
+                           false);
+            return;
+        }
+    }
+    DrawTextFitted(x, y, width, height, text, preferred);
+}
+
+void SecondaryOled::DrawIconTwoLinesFitted(int x, int y, int width, int height,
+                                           const uint8_t* icon, const std::string& first,
+                                           const std::string& second, FontSize preferred,
+                                           bool allow_icon) {
+    constexpr int kIconTextOffset = 12;
+    if (allow_icon && icon != nullptr && width > kIconTextOffset) {
+        const int text_area_width = width - kIconTextOffset;
+        const FontSize selected =
+            SelectTwoLineFont(first, second, text_area_width, height, preferred);
+        const int first_width = MeasureTextWidth(first, selected);
+        const int second_width = MeasureTextWidth(second, selected);
+        const int text_width = std::max(first_width, second_width);
+        if (text_width <= text_area_width && 2 * FontHeight(selected) + 5 <= height) {
+            const int group_width = kIconTextOffset + text_width;
+            const int group_left = x + std::max(0, (width - group_width) / 2);
+            DrawBitmap(group_left, y + std::max(0, (height - 8) / 2), icon, 8, 8);
+            DrawTwoLinesFitted(group_left + kIconTextOffset, y, text_width, height, first, second,
+                               selected, true);
+            return;
+        }
+    }
+    DrawTwoLinesFitted(x, y, width, height, first, second, preferred);
+}
+
+void SecondaryOled::DrawVerticalLine(int x, int y, int height) {
+    for (int offset = 0; offset < height; ++offset) {
+        SetPixel(x, y + offset);
+    }
+}
+
+void SecondaryOled::DrawText(int x, int y, const std::string& text, FontSize font, int max_width) {
+    const int glyph_width = FontWidth(font);
+    const int glyph_height = FontHeight(font);
+    const int right = x + max_width;
     for (char character : text) {
+        if (x + glyph_width > right) {
+            break;
+        }
         const uint8_t* glyph = Glyph(character);
-        for (int column = 0; column < 5; ++column) {
-            for (int row = 0; row < 7; ++row) {
-                if ((glyph[column] & (1U << row)) != 0) {
-                    for (int dx = 0; dx < scale; ++dx) {
-                        for (int dy = 0; dy < scale; ++dy) {
-                            SetPixel(x + column * scale + dx, y + row * scale + dy);
-                        }
-                    }
+        for (int column = 0; column < glyph_width; ++column) {
+            const int source_column = column * 5 / glyph_width;
+            for (int row = 0; row < glyph_height; ++row) {
+                const int source_row = row * 7 / glyph_height;
+                if ((glyph[source_column] & (1U << source_row)) != 0) {
+                    SetPixel(x + column, y + row);
                 }
             }
         }
-        x += 6 * scale;
-        if (x >= width_) {
-            break;
-        }
+        x += glyph_width + 1;
     }
+}
+
+void SecondaryOled::DrawTextFitted(int x, int y, int width, int height, const std::string& text,
+                                   FontSize preferred, bool center_horizontal) {
+    if (width <= 0 || height <= 0 || text.empty()) {
+        return;
+    }
+    const FontSize selected = SelectSingleLineFont(text, width, height, preferred);
+
+    // Base-panel capabilities guarantee that their complete text fits at micro size. Refuse an
+    // invalid string instead of clipping an important measured value at the rectangle boundary.
+    if (MeasureTextWidth(text, selected) > width || FontHeight(selected) > height) {
+        return;
+    }
+
+    const int text_width = MeasureTextWidth(text, selected);
+    DrawText(x + (center_horizontal ? std::max(0, (width - text_width) / 2) : 0),
+             y + std::max(0, (height - FontHeight(selected)) / 2), text, selected, width);
+}
+
+void SecondaryOled::DrawTwoLinesFitted(int x, int y, int width, int height,
+                                       const std::string& first, const std::string& second,
+                                       FontSize preferred, bool center_horizontal) {
+    if (second.empty()) {
+        DrawTextFitted(x, y, width, height, first, preferred, center_horizontal);
+        return;
+    }
+    const FontSize selected = SelectTwoLineFont(first, second, width, height, preferred);
+    const int line_height = FontHeight(selected);
+    const int line_gap = height >= 2 * line_height + 5 ? 5 : 2;
+    const int top = y + std::max(0, (height - (2 * line_height + line_gap)) / 2);
+    DrawTextFitted(x, top, width, line_height, first, selected, center_horizontal);
+    DrawTextFitted(x, top + line_height + line_gap, width, line_height, second, selected,
+                   center_horizontal);
 }
 
 bool SecondaryOled::Configure(const Config& config) {
     std::lock_guard<std::mutex> lock(mutex_);
     Config normalized = config;
-    normalized.text_scale = std::clamp(normalized.text_scale, 1, 3);
     if (normalized.brand.empty()) {
-        normalized.brand = "Xiaozhi";
+        normalized.brand = "Desk Robot";
+    }
+    if (normalized.brand.size() > 20) {
+        normalized.brand.resize(20);
     }
     if (normalized.distance_prefix.empty()) {
         normalized.distance_prefix = "Dist";
+    }
+    if (normalized.distance_prefix.size() > 10) {
+        normalized.distance_prefix.resize(10);
+    }
+    std::array<bool, secondary_oled_layout::kMaxWidgets> seen_types = {};
+    for (auto& widget : normalized.widgets) {
+        const uint8_t type = static_cast<uint8_t>(widget.type);
+        if (type >= seen_types.size() || seen_types[type]) {
+            ESP_LOGW(TAG, "Rejected duplicate or invalid secondary OLED widget type");
+            return false;
+        }
+        seen_types[type] = true;
+        widget.size = static_cast<WidgetSize>(
+            std::clamp(static_cast<int>(widget.size), 0, 2));
+        widget.mode = static_cast<uint8_t>(std::min<uint8_t>(widget.mode, 2));
     }
 
     if (panel_ != nullptr && normalized.flip_180 != flip_180_) {
@@ -199,15 +535,43 @@ bool SecondaryOled::Configure(const Config& config) {
     }
     config_ = std::move(normalized);
     config_.flip_180 = flip_180_;
-    scroll_x_ = 0;
-    RebuildMessageLocked();
-    RenderLocked();
+    RebuildLayoutLocked();
+    current_page_ = 0;
+    next_page_at_us_ = 0;
+    dirty_ = true;
     return true;
+}
+
+void SecondaryOled::RebuildLayoutLocked() {
+    std::array<secondary_oled_layout::WidgetSpec, secondary_oled_layout::kMaxWidgets> widgets = {};
+    for (size_t index = 0; index < config_.widgets.size(); ++index) {
+        uint8_t capabilities = kLargeCapabilities;
+        if (config_.widgets[index].size == WidgetSize::kSmall) {
+            capabilities = kSmallCapabilities;
+        } else if (config_.widgets[index].size == WidgetSize::kMedium) {
+            capabilities = kMediumCapabilities;
+        }
+        widgets[index] = {
+            static_cast<uint8_t>(config_.widgets[index].type),
+            config_.widgets[index].size,
+            config_.widgets[index].enabled,
+            capabilities,
+        };
+    }
+    layout_ = BuildLayout(widgets);
+    if (current_page_ >= layout_.page_count) {
+        current_page_ = 0;
+    }
 }
 
 SecondaryOled::Config SecondaryOled::GetConfig() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return config_;
+}
+
+uint8_t SecondaryOled::GetPageCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return layout_.page_count;
 }
 
 bool SecondaryOled::Flush() {
@@ -239,153 +603,361 @@ bool SecondaryOled::Flush() {
     return false;
 }
 
-void SecondaryOled::ShowStatus(const std::string& state, int distance_mm, bool distance_valid,
-                               int battery_percent, float battery_voltage_v,
-                               float battery_current_ma) {
-    if (panel_ == nullptr) {
-        return;
-    }
-
+void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string normalized_state = state;
-    std::replace(normalized_state.begin(), normalized_state.end(), '_', ' ');
-    bool capitalize_next = true;
-    for (char& character : normalized_state) {
-        if (character == ' ') {
-            capitalize_next = true;
-        } else if (capitalize_next) {
-            character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
-            capitalize_next = false;
-        } else {
-            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
-        }
+    const bool changed = telemetry.distance_valid != telemetry_.distance_valid ||
+                         telemetry.distance_mm != telemetry_.distance_mm ||
+                         telemetry.power_valid != telemetry_.power_valid ||
+                         telemetry.current_ma != telemetry_.current_ma ||
+                         telemetry.power_mw != telemetry_.power_mw ||
+                         telemetry.motion_valid != telemetry_.motion_valid ||
+                         telemetry.motion_state != telemetry_.motion_state ||
+                         telemetry.roll_deg != telemetry_.roll_deg ||
+                         telemetry.pitch_deg != telemetry_.pitch_deg ||
+                         telemetry.capacity_active != telemetry_.capacity_active ||
+                         telemetry.capacity_measuring != telemetry_.capacity_measuring ||
+                         telemetry.capacity_uah != telemetry_.capacity_uah ||
+                         telemetry.capacity_seconds != telemetry_.capacity_seconds;
+    if (changed) {
+        telemetry_ = telemetry;
+        dirty_ = true;
     }
-    state_ = std::move(normalized_state);
-    distance_mm_ = distance_mm;
-    distance_valid_ = distance_valid;
-    battery_percent_ = battery_percent;
-    battery_voltage_v_ = battery_voltage_v;
-    battery_current_ma_ = battery_current_ma;
-    RebuildMessageLocked();
-    RenderLocked();
 }
 
 void SecondaryOled::Tick() {
     std::lock_guard<std::mutex> lock(mutex_);
-    RenderLocked();
+    const int64_t now_us = esp_timer_get_time();
+    if (temporary_text_.empty() && layout_.page_count > 1) {
+        if (next_page_at_us_ == 0) {
+            next_page_at_us_ = now_us + 5000000LL;
+        } else if (now_us >= next_page_at_us_) {
+            current_page_ = static_cast<uint8_t>((current_page_ + 1) % layout_.page_count);
+            next_page_at_us_ = now_us + 5000000LL;
+            dirty_ = true;
+        }
+    } else {
+        next_page_at_us_ = 0;
+    }
+    if (dirty_) {
+        RenderLocked();
+    }
 }
 
 void SecondaryOled::ShowTemporaryText(const std::string& text) {
     std::lock_guard<std::mutex> lock(mutex_);
-    temporary_text_ = text;
-    scroll_x_ = 0;
-    RebuildMessageLocked();
-    RenderLocked();
+    if (temporary_text_ != text) {
+        temporary_text_ = text;
+        dirty_ = true;
+    }
 }
 
 void SecondaryOled::ClearTemporaryText() {
     std::lock_guard<std::mutex> lock(mutex_);
-    temporary_text_.clear();
-    scroll_x_ = 0;
-    RebuildMessageLocked();
-    RenderLocked();
+    if (!temporary_text_.empty()) {
+        temporary_text_.clear();
+        next_page_at_us_ = 0;
+        dirty_ = true;
+    }
 }
 
-void SecondaryOled::RebuildMessageLocked() {
-    if (!temporary_text_.empty()) {
-        if (message_ != temporary_text_) {
-            message_ = temporary_text_;
-            scroll_x_ = 0;
+void SecondaryOled::RenderSingleLineWidgetLocked(
+    const secondary_oled_layout::Placement& placement, const WidgetConfig& widget) {
+    std::string primary;
+    std::string secondary;
+    const uint8_t* icon = nullptr;
+
+    switch (widget.type) {
+        case WidgetType::kBranding:
+            primary = config_.brand;
+            icon = kRobotIcon;
+            break;
+        case WidgetType::kDistance: {
+            char distance[32] = {};
+            if (telemetry_.distance_valid) {
+                std::snprintf(distance, sizeof(distance), "%dmm",
+                              std::clamp(telemetry_.distance_mm, 0, 9999));
+            } else {
+                std::snprintf(distance, sizeof(distance), "--mm");
+            }
+            primary = config_.distance_prefix + " " + distance;
+            icon = kDistanceIcon;
+            break;
         }
-        return;
+        case WidgetType::kPower: {
+            if (telemetry_.power_valid) {
+                const int current_ma = std::clamp(telemetry_.current_ma, -99999, 99999);
+                char current[16] = {};
+                std::snprintf(current, sizeof(current), "%dmA", current_ma);
+                primary = current;
+                secondary = FormatPowerWatts(telemetry_.power_mw);
+            } else {
+                primary = "--mA";
+                secondary = "--W";
+            }
+            const auto mode = static_cast<PowerMode>(std::min<uint8_t>(widget.mode, 2));
+            if (mode == PowerMode::kPower) {
+                primary = secondary;
+            } else if (mode == PowerMode::kCurrentAndPower) {
+                primary += " " + secondary;
+            }
+            icon = kPowerIcon;
+            break;
+        }
+        case WidgetType::kMotion: {
+            const std::string state =
+                telemetry_.motion_valid ? telemetry_.motion_state : "calibrating";
+            if (telemetry_.motion_valid) {
+                char tilt[32] = {};
+                std::snprintf(tilt, sizeof(tilt), "%d/%d", telemetry_.roll_deg,
+                              telemetry_.pitch_deg);
+                secondary = tilt;
+            } else {
+                secondary = "--/--";
+            }
+            const auto mode = static_cast<MotionMode>(std::min<uint8_t>(widget.mode, 2));
+            if (mode == MotionMode::kState) {
+                primary = state;
+            } else if (mode == MotionMode::kTilt) {
+                primary = secondary;
+            } else {
+                primary = state + " " + secondary;
+            }
+            icon = kMotionIcon;
+            break;
+        }
+        case WidgetType::kCapacity: {
+            const std::string capacity = FormatCapacityMah(telemetry_.capacity_uah);
+            const std::string elapsed = FormatElapsed(telemetry_.capacity_seconds);
+            primary = capacity;
+            secondary = elapsed;
+            const auto mode = static_cast<CapacityMode>(std::min<uint8_t>(widget.mode, 2));
+            if (mode == CapacityMode::kElapsed) {
+                primary = secondary;
+            } else if (mode == CapacityMode::kMahAndElapsed) {
+                primary += " " + secondary;
+            }
+            icon = kCapacityIcon;
+            break;
+        }
     }
-    std::string message;
-    const auto append = [&message](const std::string& segment) {
-        if (segment.empty()) {
+
+    constexpr int kOuterPadding = 2;
+    constexpr int kDividerPadding = 4;
+    const int left_padding = placement.x == 0 ? kOuterPadding : kDividerPadding;
+    const int right_padding = placement.x + placement.width == width_ ? kOuterPadding
+                                                                      : kDividerPadding;
+    const int left = placement.x + left_padding;
+    const int top = placement.y;
+    const int content_width =
+        std::max(0, static_cast<int>(placement.width) - left_padding - right_padding);
+    const int content_height = placement.height == 16 ? (placement.y == 0 ? 15 : 16)
+                                                      : placement.height;
+    const FontSize preferred =
+        placement.height == 16 ? FontSize::kRegular : FontSize::kEmphasis;
+
+    // Large full-width widgets need more breathing room between the 8px icon
+    // and the text. Keep the existing 12px icon/text offset for S/M widgets,
+    // but use a 16px offset for L so the icon does not visually touch the text.
+    if (widget.size == WidgetSize::kLarge && placement.width == 128 &&
+        icon != nullptr && content_width > 16) {
+        constexpr int kLargeIconTextOffset = 16;
+        const int text_area_width = content_width - kLargeIconTextOffset;
+        const FontSize selected =
+            SelectSingleLineFont(primary, text_area_width, content_height, preferred);
+        const int text_width = MeasureTextWidth(primary, selected);
+
+        if (text_width <= text_area_width && FontHeight(selected) <= content_height) {
+            const int group_width = kLargeIconTextOffset + text_width;
+            const int group_left =
+                left + std::max(0, (content_width - group_width) / 2);
+
+            DrawBitmap(group_left,
+                       top + std::max(0, (content_height - 8) / 2),
+                       icon, 8, 8);
+            DrawTextFitted(group_left + kLargeIconTextOffset, top, text_width,
+                           content_height, primary, selected, false);
             return;
         }
-        if (!message.empty()) {
-            message += " - ";
-        }
-        message += segment;
-    };
-    if (config_.show_brand) {
-        append(config_.brand);
     }
-    if (config_.show_state) {
-        append(state_);
-    }
-    if (config_.show_distance) {
-        std::string distance = config_.distance_prefix + " ";
-        if (distance_valid_) {
-            distance += std::to_string(std::clamp(distance_mm_, 0, 9999)) + " mm";
-        } else {
-            distance += "0";
-        }
-        append(distance);
-    }
-    if (config_.show_battery && battery_percent_ >= 0) {
-        char battery[32] = {};
-        std::snprintf(battery, sizeof(battery), "Bat %d%%", std::clamp(battery_percent_, 0, 100));
-        append(battery);
-    }
-    if (config_.show_voltage && battery_percent_ >= 0) {
-        char voltage[24] = {};
-        const int centivolts =
-            std::max(0, static_cast<int>(std::lround(battery_voltage_v_ * 100.0f)));
-        std::snprintf(voltage, sizeof(voltage), "Vol %d.%02dV", centivolts / 100, centivolts % 100);
-        append(voltage);
-    }
-    if (config_.show_current && battery_percent_ >= 0) {
-        char current[24] = {};
-        const int milliamps = static_cast<int>(std::lround(battery_current_ma_));
-        std::snprintf(current, sizeof(current), "Amp %dmA", milliamps);
-        append(current);
-    }
-    if (message != message_) {
-        message_ = std::move(message);
-        if (message_.empty()) {
-            scroll_x_ = 0;
+
+    DrawIconTextFitted(left, top, content_width, content_height, icon, primary,
+                       preferred, placement.width > 43);
+}
+
+void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& placement) {
+    const WidgetType type = static_cast<WidgetType>(placement.id);
+    const WidgetConfig* widget = nullptr;
+    for (const auto& candidate : config_.widgets) {
+        if (candidate.type == type) {
+            widget = &candidate;
+            break;
         }
     }
+    if (widget == nullptr) {
+        return;
+    }
+
+    if (placement.height == 16 ||
+        (placement.width == 128 && widget->size == WidgetSize::kLarge)) {
+        RenderSingleLineWidgetLocked(placement, *widget);
+        return;
+    }
+
+    constexpr int kOuterPadding = 2;
+    constexpr int kDividerPadding = 4;
+    const int left_padding = placement.x == 0 ? kOuterPadding : kDividerPadding;
+    const int right_padding = placement.x + placement.width == width_ ? kOuterPadding
+                                                                      : kDividerPadding;
+    const int left = placement.x + left_padding;
+    const int top = placement.y;
+    const int content_width =
+        std::max(0, static_cast<int>(placement.width) - left_padding - right_padding);
+    const int content_height = placement.height;
+    const bool roomy = content_width >= 54;
+    const bool allow_icon = placement.width > 43;
+    char first[24] = {};
+    char second[24] = {};
+
+    switch (type) {
+        case WidgetType::kBranding: {
+            const auto lines = SplitForTwoLines(config_.brand);
+            if (!lines.second.empty()) {
+                DrawIconTwoLinesFitted(left, top, content_width, content_height, kRobotIcon,
+                                       lines.first, lines.second, FontSize::kRegular, allow_icon);
+            } else {
+                DrawIconTextFitted(left, top, content_width, content_height, kRobotIcon,
+                                   lines.first, FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+        case WidgetType::kDistance: {
+            if (telemetry_.distance_valid) {
+                std::snprintf(first, sizeof(first), "%dmm",
+                              std::clamp(telemetry_.distance_mm, 0, 9999));
+            } else {
+                std::snprintf(first, sizeof(first), "--mm");
+            }
+            if (roomy) {
+                DrawIconTwoLinesFitted(left, top, content_width, content_height, kDistanceIcon,
+                                       config_.distance_prefix, first, FontSize::kRegular,
+                                       allow_icon);
+            } else {
+                DrawIconTextFitted(left, top, content_width, content_height, kDistanceIcon, first,
+                                   FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+        case WidgetType::kPower: {
+            if (telemetry_.power_valid) {
+                const int current_ma = std::clamp(telemetry_.current_ma, -99999, 99999);
+                std::snprintf(first, sizeof(first), "%dmA", current_ma);
+                const std::string power = FormatPowerWatts(telemetry_.power_mw);
+                std::snprintf(second, sizeof(second), "%s", power.c_str());
+            } else {
+                std::snprintf(first, sizeof(first), "--mA");
+                std::snprintf(second, sizeof(second), "--W");
+            }
+            const auto mode = static_cast<PowerMode>(std::min<uint8_t>(widget->mode, 2));
+            if (mode == PowerMode::kCurrentAndPower) {
+                DrawTwoLinesFitted(left, top, content_width, content_height, first, second,
+                                   FontSize::kRegular);
+            } else {
+                const std::string value = mode == PowerMode::kCurrent ? first : second;
+                DrawIconTextFitted(left, top, content_width, content_height, kPowerIcon, value,
+                                   FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+        case WidgetType::kMotion: {
+            if (telemetry_.motion_valid) {
+                std::snprintf(second, sizeof(second), "%d/%d", telemetry_.roll_deg,
+                              telemetry_.pitch_deg);
+            } else {
+                std::snprintf(second, sizeof(second), "--/--");
+            }
+            std::string state = telemetry_.motion_valid ? telemetry_.motion_state : "calibrating";
+            if (state == "calibrating") {
+                state = "calib";
+            }
+            const auto mode = static_cast<MotionMode>(std::min<uint8_t>(widget->mode, 2));
+            if (mode == MotionMode::kStateAndTilt) {
+                DrawIconTwoLinesFitted(left, top, content_width, content_height, kMotionIcon, state,
+                                       second, FontSize::kRegular, allow_icon);
+            } else {
+                DrawIconTextFitted(left, top, content_width, content_height, kMotionIcon,
+                                   mode == MotionMode::kState ? state : second,
+                                   FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+        case WidgetType::kCapacity: {
+            const std::string capacity = FormatCapacityMah(telemetry_.capacity_uah);
+            const std::string elapsed = FormatElapsed(telemetry_.capacity_seconds);
+            std::snprintf(first, sizeof(first), "%s", capacity.c_str());
+            std::snprintf(second, sizeof(second), "%s", elapsed.c_str());
+            const auto mode = static_cast<CapacityMode>(std::min<uint8_t>(widget->mode, 2));
+            if (mode == CapacityMode::kMahAndElapsed) {
+                DrawIconTwoLinesFitted(left, top, content_width, content_height, kCapacityIcon,
+                                       first, second, FontSize::kRegular, allow_icon);
+            } else {
+                DrawIconTextFitted(left, top, content_width, content_height, kCapacityIcon,
+                                   mode == CapacityMode::kMah ? first : second,
+                                   FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+    }
+}
+
+void SecondaryOled::RenderDashboardLocked() {
+    Clear();
+    if (layout_.page_count == 0) {
+        return;
+    }
+
+    bool has_second_row = false;
+    for (size_t index = 0; index < layout_.placement_count; ++index) {
+        const auto& placement = layout_.placements[index];
+        if (placement.page == current_page_ && placement.y == 16) {
+            has_second_row = true;
+            break;
+        }
+    }
+    if (has_second_row) {
+        DrawHorizontalLine(0, 15, width_);
+    }
+
+    for (size_t index = 0; index < layout_.placement_count; ++index) {
+        const auto& placement = layout_.placements[index];
+        if (placement.page != current_page_) {
+            continue;
+        }
+        if (placement.x > 0) {
+            DrawVerticalLine(placement.x, placement.y, placement.height);
+        }
+        RenderWidgetLocked(placement);
+    }
+}
+
+void SecondaryOled::RenderTemporaryTextLocked() {
+    Clear();
+    if (MeasureTextWidth(temporary_text_, FontSize::kRegular) <= width_ - 4) {
+        DrawTextFitted(2, 0, width_ - 4, height_, temporary_text_, FontSize::kEmphasis);
+        return;
+    }
+    const auto lines = SplitForTwoLines(temporary_text_);
+    DrawTwoLinesFitted(2, 0, width_ - 4, height_, lines.first, lines.second,
+                       FontSize::kRegular);
 }
 
 void SecondaryOled::RenderLocked() {
     if (panel_ == nullptr) {
         return;
     }
-    if (message_.empty()) {
-        Clear();
-        Flush();
-        return;
+    if (temporary_text_.empty()) {
+        RenderDashboardLocked();
+    } else {
+        RenderTemporaryTextLocked();
     }
-
-    const int scale = config_.text_scale;
-    constexpr int kScrollStep = 1;
-    const int text_width = static_cast<int>(message_.size()) * 6 * scale;
-    // The upper third of this physical OLED is damaged. Center the smaller text inside
-    // the remaining lower two-thirds and never light a pixel in the damaged rows.
-    const int safe_top = (height_ + 2) / 3;
-    const int safe_height = height_ - safe_top;
-    const int text_y = safe_top + (safe_height - 7 * scale) / 2;
-    Clear();
-    if (text_width <= width_) {
-        DrawTextScaled((width_ - text_width) / 2, text_y, message_, scale);
-        scroll_x_ = 0;
-        Flush();
-        return;
-    }
-
-    const std::string scrolling_text = message_ + " - ";
-    const int scrolling_width = static_cast<int>(scrolling_text.size()) * 6 * scale;
-    if (scroll_x_ > 0 || scroll_x_ <= -scrolling_width) {
-        scroll_x_ = 0;
-    }
-    DrawTextScaled(scroll_x_, text_y, scrolling_text, scale);
-    DrawTextScaled(scroll_x_ + scrolling_width, text_y, scrolling_text, scale);
-    Flush();
-    scroll_x_ -= kScrollStep;
-    if (scroll_x_ <= -scrolling_width) {
-        scroll_x_ += scrolling_width;
-    }
+    dirty_ = !Flush();
 }
