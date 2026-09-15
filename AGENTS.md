@@ -2,89 +2,236 @@
 
 ## Project
 
-XiaoZhi is an ESP-IDF C/C++ voice-assistant firmware supporting many chips, boards, displays, audio devices, and network transports. A build selects exactly one board implementation.
+This repository is the **single-target Xiaozhi Desk Robot firmware**, derived from
+`78/xiaozhi-esp32`.
 
-Use ESP-IDF v6.1 when possible. The minimum supported SDK is ESP-IDF v6.0.1. IDF 5.x is not supported.
+It supports one physical target only:
 
-## Architecture
-
-- `main/application.*`: main event loop, protocol lifecycle, and high-level behavior.
-- `main/device_state_machine.*`: legal runtime state transitions.
-- `main/boards/common/`: board interfaces and reusable hardware/network helpers.
-- `main/boards/**/`: board-specific pins, initialization, and build variants.
-- `main/audio/`: codecs, audio tasks, engines, wake words, and queues.
-- `main/protocols/`: transport-neutral API plus WebSocket and MQTT/UDP.
-- `main/display/` and `main/led/`: reusable UI implementations.
-- `main/mcp_server.*`: common device-side MCP tools and dispatch.
-- `main/Kconfig.projbuild`: board and feature configuration.
-- `main/CMakeLists.txt`: source, board, locale, font, and asset selection.
-- `scripts/build.py`: canonical board/variant build entry point.
-
-Read the closest existing implementation before adding a new one. Prefer the narrowest owning layer; do not put board-specific behavior into core modules.
-
-## Required Rules
-
-- Preserve unrelated worktree changes and keep patches focused.
-- A build must export exactly one board factory through `DECLARE_BOARD(...)`.
-- Never alter an existing board's pins to support different hardware. Add a uniquely named board or release variant; board identity affects OTA compatibility.
-- Core code depends on `Board` interfaces, never a concrete board class or board `config.h`.
-- Treat camera, backlight, display, LED, battery, and similar capabilities as optional.
-- Change runtime state through `Application::SetDeviceState()` and the state machine.
-- Callbacks may run outside the main task. Schedule application mutations with `Application::Schedule()` or event bits.
-- Do not block the main event loop or audio tasks. Avoid unbounded queues and repeated large allocations in audio paths.
-- Keep shared message semantics in `Protocol`; verify both transports when changing its contract.
-- Validate network input and preserve `cJSON` ownership. NVS keys are persistent API and require migration when changed.
-- Guard target-specific features with Kconfig/component rules. Do not assume every target has PSRAM or S3/P4 resources.
-- Do not manually edit generated/vendor output: `build/`, `releases/`, `managed_components/`, `components/`, `sdkconfig*`, `main/assets/lang_config.h`, or generated mmap headers.
-- Format only touched C/C++ files with the repository `.clang-format`; avoid unrelated mass formatting.
-
-## Boards and Configuration
-
-Board selection is a coupled chain:
-
-`config.json` -> `scripts/build.py` -> `main/Kconfig.projbuild` -> `main/CMakeLists.txt` -> board source and `config.h`.
-
-When adding a board or variant, update every relevant link in that chain. Include a unique board identity, correct chip target, flash/partition settings, exactly one `DECLARE_BOARD`, and board documentation. Follow `docs/custom-board.md`.
-
-## Commands
-
-Source the intended ESP-IDF environment first:
-
-```sh
-source /path/to/esp-idf/export.sh
-idf.py --version
+```text
+generic/esp32-s3-camera-robot
+ESP32-S3 / CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
 ```
 
-```sh
-# Inspect the retained board variant
-python3 scripts/build.py --list-boards
+Do not treat this as the old generic multi-board Xiaozhi repository and do not
+reintroduce its board/release matrix.
 
-# Canonical variant build
-python3 scripts/build.py generic/esp32-s3-camera-robot --name esp32-s3-camera-robot --language en-US --wake-word wn9_hiwalle_tts2
+ESP-IDF v6.1 is the preferred SDK.
 
-# Format/check touched files
-clang-format -i <files>
-clang-format --dry-run -Werror <files>
+## Primary ownership
+
+- `main/application.*` — application/session lifecycle, protocol callbacks, typed Web Chat.
+- `main/device_state_machine.*` — legal runtime state transitions.
+- `main/protocols/` — shared protocol API, MQTT+UDP and WebSocket.
+- `main/audio/` — capture/playback, Opus, wake word and audio tasks.
+- `main/mcp_server.*` — generic device-side MCP framework.
+- `main/boards/generic/esp32-s3-camera-robot/` — current board identity and authoritative pin map.
+- `main/boards/common/desk_robot/` — robot-specific hardware and behavior.
+- `main/boards/common/desk_robot/desk_robot_board.cc` — desk-robot integration.
+- `main/boards/common/desk_robot/motor_controller.*` — drive control.
+- `main/boards/common/desk_robot/mochan_display.*` — main robot-face display.
+- `main/boards/common/desk_robot/secondary_oled.*` — 128×32 SSD1306.
+- `main/boards/common/desk_robot/ina219_power_monitor.*` and `battery_soc_estimator.*` — battery telemetry/SoC.
+- `main/boards/common/desk_robot/mpu6050_motion_sensor.*` — motion sensing.
+- `main/boards/common/desk_robot/robot_web_control_server.*` — local HTTP/API server.
+- `main/boards/common/desk_robot/robot_web_control_page.h` — embedded Web Control UI.
+- `main/CMakeLists.txt` and `main/Kconfig.projbuild` — single-target build configuration.
+- `scripts/build.py` — configured build helper.
+
+Prefer the narrowest owning subsystem. Do not move desk-robot behavior into generic core
+code unless it is genuinely transport/hardware independent.
+
+## Required rules
+
+- Preserve unrelated worktree changes. Keep patches narrow.
+- Do not perform opportunistic rewrites during cleanup tasks.
+- Do not reintroduce unsupported boards, chip matrices, release matrices or unused drivers.
+- Keep reusable abstractions/frameworks when they are useful extension points.
+- A build must still export exactly one board factory.
+- Change application runtime state through the existing state-machine path.
+- Callbacks may run outside the main task; schedule application mutations through the
+  established `Application::Schedule()`/event mechanisms.
+- Do not block audio tasks or the main application loop.
+- Preserve `cJSON` ownership and validate network input.
+- Treat NVS keys as persistent state/API; migrate deliberately if renamed.
+- Do not edit generated/vendor output such as `build/`, `managed_components/`,
+  generated asset headers, or generated mmap files.
+- Avoid unrelated formatting churn.
+
+## User-owned build / hardware validation
+
+**Do not run builds, flashes, monitors, or physical hardware tests unless the user
+explicitly asks you to.**
+
+The user normally performs these steps to save agent time/tokens.
+
+When verification is needed:
+
+1. finish the narrow code/config change;
+2. provide only the minimal command/checklist required;
+3. stop and wait for the user's PASS/FAIL result or failure log;
+4. inspect only the supplied failure output if something breaks.
+
+Never claim physical hardware validation unless the user reports it.
+
+## Hardware constraints that must be preserved
+
+The authoritative GPIO definitions are in:
+
+```text
+main/boards/generic/esp32-s3-camera-robot/config.h
 ```
 
-The build script changes local `sdkconfig` and build state. Do not assume the build directory still represents a previous target.
+Important shared buses:
 
-## Validation
+```text
+GPIO4/5   camera SCCB + downward VL53L0X
+GPIO38/14 SSD1306 + INA219 + MPU6050 auxiliary I2C
+```
 
-- Board-only change: build affected variants and smoke-test changed hardware.
-- Core, common-board, audio, protocol, display, dependency, Kconfig, or CMake change: build the retained ESP32-S3 robot target and exercise the affected hardware path.
-- Protocol changes: verify WebSocket and MQTT/UDP when shared behavior changes.
-- Audio changes: verify capture, playback, wake/VAD, interruption, reconnect, and applicable AEC modes.
-- UI/assets changes: verify applicable no-display/OLED/LVGL paths and partition size.
-- Always report what was tested and what still needs physical hardware. A successful build is not hardware validation.
+GPIO availability is tight because the camera and octal PSRAM/flash configuration consume
+many pins. Do not move or repurpose pins as cleanup.
 
-## Authoritative Documentation
+The auxiliary I2C devices are deliberately initialized later and serially. Do not turn
+their initialization back into concurrent boot-time probing.
 
-- Overview and SDK policy: `README.md`
-- Board guide: `docs/custom-board.md`
-- Audio design: `main/audio/README.md`
-- Code style: `docs/code_style.md`
-- Protocols: `docs/websocket.md`, `docs/mqtt-udp.md`, `docs/mcp-protocol.md`
-- CI build: `.github/workflows/build.yml`
+The VL53L0X points downward and implements floor/cliff/lift safety. Do not treat it as a
+front obstacle sensor.
 
-Keep detailed or fast-changing information in those files, not here. Add a nested `AGENTS.md` only when a subsystem needs specialized instructions.
+## Protocol rules
+
+Keep both protocol implementations:
+
+```text
+MQTT + UDP
+WebSocket
+```
+
+MQTT+UDP is the current production path, but WebSocket is an intentional extension
+reserve.
+
+Shared message semantics belong in `Protocol`. If changing a shared protocol contract,
+reason about both transports even if only MQTT+UDP is exercised on the current robot.
+
+## Typed Web Chat
+
+Preserve the current architecture.
+
+```text
+<= 12 Unicode codepoints
+    -> native detect/text
+
+> 12 Unicode codepoints
+    -> trigger "web_chat"
+    -> self.web_chat.consume_pending
+    -> full original text
+    -> existing Xiaozhi LLM/MCP/TTS session
+```
+
+Web Control accepts up to **512 Unicode codepoints**.
+
+Important invariants:
+
+- Do not create a second chatbot/cloud session.
+- Do not replace long-text handling with multi-detect chunking.
+- `self.web_chat.consume_pending` must remain AI-visible.
+- The original local typed text is the user-visible transcript.
+- Idle-origin typed chat primes the MQTT UDP return path with a valid Opus silence frame.
+- Do not replace that silence frame with microphone audio.
+- After a typed turn, normal listening behavior must recover.
+
+## MCP
+
+Keep the generic MCP server/tool framework as a major extension point.
+
+Remove concrete tools only when their hardware/feature is removed. Do not remove generic
+tool registration, argument/schema handling or MCP dispatch during debloat.
+
+Robot hardware status/control should normally extend MCP rather than invent a second
+control protocol.
+
+## Display/UI
+
+The main display uses the custom Mochan robot face. The secondary OLED is telemetry/status
+oriented.
+
+Avoid duplicating secondary telemetry (battery/current/distance/network status) onto the
+main face unless explicitly requested.
+
+Preserve existing face identity and emotion integration; do not create a second emotion
+system.
+
+## OTA / bootstrap
+
+The current desk-robot build intentionally ignores official firmware upgrades, but the
+existing `Ota` subsystem also carries bootstrap/activation and MQTT/WebSocket/server
+configuration.
+
+Do **not** delete the whole subsystem.
+
+The intended cleanup is:
+
+```text
+KEEP:
+bootstrap
+activation
+MQTT/WebSocket config
+server time
+asset behavior unless separately changed
+
+REMOVE/ISOLATE:
+official firmware download
+firmware partition write
+auto-upgrade path
+```
+
+Do not change the partition table as part of OTA cleanup unless explicitly requested and
+hardware-tested separately.
+
+## Build helper
+
+This is now a single-target repository. `scripts/build.py` may keep compatibility CLI
+surface, but its implementation should not rediscover or validate a nonexistent
+multi-board tree.
+
+Canonical configured build:
+
+```bash
+python3 scripts/build.py generic/esp32-s3-camera-robot \
+  --name esp32-s3-camera-robot \
+  --language vi-VN
+```
+
+Useful list commands:
+
+```bash
+python3 scripts/build.py --list-languages
+python3 scripts/build.py --list-wake-words
+```
+
+Do not spend agent tokens repeatedly rebuilding or re-auditing completed debloat phases.
+
+## Upstream reference
+
+Upstream is a reference/archive, not code that should be copied wholesale back into this
+repository:
+
+```text
+https://github.com/78/xiaozhi-esp32
+```
+
+When a removed driver/feature is needed later, inspect/fetch the relevant upstream
+implementation deliberately and adapt only the required part.
+
+## Validation reporting
+
+For code changes, report:
+
+```text
+Changed:
+Not changed:
+User verification needed:
+```
+
+Use `PASS`, `FAIL`, or `NOT RUN` for hardware checks.
+
+A successful compile is not physical hardware validation.
