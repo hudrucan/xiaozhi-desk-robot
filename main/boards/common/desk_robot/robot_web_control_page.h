@@ -1627,9 +1627,9 @@ function updateChatInput() {
     empty = !input.value.trim(),
     busy = ['Sending', 'Waiting', 'Speaking'].includes(chatBackendState);
   resizeChatInput();
-  $('#chatCount').textContent = count + ' / 80';
-  $('#chatCount').classList.toggle('over', count > 80);
-  $('#chatSend').disabled = chatSubmitting || busy || empty || count > 80;
+  $('#chatCount').textContent = count + ' / 512';
+  $('#chatCount').classList.toggle('over', count > 512);
+  $('#chatSend').disabled = chatSubmitting || busy || empty || count > 512;
 }
 function renderConversation(conversation) {
   const state = String(conversation.state || 'Ready'),
