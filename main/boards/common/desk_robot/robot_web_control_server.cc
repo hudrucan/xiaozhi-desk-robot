@@ -23,7 +23,7 @@ namespace {
 constexpr size_t kLogBufferSize = 16 * 1024;
 constexpr size_t kLogLineBufferSize = 768;
 constexpr size_t kLogReadChunkSize = 4 * 1024;
-constexpr size_t kChatProbeMaxCodepoints = 80;
+constexpr size_t kChatProbeMaxCodepoints = 512;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
 
@@ -175,7 +175,7 @@ bool NormalizeChatProbeText(const std::string& input, std::string& output, size_
     }
     count = last - first;
     if (count > kChatProbeMaxCodepoints) {
-        error = "Text exceeds 80 UTF-8 codepoints";
+        error = "Text exceeds 512 UTF-8 codepoints";
         return false;
     }
     output.assign(input, spans[first].begin, spans[last - 1].end - spans[first].begin);

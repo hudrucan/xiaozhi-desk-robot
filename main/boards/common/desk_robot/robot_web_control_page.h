@@ -1386,7 +1386,7 @@ inline constexpr char kRobotWebControlPage[] = R"CONTROL(<!doctype html>
 </div>
 <div class="column right-column">
 <div class="control-stack">
-<section class="card conversation-card"><div class="conversation-head"><strong>Conversation</strong><div class="conversation-actions"><span id="chatState" class="chat-state">Ready</span><button id="chatClear" class="chat-clear" title="Clear local conversation history">Clear</button></div></div><div id="conversationHistory" class="conversation-history"><div class="conversation-empty">Type or speak to chat with Xiaozhi</div></div><div id="chatError" class="chat-error"></div><div class="chat-compose"><textarea id="chatInput" class="chat-input" rows="1" placeholder="Message Xiaozhi…" aria-label="Chat message"></textarea><button id="chatSend" class="chat-send" disabled>Send</button><div class="chat-meta"><span>Enter to send · Shift+Enter for newline</span><span id="chatCount" class="chat-count">0 / 80</span></div></div></section>
+<section class="card conversation-card"><div class="conversation-head"><strong>Conversation</strong><div class="conversation-actions"><span id="chatState" class="chat-state">Ready</span><button id="chatClear" class="chat-clear" title="Clear local conversation history">Clear</button></div></div><div id="conversationHistory" class="conversation-history"><div class="conversation-empty">Type or speak to chat with Xiaozhi</div></div><div id="chatError" class="chat-error"></div><div class="chat-compose"><textarea id="chatInput" class="chat-input" rows="1" placeholder="Message Xiaozhi…" aria-label="Chat message"></textarea><button id="chatSend" class="chat-send" disabled>Send</button><div class="chat-meta"><span>Enter to send · Shift+Enter for newline</span><span id="chatCount" class="chat-count">0 / 512</span></div></div></section>
 <section id="safety" class="card safety"><div><b>Table edge detected</b><small>Forward and turns are locked. Reverse only.</small></div><button data-stop>STOP</button></section>
 <section class="card"><div class="section-title"><strong>Browser camera</strong><span>VGA · JPEG</span></div><div class="camera-body"><div id="snapshot" class="snapshot"><span>No snapshot yet</span><img id="snapshotImage" alt="Camera snapshot"></div><div class="camera-copy"><p>Still capture or a light ~1 FPS browser preview. Live mode pauses outside Idle.</p><div class="camera-buttons"><button id="takeSnapshot" class="mini-button">Take photo</button><button id="browserLive" class="mini-button">Live</button><button id="liveCamera" class="mini-button" data-action="live_camera">Screen preview</button><button id="cameraFlip" class="mini-button" data-action="camera_flip">Flip camera</button></div><div id="snapshotMeta" class="camera-meta">Camera ready</div></div></div></section>
 <section class="card"><div class="section-title"><strong>Quick actions</strong><span id="danceState">Ready</span></div><div class="actions"><button class="action" id="wakeAction" data-action="wake"><span class="icon">◉</span><span><b id="wakeLabel">Wake</b><small>Start or stop conversation</small></span></button><button class="action" id="idleAction" data-action="return_idle"><span class="icon">○</span><span><b>Return to idle</b><small>Stop activity safely</small></span></button><button class="action" id="danceAction" data-action="dance"><span class="icon">♪</span><span><b>Dance</b><small>30–50 randomized steps</small></span></button><button class="action" id="lightsAction" data-action="lights_toggle"><span class="icon">☀</span><span><b>Status lights</b><small>Toggle Edison LEDs</small></span></button><button class="action" data-action="audio_test"><span class="icon">♫</span><span><b>Audio test</b><small>Play a speaker tone</small></span></button><button class="action danger" data-action="wifi_config"><span class="icon">⌁</span><span><b>Wi-Fi config</b><small>Reconnect this robot</small></span></button><button class="action danger" data-action="reboot"><span class="icon">↯</span><span><b>Reboot</b><small>Restart this robot</small></span></button></div></section>
@@ -1769,10 +1769,14 @@ function renderStatus(j) {
   const remainingMah = Number(j.battery_remaining_mah) || 0,
     totalMah = Number(j.battery_capacity_mah) || 0,
     restState = j.battery_soc_quasi_resting ? ' · quasi-rest correcting' : '',
-    anchorState = j.battery_soc_full_anchored ? ' · full anchored' : '';
+    anchorState = j.battery_soc_full_anchored
+      ? ' · full anchored'
+      : j.battery_soc_empty_anchored
+      ? ' · empty anchored'
+      : '';
   $('#socState').textContent = batteryReady
     ? remainingMah.toFixed(0) + ' mAh remaining · ' + totalMah.toFixed(1) +
-      ' mAh capacity · Coulomb + quasi-rest + full anchor · ' + flow + restState + anchorState +
+      ' mAh capacity · Coulomb + quasi-rest + anchors · ' + flow + restState + anchorState +
       (j.battery_soc_tracking_degraded ? ' · tracking degraded' : '')
     : 'SoC waiting for valid measurement';
   $('#capacityStart').disabled = !j.battery_available || capacityActive;
