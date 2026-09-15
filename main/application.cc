@@ -16,9 +16,106 @@
 #include <arpa/inet.h>
 #include <cJSON.h>
 #include <cstring>
+#include <iterator>
 #include <limits>
+#include <mutex>
 
 #define TAG "Application"
+
+namespace {
+
+constexpr int64_t kTextChatTimeoutUs = 60LL * 1000 * 1000;
+constexpr int64_t kTextChatTtsStopGraceUs = 750LL * 1000;
+constexpr int64_t kTextChatAudioQuietGraceUs = 300LL * 1000;
+constexpr int kTextChatUdpPrimeDelayMs = 50;
+constexpr uint32_t kTextChatUdpPrimeSampleRate = 16000;
+constexpr uint32_t kTextChatUdpPrimeFrameDurationMs = 60;
+
+// Official MQTT validates each listen/detect payload independently, including
+// while a conversation is already active. Keep native detect/text only for
+// very short typed messages; longer Web UI messages use the MCP bridge.
+constexpr size_t kTextChatNativeDetectMaxCodepoints = 12;
+constexpr char kTextChatMcpTrigger[] = "web_chat";
+constexpr char kTextChatMcpToolName[] = "self.web_chat.consume_pending";
+
+size_t CountUtf8Codepoints(const std::string& value) {
+    size_t count = 0;
+    for (unsigned char c : value) {
+        if ((c & 0xC0u) != 0x80u) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+class WebChatMcpBridge {
+   public:
+    void Arm(const std::string& text) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_text_ = text;
+        display_text_ = text;
+    }
+
+    void Clear() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_text_.clear();
+        display_text_.clear();
+    }
+
+    std::string ConsumePending() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::string text = std::move(pending_text_);
+        pending_text_.clear();
+        return text;
+    }
+
+    std::string GetDisplayText() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return display_text_;
+    }
+
+   private:
+    mutable std::mutex mutex_;
+    std::string pending_text_;
+    std::string display_text_;
+};
+
+WebChatMcpBridge g_web_chat_bridge;
+
+bool ShouldUseWebChatMcpBridge(const std::string& text) {
+    return CountUtf8Codepoints(text) > kTextChatNativeDetectMaxCodepoints;
+}
+
+void RegisterWebChatMcpTool(McpServer& mcp_server) {
+    mcp_server.AddTool(
+        kTextChatMcpToolName,
+        "When the user's message is exactly 'web_chat', you MUST call this tool before "
+        "responding. It returns the user's actual typed Web UI message. Treat the returned "
+        "text as the user's real message and answer it normally. Never answer the literal "
+        "trigger word 'web_chat'.",
+        PropertyList(), [](const PropertyList&) -> ToolResult {
+            auto pending = g_web_chat_bridge.ConsumePending();
+            if (pending.empty()) {
+                return std::unexpected("No pending Web UI message");
+            }
+
+            ESP_LOGI(TAG, "TextChat MCP bridge consumed chars=%u bytes=%u",
+                     static_cast<unsigned>(CountUtf8Codepoints(pending)),
+                     static_cast<unsigned>(pending.size()));
+            return pending;
+        });
+}
+
+// Valid Opus frame containing 60 ms of silence at 16 kHz mono.
+// It is sent only to establish the MQTT gateway's UDP return path when a
+// typed conversation starts from Idle. Do not replace this with microphone
+// audio: typed chat must not leak captured audio into the user turn.
+constexpr uint8_t kTextChatUdpPrimeOpusSilence[] = {
+    0x58, 0x02, 0xF9, 0x30, 0x4D, 0xBB, 0x0D, 0xE5, 0xE3, 0x92,
+    0x09, 0x89, 0x38, 0xEB, 0xCA, 0xE1, 0xB1, 0xD1, 0xDD, 0x85,
+};
+
+}  // namespace
 
 Application::Application() : notify_player_(audio_service_) {
     event_group_ = xEventGroupCreate();
@@ -103,6 +200,9 @@ void Application::Initialize() {
     // Add MCP common tools (only once during initialization)
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
+
+    RegisterWebChatMcpTool(mcp_server);
+
     mcp_server.AddUserOnlyTools();
 
     // Set network event callback for UI updates and network state handling
@@ -214,6 +314,7 @@ void Application::Run() {
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
             if (audio_service_.IsPlaybackIdle()) {
                 notify_player_.OnPlaybackDrained();
+                CompleteTextChatAfterPlayback();
             }
             // Deferred listening start (auto mode): the playback queue has
             // drained, so it is now safe to enable voice processing.
@@ -238,6 +339,13 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+                if (text_chat_pending_.load()) {
+                    // Typed text replaces the current microphone turn. Drop
+                    // packets already in flight after capture was disabled.
+                    while (audio_service_.PopPacketFromSendQueue())
+                        ;
+                    break;
+                }
                 if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
                     // Drop the remaining packets. Leaving them in the queue would
                     // stall the Opus codec task (it waits for queue space), which in
@@ -274,6 +382,29 @@ void Application::Run() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
+
+            if (text_chat_tts_stopped_.load()) {
+                CompleteTextChatAfterPlayback();
+            }
+
+            const int64_t text_chat_deadline = text_chat_deadline_us_.load();
+            if (text_chat_pending_.load() && text_chat_deadline > 0 &&
+                esp_timer_get_time() >= text_chat_deadline &&
+                text_chat_pending_.exchange(false)) {
+                text_chat_deadline_us_.store(0);
+                text_chat_tts_active_.store(false);
+                text_chat_tts_stopped_.store(false);
+                g_web_chat_bridge.Clear();
+                ESP_LOGE(TAG, "TextChat rejected reason=timeout");
+                EmitTextChatEvent("error", "Protocol timeout: no TTS response");
+                if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                    if (text_chat_resume_listening_) {
+                        ResumeListeningAfterTextChat();
+                    } else if (GetDeviceState() == kDeviceStateListening) {
+                        SetDeviceState(kDeviceStateIdle);
+                    }
+                }
+            }
 
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
@@ -489,12 +620,19 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10;  // Reset retry delay
 
+#ifdef CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
+        if (ota_->HasNewVersion()) {
+            ESP_LOGW(TAG, "Ignoring official firmware update %s for custom Desk Robot build",
+                     ota_->GetFirmwareVersion().c_str());
+        }
+#else
         if (ota_->HasNewVersion()) {
             if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
                 return;  // This line will never be reached after reboot
             }
             // If upgrade failed, continue to normal operation
         }
+#endif
 
         // No new version, mark the current version as valid
         ota_->MarkCurrentVersionValid();
@@ -545,13 +683,47 @@ void Application::InitializeProtocol() {
 
     protocol_->OnConnected([this]() { DismissAlert(); });
 
-    protocol_->OnNetworkError([this](const std::string& message) {
+    // Protocol callbacks share the same text-chat teardown. Keep it here so
+    // error/alert/network paths cannot drift apart as the feature evolves.
+    const auto fail_text_chat = [this](const std::string& detail, bool restore_state) {
+        if (!text_chat_pending_.exchange(false)) {
+            return false;
+        }
+
+        text_chat_deadline_us_.store(0);
+        text_chat_tts_active_.store(false);
+        text_chat_tts_stopped_.store(false);
+        text_chat_tts_stop_us_.store(0);
+
+        ESP_LOGE(TAG, "TextChat rejected reason=%s", detail.c_str());
+        EmitTextChatEvent("error", detail);
+        g_web_chat_bridge.Clear();
+
+        if (restore_state) {
+            Schedule([this]() {
+                if (text_chat_resume_listening_) {
+                    ResumeListeningAfterTextChat();
+                } else if (GetDeviceState() == kDeviceStateListening) {
+                    SetDeviceState(kDeviceStateIdle);
+                }
+            });
+        }
+        return true;
+    };
+
+    protocol_->OnNetworkError([this, fail_text_chat](const std::string& message) {
+        fail_text_chat(message, false);
         last_error_message_ = message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
+        if (GetDeviceState() == kDeviceStateSpeaking || text_chat_pending_.load() ||
+            text_chat_tts_active_.load()) {
+            if (text_chat_pending_.load() || text_chat_tts_active_.load()) {
+                text_chat_audio_packets_.fetch_add(1);
+                text_chat_last_audio_us_.store(esp_timer_get_time());
+            }
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -566,16 +738,18 @@ void Application::InitializeProtocol() {
         }
     });
 
-    protocol_->OnAudioChannelClosed([this, &board]() {
+    protocol_->OnAudioChannelClosed([this, &board, fail_text_chat]() {
+        fail_text_chat("Audio channel closed", false);
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
+            text_chat_resume_listening_ = false;
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
         });
     });
 
-    protocol_->OnIncomingJson([this, display](const cJSON* root) {
+    protocol_->OnIncomingJson([this, display, fail_text_chat](const cJSON* root) {
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
         if (!cJSON_IsString(type)) {
@@ -621,23 +795,46 @@ void Application::InitializeProtocol() {
                 return;
             }
             if (strcmp(state->valuestring, "start") == 0) {
+                if (text_chat_pending_.load()) {
+                    text_chat_tts_active_.store(true);
+                    text_chat_tts_stopped_.store(false);
+                    ESP_LOGI(TAG, "TextChat TTS started");
+                }
+                EmitTextChatEvent("speaking");
                 Schedule([this]() {
                     aborted_ = false;
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
-                    if (GetDeviceState() == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
-                        } else {
-                            SetDeviceState(kDeviceStateListening);
+                if (text_chat_pending_.load()) {
+                    text_chat_deadline_us_.store(0);
+                    text_chat_tts_stopped_.store(true);
+                    text_chat_tts_stop_us_.store(esp_timer_get_time());
+                    ESP_LOGI(TAG, "TextChat tts/stop audio_packets=%lu",
+                             static_cast<unsigned long>(text_chat_audio_packets_.load()));
+                    Schedule([this]() { CompleteTextChatAfterPlayback(); });
+                } else {
+                    EmitTextChatEvent("completed");
+                    Schedule([this]() {
+                        if (GetDeviceState() == kDeviceStateSpeaking) {
+                            if (listening_mode_ == kListeningModeManualStop) {
+                                SetDeviceState(kDeviceStateIdle);
+                            } else {
+                                SetDeviceState(kDeviceStateListening);
+                            }
                         }
-                    }
-                });
+                    });
+                }
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
+                    if (text_chat_pending_.load()) {
+                        if (!text_chat_assistant_started_.exchange(true)) {
+                            ESP_LOGI(TAG, "TextChat assistant started");
+                        }
+                        ESP_LOGI(TAG, "TextChat tts/sentence_start text=%s", text->valuestring);
+                    }
+                    EmitTextChatEvent("assistant", text->valuestring);
                     std::vector<TextGlyph> glyphs;
                     uint8_t bpp = 0;
                     if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {
@@ -654,14 +851,28 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
+                std::string visible_text = text->valuestring;
+                if (text_chat_pending_.load()) {
+                    ESP_LOGI(TAG, "TextChat incoming STT text=%s", text->valuestring);
+                    if (visible_text == kTextChatMcpTrigger) {
+                        auto original = g_web_chat_bridge.GetDisplayText();
+                        if (!original.empty()) {
+                            visible_text = std::move(original);
+                            ESP_LOGI(TAG,
+                                     "TextChat MCP bridge substituted trigger with original text");
+                        }
+                    }
+                } else {
+                    EmitTextChatEvent("user", text->valuestring);
+                }
                 std::vector<TextGlyph> glyphs;
                 uint8_t bpp = 0;
                 if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {
                     glyphs.clear();
                 }
-                ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([display, message = std::string(text->valuestring),
-                          glyphs = std::move(glyphs), bpp]() {
+                ESP_LOGI(TAG, ">> %s", visible_text.c_str());
+                Schedule([display, message = std::move(visible_text), glyphs = std::move(glyphs),
+                          bpp]() {
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
                 });
@@ -676,6 +887,9 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "mcp") == 0) {
             auto payload = cJSON_GetObjectItem(root, "payload");
             if (cJSON_IsObject(payload)) {
+                if (text_chat_pending_.load()) {
+                    ESP_LOGI(TAG, "TextChat MCP message");
+                }
                 McpServer::GetInstance().ParseMessage(payload);
             }
         } else if (strcmp(type->valuestring, "system") == 0) {
@@ -689,11 +903,18 @@ void Application::InitializeProtocol() {
                     ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
                 }
             }
+        } else if (strcmp(type->valuestring, "error") == 0) {
+            char* encoded = cJSON_PrintUnformatted(root);
+            const std::string detail = encoded != nullptr ? encoded : "Server protocol error";
+            cJSON_free(encoded);
+            fail_text_chat(detail, true);
         } else if (strcmp(type->valuestring, "alert") == 0) {
             auto status = cJSON_GetObjectItem(root, "status");
             auto message = cJSON_GetObjectItem(root, "message");
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
+                fail_text_chat(std::string(status->valuestring) + ": " + message->valuestring,
+                               true);
                 Alert(status->valuestring, message->valuestring, emotion->valuestring,
                       Lang::Sounds::OGG_VIBRATION);
             } else {
@@ -1023,6 +1244,16 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
+            // Idle-origin typed chat is pre-armed synchronously in RunTextChat()
+            // with listen/start plus a deterministic UDP Opus-silence prime.
+            // Microphone/ASR stays disabled until the typed response completes.
+            if (text_chat_pending_.load() && !text_chat_resume_listening_) {
+                pending_listening_start_ = false;
+                audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableWakeWordDetection(false);
+                break;
+            }
+
             // Make sure the audio processor is running
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
                 // For auto mode, wait for the playback queue to drain before enabling
@@ -1046,7 +1277,9 @@ void Application::HandleStateChangedEvent() {
                 // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             }
-            audio_service_.ResetDecoder();
+            if (!text_chat_tts_active_.load()) {
+                audio_service_.ResetDecoder();
+            }
             break;
         case kDeviceStateNotifying:
             display->SetStatus(Lang::Strings::SPEAKING);
@@ -1201,6 +1434,12 @@ void Application::Reboot() {
 }
 
 bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
+#ifdef CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
+    (void)url;
+    (void)version;
+    ESP_LOGW(TAG, "Firmware upgrade is disabled for the custom Desk Robot build");
+    return false;
+#else
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
 
@@ -1257,6 +1496,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         Reboot();
         return true;
     }
+#endif
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {
@@ -1290,6 +1530,236 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             }
         });
     }
+}
+
+bool Application::SubmitTextChat(const std::string& text, std::string& message) {
+    if (text.empty()) {
+        message = "Text chat input is empty";
+        return false;
+    }
+    const auto state = GetDeviceState();
+    if (state != kDeviceStateIdle && state != kDeviceStateListening) {
+        message = "Text chat requires Idle or Listening";
+        return false;
+    }
+    bool expected = false;
+    if (!text_chat_pending_.compare_exchange_strong(expected, true)) {
+        message = "Text chat is already running";
+        return false;
+    }
+
+    text_chat_deadline_us_.store(0);
+    text_chat_tts_active_.store(false);
+    text_chat_tts_stopped_.store(false);
+    text_chat_assistant_started_.store(false);
+    text_chat_audio_packets_.store(0);
+    text_chat_last_audio_us_.store(0);
+    text_chat_tts_stop_us_.store(0);
+
+    const size_t codepoints = CountUtf8Codepoints(text);
+    if (ShouldUseWebChatMcpBridge(text)) {
+        g_web_chat_bridge.Arm(text);
+        ESP_LOGI(TAG, "TextChat MCP bridge armed chars=%u bytes=%u trigger=%s",
+                 static_cast<unsigned>(codepoints), static_cast<unsigned>(text.size()),
+                 kTextChatMcpTrigger);
+        Schedule([this]() { RunTextChat(kTextChatMcpTrigger); });
+    } else {
+        g_web_chat_bridge.Clear();
+        Schedule([this, text]() { RunTextChat(text); });
+    }
+
+    message = "Text chat queued";
+    return true;
+}
+
+void Application::RegisterTextChatCallback(
+    std::function<void(const std::string&, const std::string&)> callback) {
+    text_chat_callback_ = std::move(callback);
+}
+
+void Application::EmitTextChatEvent(const std::string& event, const std::string& text) {
+    if (text_chat_callback_) {
+        text_chat_callback_(event, text);
+    }
+}
+
+void Application::CompleteTextChatAfterPlayback() {
+    if (!text_chat_pending_.load() || !text_chat_tts_stopped_.load()) {
+        return;
+    }
+
+    // TTS control JSON and audio packets may use different transports. On a
+    // newly opened Idle session, tts/stop can arrive before the final Opus
+    // packets. Keep accepting late audio briefly instead of completing while
+    // the decoder queue is only momentarily empty.
+    const int64_t now = esp_timer_get_time();
+    const int64_t stop_time = text_chat_tts_stop_us_.load();
+    const int64_t last_audio_time = text_chat_last_audio_us_.load();
+    if (stop_time == 0 || now - stop_time < kTextChatTtsStopGraceUs ||
+        (last_audio_time > 0 && now - last_audio_time < kTextChatAudioQuietGraceUs) ||
+        !audio_service_.IsPlaybackIdle()) {
+        return;
+    }
+    if (!text_chat_pending_.exchange(false)) {
+        return;
+    }
+    text_chat_deadline_us_.store(0);
+    text_chat_tts_active_.store(false);
+    text_chat_tts_stopped_.store(false);
+    text_chat_tts_stop_us_.store(0);
+    ESP_LOGI(TAG, "TextChat completed audio_packets=%lu",
+             static_cast<unsigned long>(text_chat_audio_packets_.load()));
+    EmitTextChatEvent("completed");
+    g_web_chat_bridge.Clear();
+    if (text_chat_resume_listening_) {
+        ResumeListeningAfterTextChat();
+    } else if (GetDeviceState() == kDeviceStateSpeaking) {
+        listening_mode_ = GetDefaultListeningMode();
+        SetDeviceState(kDeviceStateListening);
+    }
+}
+
+void Application::ResumeListeningAfterTextChat() {
+    if (!text_chat_resume_listening_) {
+        return;
+    }
+    text_chat_resume_listening_ = false;
+    if (!protocol_ || !protocol_->IsAudioChannelOpened()) {
+        return;
+    }
+    listening_mode_ = text_chat_resume_mode_;
+    if (GetDeviceState() == kDeviceStateListening) {
+        StartListeningAudio();
+    } else {
+        SetDeviceState(kDeviceStateListening);
+    }
+}
+
+void Application::RunTextChat(const std::string& text) {
+    if (!text_chat_pending_.load()) {
+        return;
+    }
+
+    const auto reject = [this](const std::string& detail, bool close_channel = false,
+                               bool return_idle = false) {
+        text_chat_pending_.store(false);
+        text_chat_deadline_us_.store(0);
+        text_chat_tts_active_.store(false);
+        text_chat_tts_stopped_.store(false);
+        text_chat_tts_stop_us_.store(0);
+
+        ESP_LOGE(TAG, "TextChat rejected reason=%s", detail.c_str());
+        EmitTextChatEvent("error", detail);
+        g_web_chat_bridge.Clear();
+
+        if (close_channel && protocol_ && protocol_->IsAudioChannelOpened()) {
+            protocol_->CloseAudioChannel();
+        }
+        if (return_idle && GetDeviceState() != kDeviceStateIdle) {
+            SetDeviceState(kDeviceStateIdle);
+        }
+    };
+
+    const auto state = GetDeviceState();
+    if (state != kDeviceStateIdle && state != kDeviceStateListening) {
+        reject("Robot is no longer Idle or Listening");
+        return;
+    }
+    if (!protocol_) {
+        reject("Protocol is not initialized");
+        return;
+    }
+
+    text_chat_resume_listening_ = state == kDeviceStateListening;
+    text_chat_resume_mode_ = listening_mode_;
+    if (text_chat_resume_listening_) {
+        // End microphone capture for this user turn without sending
+        // listen/start or waiting for ASR. A fresh ASR turn starts only after
+        // the typed response has finished playing.
+        pending_listening_start_ = false;
+        audio_service_.EnableVoiceProcessing(false);
+    }
+
+    // The typed request must contain no microphone audio. Discard any encoded
+    // packets already produced before opening or reusing the Xiaozhi channel.
+    while (audio_service_.PopPacketFromSendQueue())
+        ;
+
+    if (!protocol_->IsAudioChannelOpened()) {
+        if (!SetDeviceState(kDeviceStateConnecting)) {
+            reject("Could not enter connecting state");
+            return;
+        }
+        Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        if (!protocol_->OpenAudioChannel()) {
+            reject("Could not open existing protocol channel", false, true);
+            return;
+        }
+    }
+
+    if (protocol_->session_id().empty()) {
+        reject("Session is not ready", true, true);
+        return;
+    }
+
+    audio_service_.ResetDecoder();
+    text_chat_deadline_us_.store(esp_timer_get_time() + kTextChatTimeoutUs);
+
+    if (!text_chat_resume_listening_) {
+        // A typed turn starting from Idle needs a real listening session before
+        // detect/text is injected, but microphone/ASR must remain disabled.
+        listening_mode_ = GetDefaultListeningMode();
+        pending_listening_start_ = false;
+        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableWakeWordDetection(false);
+
+        if (!SetDeviceState(kDeviceStateListening)) {
+            reject("Could not enter listening state", true, true);
+            return;
+        }
+
+        // MQTT carries control JSON, while TTS audio arrives over the UDP audio
+        // channel. The MQTT gateway does not know the device's UDP return address
+        // until the device has sent at least one UDP media packet.
+        //
+        // Do not start/record the microphone just to prime that path. Send one
+        // deterministic, valid 16 kHz mono / 60 ms Opus silence packet instead.
+        // This packet was encoded from 60 ms of zero PCM and is used only to bind
+        // the UDP return path before detect/text is injected.
+        protocol_->SendStartListening(listening_mode_);
+
+        auto prime_packet = std::make_unique<AudioStreamPacket>();
+        prime_packet->sample_rate = kTextChatUdpPrimeSampleRate;
+        prime_packet->frame_duration = kTextChatUdpPrimeFrameDurationMs;
+        prime_packet->timestamp = 0;
+        prime_packet->payload.assign(std::begin(kTextChatUdpPrimeOpusSilence),
+                                     std::end(kTextChatUdpPrimeOpusSilence));
+
+        if (!protocol_->SendAudio(std::move(prime_packet))) {
+            reject("UDP audio prime failed", true, true);
+            return;
+        }
+
+        // Give the UDP gateway a short head start so it can bind the source
+        // address before the MQTT detect/text control message arrives.
+        vTaskDelay(pdMS_TO_TICKS(kTextChatUdpPrimeDelayMs));
+
+        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableWakeWordDetection(false);
+        while (audio_service_.PopPacketFromSendQueue())
+            ;
+
+        ESP_LOGI(TAG, "TextChat Idle-origin: UDP silence prime sent, mic suppressed");
+    }
+
+    ESP_LOGI(TAG, "TextChat: sending detect/text");
+    if (!protocol_->SendWakeWordDetected(text)) {
+        reject("Send failed", true, !text_chat_resume_listening_);
+        return;
+    }
+
+    ESP_LOGI(TAG, "TextChat sent");
+    EmitTextChatEvent("sent");
 }
 
 bool Application::CanEnterSleepMode() {

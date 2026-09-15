@@ -2925,6 +2925,9 @@ private:
                                         heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
                 cJSON_AddNumberToObject(root, "free_psram_bytes",
                                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                if (web_control_server_ != nullptr) {
+                    web_control_server_->AppendConversationStatus(root);
+                }
 
                 char* encoded = cJSON_PrintUnformatted(root);
                 const std::string result = encoded != nullptr ? encoded : R"({"state":"unknown"})";
@@ -2932,7 +2935,16 @@ private:
                 cJSON_Delete(root);
                 return result;
             },
-            std::move(snapshot_handler));
+            std::move(snapshot_handler),
+            [](const std::string& text, std::string& message) {
+                return Application::GetInstance().SubmitTextChat(text, message);
+            });
+        Application::GetInstance().RegisterTextChatCallback(
+            [this](const std::string& event, const std::string& text) {
+                if (web_control_server_ != nullptr) {
+                    web_control_server_->OnChatProbeEvent(event, text);
+                }
+            });
     }
 
     void InitializeButtons() {

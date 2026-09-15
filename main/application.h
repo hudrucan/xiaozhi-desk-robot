@@ -7,6 +7,7 @@
 #include <esp_timer.h>
 
 #include <string>
+#include <atomic>
 #include <mutex>
 #include <deque>
 #include <memory>
@@ -110,6 +111,9 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    bool SubmitTextChat(const std::string& text, std::string& message);
+    void RegisterTextChatCallback(
+        std::function<void(const std::string&, const std::string&)> callback);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -146,6 +150,19 @@ private:
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
 
+    // Web text-chat request lifecycle.
+    std::atomic_bool text_chat_pending_{false};
+    std::atomic<int64_t> text_chat_deadline_us_{0};
+    std::atomic_bool text_chat_tts_active_{false};
+    std::atomic_bool text_chat_tts_stopped_{false};
+    std::atomic_bool text_chat_assistant_started_{false};
+    std::atomic<uint32_t> text_chat_audio_packets_{0};
+    std::atomic<int64_t> text_chat_last_audio_us_{0};
+    std::atomic<int64_t> text_chat_tts_stop_us_{0};
+    std::function<void(const std::string&, const std::string&)> text_chat_callback_;
+    bool text_chat_resume_listening_ = false;
+    ListeningMode text_chat_resume_mode_ = kListeningModeAutoStop;
+
     bool has_server_time_ = false;
     bool aborted_ = false;
     bool assets_version_checked_ = false;
@@ -167,6 +184,10 @@ private:
     void ContinueOpenAudioChannel(ListeningMode mode);
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+    void RunTextChat(const std::string& text);
+    void EmitTextChatEvent(const std::string& event, const std::string& text = "");
+    void CompleteTextChatAfterPlayback();
+    void ResumeListeningAfterTextChat();
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);

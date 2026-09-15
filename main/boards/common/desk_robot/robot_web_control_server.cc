@@ -14,6 +14,7 @@
 #include <cstring>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #define TAG "RobotWebControl"
 
@@ -22,6 +23,9 @@ namespace {
 constexpr size_t kLogBufferSize = 16 * 1024;
 constexpr size_t kLogLineBufferSize = 768;
 constexpr size_t kLogReadChunkSize = 4 * 1024;
+constexpr size_t kChatProbeMaxCodepoints = 80;
+constexpr size_t kConversationMaxBytes = 12 * 1024;
+constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
 
 std::array<char, kLogBufferSize> log_buffer = {};
 std::mutex log_mutex;
@@ -78,7 +82,14 @@ int CaptureLogVprintf(const char* format, va_list args) {
     const int formatted = std::vsnprintf(line.data(), line.size(), format, capture_args);
     va_end(capture_args);
     if (formatted > 0) {
-        AppendLog(line.data(), std::min(static_cast<size_t>(formatted), line.size() - 1));
+        const bool conversation_line =
+            std::strstr(line.data(), "Application: << ") != nullptr ||
+            std::strstr(line.data(), "Application: >> ") != nullptr ||
+            std::strstr(line.data(), "TextChat tts/sentence_start text=") != nullptr ||
+            std::strstr(line.data(), "TextChat incoming STT text=") != nullptr;
+        if (!conversation_line) {
+            AppendLog(line.data(), std::min(static_cast<size_t>(formatted), line.size() - 1));
+        }
     }
     return result;
 }
@@ -87,6 +98,101 @@ void InstallLogCapture() {
     if (!log_capture_installed.exchange(true)) {
         previous_log_vprintf.store(esp_log_set_vprintf(CaptureLogVprintf));
     }
+}
+
+bool DecodeUtf8Codepoint(const std::string& text, size_t& offset, uint32_t& codepoint) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(text.data());
+    const uint8_t first = bytes[offset];
+    size_t length = 0;
+    if (first <= 0x7f) {
+        codepoint = first;
+        length = 1;
+    } else if (first >= 0xc2 && first <= 0xdf) {
+        codepoint = first & 0x1f;
+        length = 2;
+    } else if (first >= 0xe0 && first <= 0xef) {
+        codepoint = first & 0x0f;
+        length = 3;
+    } else if (first >= 0xf0 && first <= 0xf4) {
+        codepoint = first & 0x07;
+        length = 4;
+    } else {
+        return false;
+    }
+    if (offset + length > text.size()) {
+        return false;
+    }
+    for (size_t index = 1; index < length; ++index) {
+        if ((bytes[offset + index] & 0xc0) != 0x80) {
+            return false;
+        }
+        codepoint = (codepoint << 6) | (bytes[offset + index] & 0x3f);
+    }
+    if ((length == 3 && codepoint < 0x800) || (length == 4 && codepoint < 0x10000) ||
+        (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint > 0x10ffff) {
+        return false;
+    }
+    offset += length;
+    return true;
+}
+
+bool IsUnicodeWhitespace(uint32_t codepoint) {
+    return codepoint == 0x20 || (codepoint >= 0x09 && codepoint <= 0x0d) || codepoint == 0x85 ||
+           codepoint == 0xa0 || codepoint == 0x1680 ||
+           (codepoint >= 0x2000 && codepoint <= 0x200a) || codepoint == 0x2028 ||
+           codepoint == 0x2029 || codepoint == 0x202f || codepoint == 0x205f || codepoint == 0x3000;
+}
+
+bool NormalizeChatProbeText(const std::string& input, std::string& output, size_t& count,
+                            std::string& error) {
+    struct CodepointSpan {
+        size_t begin;
+        size_t end;
+        bool whitespace;
+    };
+    std::vector<CodepointSpan> spans;
+    size_t offset = 0;
+    while (offset < input.size()) {
+        const size_t begin = offset;
+        uint32_t codepoint = 0;
+        if (!DecodeUtf8Codepoint(input, offset, codepoint)) {
+            error = "Text must be valid UTF-8";
+            return false;
+        }
+        spans.push_back({begin, offset, IsUnicodeWhitespace(codepoint)});
+    }
+    size_t first = 0;
+    while (first < spans.size() && spans[first].whitespace) {
+        ++first;
+    }
+    size_t last = spans.size();
+    while (last > first && spans[last - 1].whitespace) {
+        --last;
+    }
+    if (first == last) {
+        error = "Text is empty";
+        return false;
+    }
+    count = last - first;
+    if (count > kChatProbeMaxCodepoints) {
+        error = "Text exceeds 80 UTF-8 codepoints";
+        return false;
+    }
+    output.assign(input, spans[first].begin, spans[last - 1].end - spans[first].begin);
+    return true;
+}
+
+void AppendUtf8Bounded(std::string& destination, const std::string& text, size_t maximum_size) {
+    if (destination.size() >= maximum_size || text.empty()) {
+        return;
+    }
+    size_t length = std::min(text.size(), maximum_size - destination.size());
+    if (length < text.size()) {
+        while (length > 0 && (static_cast<uint8_t>(text[length]) & 0xc0) == 0x80) {
+            --length;
+        }
+    }
+    destination.append(text.data(), length);
 }
 
 std::string ReadLogs(uint64_t requested_cursor, uint64_t& next_cursor, bool& reset) {
@@ -115,10 +221,12 @@ std::string ReadLogs(uint64_t requested_cursor, uint64_t& next_cursor, bool& res
 
 RobotWebControlServer::RobotWebControlServer(ActionHandler action_handler,
                                              StatusHandler status_handler,
-                                             SnapshotHandler snapshot_handler)
+                                             SnapshotHandler snapshot_handler,
+                                             ChatProbeHandler chat_probe_handler)
     : action_handler_(std::move(action_handler)),
       status_handler_(std::move(status_handler)),
-      snapshot_handler_(std::move(snapshot_handler)) {
+      snapshot_handler_(std::move(snapshot_handler)),
+      chat_probe_handler_(std::move(chat_probe_handler)) {
     BeginLogCapture();
 }
 
@@ -181,11 +289,25 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleSnapshot,
         .user_ctx = this,
     };
+    const httpd_uri_t chat_probe = {
+        .uri = "/api/chat",
+        .method = HTTP_POST,
+        .handler = HandleChatProbe,
+        .user_ctx = this,
+    };
+    const httpd_uri_t clear_conversation = {
+        .uri = "/api/chat",
+        .method = HTTP_DELETE,
+        .handler = HandleClearConversation,
+        .user_ctx = this,
+    };
     if (httpd_register_uri_handler(server_, &root) != ESP_OK ||
         httpd_register_uri_handler(server_, &status) != ESP_OK ||
         httpd_register_uri_handler(server_, &action) != ESP_OK ||
         httpd_register_uri_handler(server_, &logs) != ESP_OK ||
-        httpd_register_uri_handler(server_, &snapshot) != ESP_OK) {
+        httpd_register_uri_handler(server_, &snapshot) != ESP_OK ||
+        httpd_register_uri_handler(server_, &chat_probe) != ESP_OK ||
+        httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register local control routes");
         Stop();
         return false;
@@ -199,6 +321,82 @@ void RobotWebControlServer::Stop() {
         httpd_stop(server_);
         server_ = nullptr;
     }
+}
+
+void RobotWebControlServer::AppendConversationStatus(cJSON* root) {
+    std::lock_guard<std::mutex> lock(conversation_mutex_);
+    cJSON* conversation = cJSON_AddObjectToObject(root, "conversation");
+    if (conversation == nullptr) {
+        return;
+    }
+    cJSON_AddStringToObject(conversation, "state", conversation_state_.c_str());
+    cJSON_AddStringToObject(conversation, "error", conversation_error_.c_str());
+    cJSON* messages = cJSON_AddArrayToObject(conversation, "messages");
+    if (messages == nullptr) {
+        return;
+    }
+    for (const auto& message : conversation_messages_) {
+        cJSON* item = cJSON_CreateObject();
+        if (item == nullptr) {
+            break;
+        }
+        cJSON_AddNumberToObject(item, "id", message.id);
+        cJSON_AddStringToObject(item, "role", message.role.c_str());
+        cJSON_AddStringToObject(item, "text", message.text.c_str());
+        cJSON_AddItemToArray(messages, item);
+    }
+}
+
+void RobotWebControlServer::TrimConversationLocked() {
+    size_t total_bytes = 0;
+    for (const auto& message : conversation_messages_) {
+        total_bytes += message.text.size();
+    }
+    while (conversation_messages_.size() > 24 ||
+           (total_bytes > kConversationMaxBytes && conversation_messages_.size() > 1)) {
+        total_bytes -= conversation_messages_.front().text.size();
+        conversation_messages_.erase(conversation_messages_.begin());
+    }
+}
+
+void RobotWebControlServer::OnChatProbeEvent(const std::string& event, const std::string& text) {
+    std::lock_guard<std::mutex> lock(conversation_mutex_);
+    if (event == "sent") {
+        conversation_state_ = "Waiting";
+        conversation_error_.clear();
+        assistant_message_open_ = false;
+    } else if (event == "user") {
+        conversation_messages_.push_back({next_conversation_id_++, "user", text});
+        conversation_state_ = "Waiting";
+        conversation_error_.clear();
+        assistant_message_open_ = false;
+    } else if (event == "speaking") {
+        conversation_state_ = "Speaking";
+    } else if (event == "assistant") {
+        if (assistant_message_open_ && !conversation_messages_.empty() &&
+            conversation_messages_.back().role == "assistant") {
+            auto& current = conversation_messages_.back().text;
+            if (!current.empty() && !text.empty() &&
+                current.size() < kConversationMessageMaxBytes) {
+                current.push_back(' ');
+            }
+            AppendUtf8Bounded(current, text, kConversationMessageMaxBytes);
+        } else {
+            std::string bounded_text;
+            AppendUtf8Bounded(bounded_text, text, kConversationMessageMaxBytes);
+            conversation_messages_.push_back(
+                {next_conversation_id_++, "assistant", std::move(bounded_text)});
+            assistant_message_open_ = true;
+        }
+    } else if (event == "completed") {
+        conversation_state_ = "Ready";
+        assistant_message_open_ = false;
+    } else if (event == "error") {
+        conversation_state_ = "Error";
+        conversation_error_ = text;
+        assistant_message_open_ = false;
+    }
+    TrimConversationLocked();
 }
 
 esp_err_t RobotWebControlServer::HandleRoot(httpd_req_t* request) {
@@ -292,6 +490,99 @@ esp_err_t RobotWebControlServer::HandleAction(httpd_req_t* request) {
     cJSON_free(encoded);
     cJSON_Delete(response);
     return SendJson(request, accepted ? "200 OK" : "400 Bad Request", response_body);
+}
+
+esp_err_t RobotWebControlServer::HandleChatProbe(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (!self->chat_probe_handler_) {
+        return SendJson(request, "503 Service Unavailable",
+                        R"({"ok":false,"message":"Text chat unavailable"})");
+    }
+    if (request->content_len <= 0 || request->content_len > 512) {
+        return SendJson(request, "400 Bad Request", R"({"ok":false,"message":"Invalid request"})");
+    }
+
+    std::array<char, 513> body = {};
+    size_t received = 0;
+    while (received < static_cast<size_t>(request->content_len)) {
+        const int result =
+            httpd_req_recv(request, body.data() + received, request->content_len - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return ESP_FAIL;
+        }
+        received += result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), received);
+    const cJSON* text = root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "text") : nullptr;
+    if (!cJSON_IsString(text) || text->valuestring == nullptr) {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request", R"({"ok":false,"message":"Missing text"})");
+    }
+
+    std::string normalized;
+    std::string message;
+    size_t codepoint_count = 0;
+    const bool valid =
+        NormalizeChatProbeText(text->valuestring, normalized, codepoint_count, message);
+    cJSON_Delete(root);
+    bool accepted = false;
+    if (valid) {
+        accepted = self->chat_probe_handler_(normalized, message);
+    }
+    if (accepted) {
+        ESP_LOGI(TAG, "TextChat accepted chars=%u", static_cast<unsigned>(codepoint_count));
+    } else {
+        ESP_LOGW(TAG, "TextChat rejected reason=%s", message.c_str());
+    }
+    {
+        std::lock_guard<std::mutex> lock(self->conversation_mutex_);
+        if (accepted) {
+            self->conversation_messages_.push_back(
+                {self->next_conversation_id_++, "user", normalized});
+            self->TrimConversationLocked();
+            self->conversation_state_ = "Sending";
+            self->conversation_error_.clear();
+            self->assistant_message_open_ = false;
+        } else {
+            self->conversation_state_ = "Error";
+            self->conversation_error_ = message;
+        }
+    }
+
+    cJSON* response = cJSON_CreateObject();
+    if (response == nullptr) {
+        return SendJson(request, "500 Internal Server Error",
+                        R"({"ok":false,"message":"Out of memory"})");
+    }
+    cJSON_AddBoolToObject(response, "ok", accepted);
+    cJSON_AddStringToObject(response, "message", message.c_str());
+    if (valid) {
+        cJSON_AddNumberToObject(response, "codepoints", codepoint_count);
+    }
+    char* encoded = cJSON_PrintUnformatted(response);
+    const std::string response_body = encoded != nullptr ? encoded : R"({"ok":false})";
+    cJSON_free(encoded);
+    cJSON_Delete(response);
+    return SendJson(request, accepted ? "202 Accepted" : "400 Bad Request", response_body);
+}
+
+esp_err_t RobotWebControlServer::HandleClearConversation(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    {
+        std::lock_guard<std::mutex> lock(self->conversation_mutex_);
+        self->conversation_messages_.clear();
+        self->conversation_error_.clear();
+        self->assistant_message_open_ = false;
+        if (self->conversation_state_ == "Error") {
+            self->conversation_state_ = "Ready";
+        }
+    }
+    ESP_LOGI(TAG, "Conversation history cleared");
+    return SendJson(request, "200 OK", R"({"ok":true,"message":"Conversation cleared"})");
 }
 
 esp_err_t RobotWebControlServer::HandleSnapshot(httpd_req_t* request) {

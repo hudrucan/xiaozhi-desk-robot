@@ -140,7 +140,9 @@ void McpServer::AddUserOnlyTools() {
                         return true;
                     });
 
-    // Firmware upgrade
+#ifndef CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
+    // Firmware upgrade is not exposed on custom Desk Robot builds because the
+    // official OTA service cannot provide this fork's board-specific image.
     AddUserOnlyTool(
         "self.upgrade_firmware",
         "Upgrade firmware from a specific URL. This will download and install the firmware, then "
@@ -161,6 +163,7 @@ void McpServer::AddUserOnlyTools() {
 
             return true;
         });
+#endif
 
     // Display control
 #ifdef HAVE_LVGL
