@@ -24,6 +24,7 @@ constexpr size_t kLogBufferSize = 16 * 1024;
 constexpr size_t kLogLineBufferSize = 768;
 constexpr size_t kLogReadChunkSize = 4 * 1024;
 constexpr size_t kChatProbeMaxCodepoints = 512;
+constexpr size_t kChatRequestMaxBytes = 4 * 1024;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
 
@@ -498,11 +499,13 @@ esp_err_t RobotWebControlServer::HandleChatProbe(httpd_req_t* request) {
         return SendJson(request, "503 Service Unavailable",
                         R"({"ok":false,"message":"Text chat unavailable"})");
     }
-    if (request->content_len <= 0 || request->content_len > 512) {
-        return SendJson(request, "400 Bad Request", R"({"ok":false,"message":"Invalid request"})");
+    if (request->content_len <= 0 ||
+        static_cast<size_t>(request->content_len) > kChatRequestMaxBytes) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid request"})");
     }
 
-    std::array<char, 513> body = {};
+    std::vector<char> body(static_cast<size_t>(request->content_len) + 1, '\0');
     size_t received = 0;
     while (received < static_cast<size_t>(request->content_len)) {
         const int result =
