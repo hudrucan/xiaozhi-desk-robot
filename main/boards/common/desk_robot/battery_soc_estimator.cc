@@ -14,7 +14,10 @@ BatterySocEstimator::BatterySocEstimator(const Config& config)
       quasi_rest_voltage_transition_v_(config.quasi_rest_voltage_transition_v),
       quasi_rest_qualification_us_(config.quasi_rest_qualification_us),
       quasi_rest_correction_interval_us_(config.quasi_rest_correction_interval_us),
-      quasi_rest_correction_time_constant_us_(config.quasi_rest_correction_time_constant_us) {}
+      quasi_rest_correction_time_constant_us_(config.quasi_rest_correction_time_constant_us),
+      full_anchor_min_voltage_v_(config.full_anchor_min_voltage_v),
+      full_anchor_taper_current_ma_(config.full_anchor_taper_current_ma),
+      full_anchor_qualification_us_(config.full_anchor_qualification_us) {}
 
 bool BatterySocEstimator::Restore(const PersistedState& state) {
     const int32_t configured_capacity_uah =
@@ -39,6 +42,9 @@ bool BatterySocEstimator::Restore(const PersistedState& state) {
     initialized_ = true;
     ResetIntegrationBaseline();
     ResetQuasiRestQualification();
+    ResetFullAnchorCandidate();
+    full_anchor_charge_seen_ = false;
+    full_anchored_ = false;
     return true;
 }
 
@@ -50,6 +56,9 @@ void BatterySocEstimator::SeedFromVoltage(float battery_voltage_v) {
     initialized_ = true;
     ResetIntegrationBaseline();
     ResetQuasiRestQualification();
+    ResetFullAnchorCandidate();
+    full_anchor_charge_seen_ = false;
+    full_anchored_ = false;
 }
 
 void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, bool motors_idle,
@@ -64,6 +73,7 @@ void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, bool
         previous_current_ma_ = current_ma;
         last_update_us_ = now_us;
         have_previous_current_ = true;
+        UpdateFullAnchor(battery_voltage_v, current_ma, motors_idle, charging, now_us);
         UpdateQuasiRest(battery_voltage_v, current_ma, motors_idle, charging, now_us, 0);
         return;
     }
@@ -74,6 +84,8 @@ void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, bool
         last_update_us_ = now_us;
         tracking_degraded_ = true;
         ResetQuasiRestQualification();
+        ResetFullAnchorCandidate();
+        UpdateFullAnchor(battery_voltage_v, current_ma, motors_idle, charging, now_us);
         UpdateQuasiRest(battery_voltage_v, current_ma, motors_idle, charging, now_us, 0);
         return;
     }
@@ -85,6 +97,7 @@ void BatterySocEstimator::Update(float battery_voltage_v, float current_ma, bool
                                                    0.0, static_cast<double>(usable_capacity_mah_)));
     previous_current_ma_ = current_ma;
     last_update_us_ = now_us;
+    UpdateFullAnchor(battery_voltage_v, current_ma, motors_idle, charging, now_us);
     UpdateQuasiRest(battery_voltage_v, current_ma, motors_idle, charging, now_us, elapsed_us);
 }
 
@@ -95,6 +108,7 @@ void BatterySocEstimator::MarkMeasurementGap() {
     tracking_degraded_ = true;
     ResetIntegrationBaseline();
     ResetQuasiRestQualification();
+    ResetFullAnchorCandidate();
 }
 
 float BatterySocEstimator::GetSocPercent() const {
@@ -165,6 +179,41 @@ void BatterySocEstimator::ResetQuasiRestQualification() {
     have_quasi_rest_previous_sample_ = false;
     quasi_resting_ = false;
     quasi_rest_voltage_soc_percent_ = 0.0f;
+}
+
+void BatterySocEstimator::ResetFullAnchorCandidate() {
+    full_anchor_candidate_started_us_ = 0;
+}
+
+void BatterySocEstimator::UpdateFullAnchor(float battery_voltage_v, float current_ma,
+                                           bool motors_idle, bool charging, int64_t now_us) {
+    if (charging) {
+        full_anchor_charge_seen_ = true;
+    }
+    if (current_ma > 20.0f || battery_voltage_v < full_anchor_min_voltage_v_ - 0.10f) {
+        full_anchor_charge_seen_ = false;
+        full_anchored_ = false;
+    }
+
+    const bool tapering =
+        motors_idle && full_anchor_charge_seen_ &&
+        battery_voltage_v >= full_anchor_min_voltage_v_ &&
+        current_ma >= -full_anchor_taper_current_ma_ && current_ma <= 20.0f;
+    if (!tapering) {
+        ResetFullAnchorCandidate();
+        return;
+    }
+    if (full_anchor_candidate_started_us_ == 0) {
+        full_anchor_candidate_started_us_ = now_us;
+        return;
+    }
+    if (!full_anchored_ &&
+        now_us - full_anchor_candidate_started_us_ >= full_anchor_qualification_us_) {
+        remaining_mah_ = usable_capacity_mah_;
+        tracking_degraded_ = false;
+        full_anchored_ = true;
+        ResetQuasiRestQualification();
+    }
 }
 
 void BatterySocEstimator::UpdateQuasiRest(float battery_voltage_v, float current_ma,

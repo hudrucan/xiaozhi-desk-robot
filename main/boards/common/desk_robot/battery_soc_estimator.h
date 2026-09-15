@@ -18,6 +18,9 @@ public:
         int64_t quasi_rest_qualification_us;
         int64_t quasi_rest_correction_interval_us;
         int64_t quasi_rest_correction_time_constant_us;
+        float full_anchor_min_voltage_v;
+        float full_anchor_taper_current_ma;
+        int64_t full_anchor_qualification_us;
     };
 
     struct PersistedState {
@@ -46,6 +49,7 @@ public:
     bool IsQuasiResting() const { return quasi_resting_; }
     float GetQuasiRestVoltageSocPercent() const { return quasi_rest_voltage_soc_percent_; }
     float GetCumulativeVoltageCorrectionMah() const { return cumulative_voltage_correction_mah_; }
+    bool IsFullAnchored() const { return full_anchored_; }
     PersistedState GetPersistedState() const;
 
     static float EstimatePercentFromVoltage(float voltage_v);
@@ -55,6 +59,9 @@ private:
     void ResetQuasiRestQualification();
     void UpdateQuasiRest(float battery_voltage_v, float current_ma, bool motors_idle, bool charging,
                          int64_t now_us, int64_t elapsed_us);
+    void ResetFullAnchorCandidate();
+    void UpdateFullAnchor(float battery_voltage_v, float current_ma, bool motors_idle,
+                          bool charging, int64_t now_us);
 
     float usable_capacity_mah_;
     float remaining_mah_ = 0.0f;
@@ -73,6 +80,9 @@ private:
     int64_t quasi_rest_qualification_us_;
     int64_t quasi_rest_correction_interval_us_;
     int64_t quasi_rest_correction_time_constant_us_;
+    float full_anchor_min_voltage_v_;
+    float full_anchor_taper_current_ma_;
+    int64_t full_anchor_qualification_us_;
     int64_t quasi_rest_correction_elapsed_us_ = 0;
     int64_t quasi_rest_started_us_ = 0;
     uint32_t quasi_rest_sample_count_ = 0;
@@ -86,4 +96,7 @@ private:
     bool quasi_resting_ = false;
     float quasi_rest_voltage_soc_percent_ = 0.0f;
     float cumulative_voltage_correction_mah_ = 0.0f;
+    int64_t full_anchor_candidate_started_us_ = 0;
+    bool full_anchor_charge_seen_ = false;
+    bool full_anchored_ = false;
 };

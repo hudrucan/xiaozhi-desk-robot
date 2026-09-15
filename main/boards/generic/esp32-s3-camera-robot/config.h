@@ -120,6 +120,13 @@
 #define BATTERY_SOC_QUASI_REST_QUALIFICATION_MS 60000
 #define BATTERY_SOC_QUASI_REST_CORRECTION_INTERVAL_MS 60000
 #define BATTERY_SOC_QUASI_REST_CORRECTION_TIME_CONSTANT_MS (6 * 60 * 60 * 1000)
+// Full-charge taper measured with the installed charger: four LEDs steady at 4.246 V and -97 mA.
+// Require observed charging followed by sustained taper/near-zero current, so high open-circuit
+// voltage alone cannot anchor full. One minute filters startup transients without delaying an
+// already-full cold boot excessively.
+#define BATTERY_SOC_FULL_ANCHOR_MIN_VOLTAGE_V 4.20f
+#define BATTERY_SOC_FULL_ANCHOR_TAPER_CURRENT_MA 150.0f
+#define BATTERY_SOC_FULL_ANCHOR_QUALIFICATION_MS 60000
 #define BATTERY_CAPACITY_LOW_VOLTAGE_V 3.20f
 #define BATTERY_CAPACITY_LOW_VOLTAGE_DURATION_MS 10000
 
