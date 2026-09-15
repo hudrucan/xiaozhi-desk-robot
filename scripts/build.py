@@ -1660,7 +1660,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--language",
         metavar="LOCALE",
-        help="Firmware language locale, for example zh-CN or en-US",
+        help="Firmware language locale: en-US or vi-VN",
     )
     parser.add_argument(
         "--wake-word",
