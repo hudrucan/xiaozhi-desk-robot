@@ -131,7 +131,7 @@ constexpr std::array<MouthGeometry, 6> kMouthGeometries = {{
     {"happy", 75, 109, 91, 42, 13, 224, -42, 72, kHappyMouth, std::size(kHappyMouth)},
     {"bored", 79, 116, 83, 26, 14, 256, -20, 80, kBoredMouth, std::size(kBoredMouth)},
     {"sleepy", 76, 120, 89, 33, -2, 256, 34, 112, kSleepyMouth, std::size(kSleepyMouth)},
-    {"surprised", 85, 116, 70, 56, -3, 256, -14, 64, kSurprisedMouth, std::size(kSurprisedMouth)},
+    {"surprised", 85, 116, 70, 56, 9, 256, -14, 64, kSurprisedMouth, std::size(kSurprisedMouth)},
     {"angry", 74, 121, 93, 32, 13, 256, -24, 72, kAngryMouth, std::size(kAngryMouth)},
 }};
 
@@ -185,6 +185,13 @@ int TimedValue(int from, int target, int64_t started_us, int duration_ms, int64_
     const int64_t duration_us = static_cast<int64_t>(duration_ms) * 1000;
     const int64_t elapsed_us = std::clamp<int64_t>(now_us - started_us, 0, duration_us);
     return from + (target - from) * elapsed_us / duration_us;
+}
+
+int TriangleWave(uint16_t phase, int period, int amplitude) {
+    const int position = phase % period;
+    const int half = period / 2;
+    const int ramp = position < half ? position : period - position;
+    return ramp * amplitude * 2 / half - amplitude;
 }
 }  // namespace
 
@@ -990,8 +997,21 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
         lv_obj_set_style_transform_pivot_y(mouth_, pivot_y, 0);
     }
     const int layout_scale = 192 + face_layout_progress_ * 64 / 256;
-    const int scale_x = layout_scale * (256 - yawn_amount_ * 24 / 256) / 256;
-    const int deformation_y = geometry->base_scale_y + yawn_amount_ * 160 / 256 +
+    int expression_scale_x = 256;
+    int expression_deformation_y = 0;
+    if (emotion == "surprised") {
+        const int pulse = TriangleWave(animation_phase_, 30, 2);
+        expression_scale_x += pulse * 2;
+        expression_deformation_y += pulse * 5;
+    } else if (emotion == "angry") {
+        const int tension = TriangleWave(animation_phase_, 40, 2);
+        expression_scale_x -= tension * 3;
+        expression_deformation_y += tension * 3;
+    }
+    const int scale_x =
+        layout_scale * (256 - yawn_amount_ * 24 / 256) / 256 * expression_scale_x / 256;
+    const int deformation_y = geometry->base_scale_y + expression_deformation_y +
+                              yawn_amount_ * 160 / 256 +
                               mouth_motion_amount_ * geometry->idle_open_scale_y / 256 +
                               blink_amount * geometry->blink_scale_y / 100;
     const int scale_y = layout_scale * deformation_y / 256;
@@ -1177,13 +1197,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
     EyeTarget left{{74, 54, -48, -59, 0}};
     EyeTarget right{{74, 54, 48, -59, 0}};
 
-    const auto triangle = [](uint16_t phase, int period, int amplitude) {
-        const int position = phase % period;
-        const int half = period / 2;
-        const int ramp = position < half ? position : period - position;
-        return ramp * amplitude * 2 / half - amplitude;
-    };
-    const int gentle = triangle(animation_phase_, 32, 2);
+    const int gentle = TriangleWave(animation_phase_, 32, 2);
 
     switch (face_state_) {
         case FaceState::kListening:
@@ -1191,7 +1205,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             right.geometry = {78, 54 + gentle, 48, -59, 0};
             break;
         case FaceState::kSpeaking: {
-            const int voice = triangle(animation_phase_, 18, 5);
+            const int voice = TriangleWave(animation_phase_, 18, 5);
             left.geometry = {70, 43 + voice, -48, -59, 0};
             right.geometry = {70, 43 - voice, 48, -59, 0};
             break;
@@ -1205,21 +1219,23 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             right.geometry = {74, 43, 47, -56 + gentle, 0, -5, -17};
             break;
         case FaceState::kLaughing: {
-            const int bounce = triangle(animation_phase_, 16, 4);
+            const int bounce = TriangleWave(animation_phase_, 16, 4);
             left.geometry = {76, 38, -47, -54 + bounce, 0, -9, -19, -2};
             right.geometry = {76, 38, 47, -54 + bounce, 0, -9, -19, 2};
             break;
         }
         case FaceState::kFunny: {
-            const int sway = triangle(animation_phase_, 30, 4);
+            const int sway = TriangleWave(animation_phase_, 30, 4);
             left.geometry = {54, 61, -48 + sway, -61, -60, 0, -3};
             right.geometry = {72, 40, 48 + sway, -54, 40, -5, -18};
             break;
         }
-        case FaceState::kAngry:
-            left.geometry = {74, 43, -45, -55, 0, 2, 0, 12};
-            right.geometry = {74, 43, 45, -55, 0, 2, 0, -12};
+        case FaceState::kAngry: {
+            const int tension = TriangleWave(animation_phase_, 40, 2);
+            left.geometry = {74, 43, -45 + tension, -55 + tension / 2, 0, 2, 0, 12};
+            right.geometry = {74, 43, 45 - tension, -55 + tension / 2, 0, 2, 0, -12};
             break;
+        }
         case FaceState::kSad:
             left.geometry = {72, 49, -47, -55, 0, 10, 0, -9};
             right.geometry = {72, 49, 47, -55, 0, 10, 0, 9};
@@ -1229,7 +1245,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             right.geometry = {72, 49, 47, -55 + gentle, 0, 10, 0, 9, 18};
             break;
         case FaceState::kLoving: {
-            const int pulse = triangle(animation_phase_, 36, 2);
+            const int pulse = TriangleWave(animation_phase_, 36, 2);
             left.geometry = {62 + pulse, 48 + pulse, -40, -57, 60, -4, -12, 2};
             right.geometry = {62 + pulse, 48 + pulse, 40, -57, -60, -4, -12, -2};
             break;
@@ -1238,12 +1254,15 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             left.geometry = {59, 38, -51, -47 + gentle, 0, 8, -3, -5};
             right.geometry = {59, 38, 41, -47 + gentle, 0, 8, -3, 5};
             break;
-        case FaceState::kSurprised:
-            left.geometry = {49, 65, -44, -57, 0};
-            right.geometry = {49, 65, 44, -57, 0};
+        case FaceState::kSurprised: {
+            const int pulse = TriangleWave(animation_phase_, 30, 2);
+            const int spread = pulse / 2;
+            left.geometry = {49, 65, -44 - spread, -57, 0};
+            right.geometry = {49, 65, 44 + spread, -57, 0};
             break;
+        }
         case FaceState::kShocked: {
-            const int tremble = triangle(animation_phase_, 10, 2);
+            const int tremble = TriangleWave(animation_phase_, 10, 2);
             left.geometry = {59, 69, -44 + tremble, -57, 0};
             right.geometry = {49, 72, 44 + tremble, -59, 0};
             break;
@@ -1261,7 +1280,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             right.geometry = {71, 40, 47, -54 + gentle, 0, 4, -6};
             break;
         case FaceState::kDelicious: {
-            const int savor = triangle(animation_phase_, 32, 3);
+            const int savor = TriangleWave(animation_phase_, 32, 3);
             left.geometry = {69, 41, -45, -54 + savor, 0, -4, -15};
             right.geometry = {69, 41, 45, -54 - savor, 0, -4, -15};
             break;
@@ -1279,7 +1298,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             right.geometry = {71, 28, 46, -48 + gentle, 0, 7, 0};
             break;
         case FaceState::kSilly: {
-            const int sway = triangle(animation_phase_, 24, 4);
+            const int sway = TriangleWave(animation_phase_, 24, 4);
             left.geometry = {48, 62, -48 + sway, -64, 80, 0, 0, -3};
             right.geometry = {77, 33, 48 + sway, -46, -80, 2, -8};
             break;
@@ -1293,7 +1312,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             right.geometry = {63, 43, 54, -59, 0, 9, 0, -3};
             break;
         case FaceState::kShake: {
-            const int shake = triangle(animation_phase_, 12, 11);
+            const int shake = TriangleWave(animation_phase_, 12, 11);
             left.geometry = {72, 46, -48 + shake, -57, 0};
             right.geometry = {72, 46, 48 + shake, -57, 0};
             break;
