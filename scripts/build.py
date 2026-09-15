@@ -395,21 +395,8 @@ _DISPLAY_STYLE_SYMBOLS = {
     "wechat": "CONFIG_USE_WECHAT_MESSAGE_STYLE",
     "emote": "CONFIG_USE_EMOTE_MESSAGE_STYLE",
 }
-_DYNAMIC_CAMERA_MIRROR_BOARD_CONFIGS = {
-    # These boards intentionally change orientation at runtime according to the
-    # detected sensor or persisted device state. A compile-time override would
-    # be misleading because that runtime decision would win afterwards.
-    "CONFIG_BOARD_TYPE_DF_S3_AI_CAM",
-    "CONFIG_BOARD_TYPE_ESP_SPARKBOT",
-    "CONFIG_BOARD_TYPE_M5STACK_ATOM_S3R_CAM_M12_ECHO_BASE",
-    "CONFIG_BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER",
-}
-_OPTIONAL_CAMERA_ENABLE_SYMBOLS = {
-    # ESP-VOCAT only constructs EspVideo when its optional USB UVC transport
-    # is enabled. Do not advertise mirror controls for the camera-less default
-    # build, but expose them automatically for an explicitly enabled variant.
-    "CONFIG_BOARD_TYPE_ESP_VOCAT": "CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE",
-}
+_DYNAMIC_CAMERA_MIRROR_BOARD_CONFIGS: set[str] = set()
+_OPTIONAL_CAMERA_ENABLE_SYMBOLS: dict[str, str] = {}
 # Match both `new Esp32Camera` and `new (std::nothrow) Esp32Camera` (and EspVideo).
 _COMMON_CAMERA_CONSTRUCTOR_RE = re.compile(
     r"\bnew(?:\s*\(\s*std::nothrow\s*\))?\s+Esp(?:32Camera|Video)\b"
