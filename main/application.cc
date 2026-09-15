@@ -455,8 +455,7 @@ void Application::HandleActivationDoneEvent() {
     const bool has_error = !last_error_message_.empty();
     if (!has_error) {
         auto display = Board::GetInstance().GetDisplay();
-        std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
-        display->ShowNotification(message.c_str());
+        display->ShowNotification("All systems nominal.");
         display->SetChatMessage("system", "");
     }
 
@@ -601,21 +600,7 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10;  // Reset retry delay
 
-#ifdef CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
-        if (ota_->HasNewVersion()) {
-            ESP_LOGW(TAG, "Ignoring official firmware update %s for custom Desk Robot build",
-                     ota_->GetFirmwareVersion().c_str());
-        }
-#else
-        if (ota_->HasNewVersion()) {
-            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
-                return;  // This line will never be reached after reboot
-            }
-            // If upgrade failed, continue to normal operation
-        }
-#endif
-
-        // No new version, mark the current version as valid
+        // Bootstrap/config fetch succeeded; confirm the currently running image.
         ota_->MarkCurrentVersionValid();
         if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
             // Exit the loop if done checking new version
@@ -1399,72 +1384,6 @@ void Application::Reboot() {
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
-}
-
-bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
-#ifdef CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
-    (void)url;
-    (void)version;
-    ESP_LOGW(TAG, "Firmware upgrade is disabled for the custom Desk Robot build");
-    return false;
-#else
-    auto& board = Board::GetInstance();
-    auto display = board.GetDisplay();
-
-    std::string upgrade_url = url;
-    std::string version_info = version.empty() ? "(Manual upgrade)" : version;
-
-    if (GetDeviceState() == kDeviceStateNotifying) {
-        StopNotification();
-    }
-
-    // Close audio channel if it's open
-    if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        ESP_LOGI(TAG, "Closing audio channel before firmware upgrade");
-        protocol_->CloseAudioChannel();
-    }
-    ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
-
-    Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download",
-          Lang::Sounds::OGG_UPGRADE);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-
-    SetDeviceState(kDeviceStateUpgrading);
-
-    std::string message = std::string(Lang::Strings::NEW_VERSION) + version_info;
-    display->SetChatMessage("system", message.c_str());
-
-    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-    audio_service_.Stop();
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    bool upgrade_success = Ota::Upgrade(upgrade_url, [this, display](int progress, size_t speed) {
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-        Schedule([display, message = std::string(buffer)]() {
-            display->SetChatMessage("system", message.c_str());
-        });
-    });
-
-    if (!upgrade_success) {
-        // Upgrade failed, restart audio service and continue running
-        ESP_LOGE(TAG,
-                 "Firmware upgrade failed, restarting audio service and continuing operation...");
-        audio_service_.Start();                              // Restart audio service
-        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);  // Restore power save level
-        Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "cancel",
-              Lang::Sounds::OGG_EXCLAMATION);
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        return false;
-    } else {
-        // Upgrade success, reboot immediately
-        ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
-        display->SetChatMessage("system", "Upgrade successful, rebooting...");
-        vTaskDelay(pdMS_TO_TICKS(1000));  // Brief pause to show message
-        Reboot();
-        return true;
-    }
-#endif
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {

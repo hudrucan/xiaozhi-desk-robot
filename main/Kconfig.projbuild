@@ -4,7 +4,7 @@ config OTA_URL
     string "Default OTA URL"
     default "https://api.tenclass.net/xiaozhi/ota/"
     help
-        The application will access this URL to check for new firmwares and server address.
+        The application will access this URL to retrieve activation and server connection configuration.
 
 choice
     prompt "Flash Assets"
