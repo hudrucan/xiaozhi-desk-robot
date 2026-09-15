@@ -998,7 +998,6 @@ def _select_variants_for_changes(
         "scripts/build_default_assets.py",
         "scripts/build.py",
         "scripts/gen_lang.py",
-        "scripts/versions.py",
     }
 
     for raw_path in changed_files:
