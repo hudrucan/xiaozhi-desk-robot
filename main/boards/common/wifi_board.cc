@@ -17,9 +17,6 @@
 #include <wifi_manager.h>
 #include <wifi_station.h>
 #include <ssid_manager.h>
-#ifdef CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
-#include "blufi.h"
-#endif
 
 static const char *TAG = "WifiBoard";
 
@@ -119,10 +116,6 @@ void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {
         case NetworkEvent::Connected:
             // Stop timeout timer
             esp_timer_stop(connect_timer_);
-#ifdef CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
-            // make sure blufi resources has been released
-            Blufi::GetInstance().deinit();
-#endif
             in_config_mode_ = false;
             ESP_LOGI(TAG, "Connected to WiFi: %s", data.c_str());
             break;
@@ -171,7 +164,6 @@ void WifiBoard::StartWifiConfigMode() {
     in_config_mode_ = true;
     // Transition to wifi configuring state
     Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);
-#ifdef CONFIG_USE_HOTSPOT_WIFI_PROVISIONING
     auto& wifi_manager = WifiManager::GetInstance();
 
     wifi_manager.StartConfigAp();
@@ -185,11 +177,6 @@ void WifiBoard::StartWifiConfigMode() {
 
         Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "gear", Lang::Sounds::OGG_WIFICONFIG);
     });
-#elif CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
-    auto &blufi = Blufi::GetInstance();
-    // initialize esp-blufi protocol
-    blufi.init();
-#endif
 }
 
 void WifiBoard::EnterWifiConfigMode() {

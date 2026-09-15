@@ -164,24 +164,6 @@ config USE_AUDIO_DEBUGGER
     help
         Enable audio debugger, send audio data through UDP to the host machine
 
-menu "WiFi Configuration Method"
-    help
-        WiFi Configuration Method Selection
-    config USE_HOTSPOT_WIFI_PROVISIONING
-        bool "Hotspot"
-        default y
-        help
-            Use WiFi Hotspot to transmit WiFi configuration data
-    config USE_ESP_BLUFI_WIFI_PROVISIONING
-        bool "ESP-BluFi"
-        select BT_ENABLED
-        select BT_BLE_42_FEATURES_SUPPORTED
-        select BT_BLE_BLUFI_ENABLE
-        help
-            Use the PSA Crypto based BluFi security protocol adopted by ESP-IDF 6.
-            The provisioning client must support ffdhe3072, SHA-256, and AES-CTR.
-endmenu
-
 config AUDIO_DEBUG_UDP_SERVER
     string "Audio Debug UDP Server Address"
     default "192.168.2.100:8000"

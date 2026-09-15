@@ -7,8 +7,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Keep this lightweight header independent from esp_video's Linux compatibility
-// headers. esp_video 2.0.x and lwIP both define ioctl macros under ESP-IDF 6.
+// Keep this lightweight header independent from Linux compatibility headers;
+// their ioctl definitions can conflict with lwIP under ESP-IDF 6.
 #ifndef V4L2_PIX_FMT_RGB565
 #define V4L2_PIX_FMT_RGB565 0x50424752  // 'RGBP'
 #define V4L2_PIX_FMT_RGB565X 0x52474250 // 'PRGB'

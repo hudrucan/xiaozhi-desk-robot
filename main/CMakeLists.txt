@@ -127,10 +127,6 @@ list(APPEND INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}"
 )
 
-# Auto Select Additional Sources
-if (CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
-    list(APPEND SOURCES "boards/common/blufi.cpp")
-endif ()
 # Select language directory according to Kconfig
 if(CONFIG_LANGUAGE_EN_US)
     set(LANG_DIR "en-US")
@@ -168,7 +164,6 @@ endif()
 
 file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
 
-set(MAIN_PRIV_REQUIRES_EXTRA esp_http_server)
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
@@ -176,27 +171,18 @@ idf_component_register(SRCS ${SOURCES}
                     PRIV_REQUIRES
                         esp_pm
                         esp_psram
-                        esp_netif
-                        esp_eth
                         esp_driver_gpio
-                        esp_driver_uart
                         esp_driver_spi
                         esp_driver_i2c
                         esp_driver_i2s
                         esp_driver_ledc
-                        esp_driver_jpeg
-                        esp_driver_ppa
-                        esp_driver_tsens
                         esp_app_format
                         app_update
                         spi_flash
                         mbedtls
-                        console
                         efuse
-                        bt
-                        fatfs
                         xiaozhi-fonts
-                        ${MAIN_PRIV_REQUIRES_EXTRA}
+                        esp_http_server
                     )
 
 # Keep project-owned C++ on GNU C++23. ESP-IDF 6 may default to a newer

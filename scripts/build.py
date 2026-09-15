@@ -510,24 +510,6 @@ def _build_option_definitions(
             },
         ))
 
-    # ESP32-P4 obtains networking through a companion chip and cannot enable
-    # the local ESP-BluFi stack selected by this project option.
-    if target != "esp32p4" and ("wifi_board.h" in source or re.search(r"\bWifiBoard\b", source)):
-        definitions.append({
-            "key": "wifi_provisioning",
-            "type": "select",
-            "default": (
-                "blufi"
-                if assignments.get("CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING") == "y"
-                and assignments.get("CONFIG_USE_HOTSPOT_WIFI_PROVISIONING") == "n"
-                else "hotspot"
-            ),
-            "choices": [
-                {"value": "hotspot", "label": "Wi-Fi hotspot"},
-                {"value": "blufi", "label": "ESP-BluFi"},
-            ],
-        })
-
     camera_enable_symbol = _OPTIONAL_CAMERA_ENABLE_SYMBOLS.get(board_config)
     has_common_camera = (
         _COMMON_CAMERA_CONSTRUCTOR_RE.search(source) is not None
@@ -627,13 +609,6 @@ def _build_options_sdkconfig(
         ))
         if device:
             result.append("CONFIG_USE_AUDIO_PROCESSOR=y")
-
-    if "wifi_provisioning" in options:
-        blufi = options["wifi_provisioning"] == "blufi"
-        result.extend((
-            f"CONFIG_USE_HOTSPOT_WIFI_PROVISIONING={'n' if blufi else 'y'}",
-            f"CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING={'y' if blufi else 'n'}",
-        ))
 
     if "camera_hmirror" in options or "camera_vflip" in options:
         result.extend((
@@ -1118,19 +1093,6 @@ def _resolve_board_config(
     )
 
 
-# Kconfig "select" entries are not automatically applied when we simply append
-# sdkconfig lines from config.json, so add the required dependencies here to
-# mimic menuconfig behaviour.
-_AUTO_SELECT_RULES: dict[str, list[str]] = {
-    "CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING": [
-        "CONFIG_BT_ENABLED=y",
-        "CONFIG_BT_BLUEDROID_ENABLED=y",
-        "CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y",
-        "CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n",
-        "CONFIG_BT_BLE_BLUFI_ENABLE=y",
-    ],
-}
-
 # sdkconfig.defaults.esp32s3 keeps a 1MB LVGL TLSF pool for PSRAM. Without
 # PSRAM that pool becomes a .dram0.bss array and overflows internal SRAM.
 _NO_SPIRAM_LVGL_OPTIONS = [
@@ -1139,20 +1101,9 @@ _NO_SPIRAM_LVGL_OPTIONS = [
 ]
 
 
-def _apply_auto_selects(sdkconfig_append: list[str]) -> list[str]:
-    """Apply hardcoded auto-select rules to sdkconfig_append."""
+def _apply_derived_sdkconfig_options(sdkconfig_append: list[str]) -> list[str]:
+    """Apply sdkconfig options implied by the selected hardware configuration."""
     items = list(sdkconfig_append)
-
-    # Apply auto-select rules
-    for key, deps in _AUTO_SELECT_RULES.items():
-        for entry in sdkconfig_append:
-            name, _, value = entry.partition("=")
-            if name == key and value.lower().startswith("y"):
-                # A board preset may explicitly disable a dependency. Kconfig's
-                # select would override it, so the generated defaults fragment
-                # must do the same instead of keeping the earlier value.
-                items = _merge_sdkconfig_options(items, deps)
-                break
 
     assignments = _sdkconfig_assignments(items)
     if assignments.get("CONFIG_SPIRAM") == "n":
@@ -1484,7 +1435,7 @@ def build_board(
             sdkconfig_append,
             user_options,
         )
-        sdkconfig_append = _apply_auto_selects(sdkconfig_append)
+        sdkconfig_append = _apply_derived_sdkconfig_options(sdkconfig_append)
 
         print("-" * 80)
         print(f"name: {final_name}")
