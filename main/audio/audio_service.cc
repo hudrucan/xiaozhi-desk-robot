@@ -19,11 +19,7 @@
         .self_delimited = false,                                                           \
     }
 
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
 #include "engines/afe_audio_engine.h"
-#else
-#include "engines/lite_audio_engine.h"
-#endif
 
 #define TAG "AudioService"
 
@@ -81,11 +77,7 @@ void AudioService::Initialize(AudioCodec* codec) {
         }
     }
 
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31
     audio_engine_ = std::make_unique<AfeAudioEngine>();
-#else
-    audio_engine_ = std::make_unique<LiteAudioEngine>();
-#endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
@@ -698,13 +690,6 @@ void AudioService::EnableWakeWordDetection(bool enable) {
             xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
             return;
         }
-#if !(CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31)
-        auto* lite_engine = static_cast<LiteAudioEngine*>(audio_engine_.get());
-        if (!lite_engine->RestoreWakeWordResources()) {
-            xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
-            return;
-        }
-#endif
         if (!audio_engine_->HasWakeWord()) {
             xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
             return;
@@ -725,19 +710,7 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     }
 }
 
-void AudioService::ReleaseWakeWordResources() {
-#if !(CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32S31)
-    if (!audio_engine_initialized_) {
-        return;
-    }
-    if (xEventGroupGetBits(event_group_) &
-        (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
-        ESP_LOGW(TAG, "Cannot release WakeNet while the audio engine is active");
-        return;
-    }
-    static_cast<LiteAudioEngine*>(audio_engine_.get())->ReleaseWakeWordResources();
-#endif
-}
+void AudioService::ReleaseWakeWordResources() {}
 
 void AudioService::EnableVoiceProcessing(bool enable) {
     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");

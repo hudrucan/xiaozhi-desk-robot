@@ -25,7 +25,6 @@
 // Small Edison/status LED. It originally shared GPIO14 with the optional
 // WS2812 strip; the strip is omitted and the LED is driven by PWM on GPIO48.
 #define BUILTIN_LED_GPIO GPIO_NUM_48
-#define BUILTIN_LED_COUNT 1
 #define BUILTIN_LED_OUTPUT_INVERT false
 #define BUILTIN_LED_LEDC_TIMER LEDC_TIMER_2
 #define BUILTIN_LED_LEDC_CHANNEL LEDC_CHANNEL_2
@@ -81,7 +80,6 @@
 #define CAMERA_PIN_PWDN GPIO_NUM_NC
 #define CAMERA_PIN_RESET GPIO_NUM_NC
 #define CAMERA_XCLK_FREQ_HZ 20000000
-#define DESK_ROBOT_USE_ESP32_CAMERA 1
 
 // Downward-facing VL53L0X cliff sensor sharing the camera SCCB/I2C bus.
 #define DISTANCE_SENSOR_SDA_PIN GPIO_NUM_4

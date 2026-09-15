@@ -6,16 +6,11 @@
 #include "codecs/no_audio_codec.h"
 #include "config.h"
 #include "display/lcd_display.h"
-#ifdef DESK_ROBOT_USE_ESP32_CAMERA
 #include "esp32_camera.h"
-#else
-#include "esp_video.h"
-#endif
 #ifdef INA219_I2C_ADDRESS
 #include "battery_soc_estimator.h"
 #include "ina219_power_monitor.h"
 #endif
-#include "led/circular_strip.h"
 #include "led/gpio_led.h"
 #include "mcp_server.h"
 #include "mochan_display.h"
@@ -99,13 +94,8 @@ extern "C" {
 #define MPU6050_YAW_SIGN 1.0f
 #endif
 
-#ifdef DESK_ROBOT_USE_ESP32_CAMERA
 using DeskRobotCameraBase = Esp32Camera;
 using DeskRobotCameraConfig = camera_config_t;
-#else
-using DeskRobotCameraBase = EspVideo;
-using DeskRobotCameraConfig = esp_video_init_config_t;
-#endif
 
 class DeskRobotCamera : public DeskRobotCameraBase {
 public:
@@ -136,7 +126,6 @@ public:
         return DeskRobotCameraBase::Capture();
     }
 
-#ifdef DESK_ROBOT_USE_ESP32_CAMERA
     bool SendWebSnapshot(const RobotWebControlServer::SnapshotSender& sender) {
         std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
         if (!lock.try_lock_for(std::chrono::seconds(7)) || mcp_frame_reserved_) {
@@ -149,15 +138,8 @@ public:
         size_t length = 0;
         return DeskRobotCameraBase::GetCurrentJpeg(data, length) && sender(data, length);
     }
-#endif
 
-    bool IsAvailable() const {
-#ifdef DESK_ROBOT_USE_ESP32_CAMERA
-        return DeskRobotCameraBase::IsAvailable();
-#else
-        return true;
-#endif
-    }
+    bool IsAvailable() const { return DeskRobotCameraBase::IsAvailable(); }
 
     std::expected<std::string, std::string> Explain(const std::string& question) override {
         std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
@@ -1398,7 +1380,6 @@ private:
     }
 
     void InitializeCamera() {
-#ifdef DESK_ROBOT_USE_ESP32_CAMERA
         camera_config_t config = {};
         config.pin_d0 = CAMERA_PIN_D0;
         config.pin_d1 = CAMERA_PIN_D1;
@@ -1434,55 +1415,6 @@ private:
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode = CAMERA_GRAB_LATEST;
         camera_ = new DeskRobotCamera(config);
-#else
-        static esp_cam_ctlr_dvp_pin_config_t dvp_pin_config = {
-            .data_width = CAM_CTLR_DATA_WIDTH_8,
-            .data_io =
-                {
-                    [0] = CAMERA_PIN_D0,
-                    [1] = CAMERA_PIN_D1,
-                    [2] = CAMERA_PIN_D2,
-                    [3] = CAMERA_PIN_D3,
-                    [4] = CAMERA_PIN_D4,
-                    [5] = CAMERA_PIN_D5,
-                    [6] = CAMERA_PIN_D6,
-                    [7] = CAMERA_PIN_D7,
-                },
-            .vsync_io = CAMERA_PIN_VSYNC,
-            .de_io = CAMERA_PIN_HREF,
-            .pclk_io = CAMERA_PIN_PCLK,
-            .xclk_io = CAMERA_PIN_XCLK,
-        };
-
-        esp_video_init_sccb_config_t sccb_config = {
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-            .init_sccb = false,
-            .i2c_handle = camera_i2c_bus_,
-#else
-            .init_sccb = true,
-            .i2c_config =
-                {
-                    .port = 0,
-                    .scl_pin = CAMERA_PIN_SIOC,
-                    .sda_pin = CAMERA_PIN_SIOD,
-                },
-#endif
-            .freq = 100000,
-        };
-
-        esp_video_init_dvp_config_t dvp_config = {
-            .sccb_config = sccb_config,
-            .reset_pin = CAMERA_PIN_RESET,
-            .pwdn_pin = CAMERA_PIN_PWDN,
-            .dvp_pin = dvp_pin_config,
-            .xclk_freq = CAMERA_XCLK_FREQ_HZ,
-        };
-
-        esp_video_init_config_t video_config = {
-            .dvp = &dvp_config,
-        };
-        camera_ = new DeskRobotCamera(video_config);
-#endif
 
         Settings settings("desk_robot", false);
         const bool flipped = settings.GetBool("camera_flip", false);
@@ -2155,7 +2087,6 @@ private:
 #endif
 
     bool QueueStatusLightEffect(const std::string& effect, int duration_ms) {
-#if BUILTIN_LED_COUNT == 1
         GpioLed::EffectOverride override = GpioLed::EffectOverride::kNone;
         if (effect == "steady") {
             override = GpioLed::EffectOverride::kSteady;
@@ -2177,9 +2108,6 @@ private:
                 esp_timer_start_once(light_effect_reset_timer_, safe_duration * 1000ULL));
         }
         return true;
-#else
-        return false;
-#endif
     }
 
     void InitializeInteractionTimers() {
@@ -2207,7 +2135,6 @@ private:
         };
         ESP_ERROR_CHECK(esp_timer_create(&oled_args, &oled_text_reset_timer_));
 #endif
-#if BUILTIN_LED_COUNT == 1
         esp_timer_create_args_t light_args = {
             .callback =
                 [](void* arg) {
@@ -2223,7 +2150,6 @@ private:
             .skip_unhandled_events = true,
         };
         ESP_ERROR_CHECK(esp_timer_create(&light_args, &light_effect_reset_timer_));
-#endif
     }
 
     void ReturnToIdle() {
@@ -2344,18 +2270,12 @@ private:
 
     void ApplyStatusLightBrightness(int brightness_percent) {
         const int safe_brightness = std::clamp(brightness_percent, 0, 100);
-#if BUILTIN_LED_COUNT > 1
-        const uint8_t high = static_cast<uint8_t>((safe_brightness * 255) / 100);
-        const uint8_t low = high == 0 ? 0 : std::max<uint8_t>(1, high / 8);
-        static_cast<CircularStrip*>(GetLed())->SetBrightness(high, low);
-#else
         auto* led = static_cast<GpioLed*>(GetLed());
         led->SetBrightnessScale(static_cast<uint8_t>(safe_brightness));
 #ifdef BUILTIN_LED_STATUS_PROFILE_EDISON
         if (BUILTIN_LED_STATUS_PROFILE_EDISON) {
             led->SetStatusProfile(GpioLed::StatusProfile::kEdison);
         }
-#endif
 #endif
     }
 
@@ -2383,7 +2303,7 @@ private:
                 }
 #endif
             }
-#if BUILTIN_LED_COUNT == 1 && defined(BUILTIN_LED_STATUS_PROFILE_EDISON)
+#ifdef BUILTIN_LED_STATUS_PROFILE_EDISON
             Application::GetInstance().Schedule(
                 [this, moving]() { static_cast<GpioLed*>(GetLed())->SetActivityOverride(moving); });
 #endif
@@ -2758,12 +2678,10 @@ private:
 
     void InitializeWebControl() {
         RobotWebControlServer::SnapshotHandler snapshot_handler;
-#ifdef DESK_ROBOT_USE_ESP32_CAMERA
         snapshot_handler = [this](const RobotWebControlServer::SnapshotSender& sender) {
             return Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
                    camera_ != nullptr && camera_->SendWebSnapshot(sender);
         };
-#endif
         web_control_server_ = std::make_unique<RobotWebControlServer>(
             [this](const std::string& action, int duration_ms, const std::string& text,
                    std::string& message) {
@@ -3237,15 +3155,11 @@ public:
     }
 
     Led* GetLed() override {
-#if BUILTIN_LED_COUNT > 1
-        static CircularStrip led(BUILTIN_LED_GPIO, BUILTIN_LED_COUNT);
-#else
 #if defined(BUILTIN_LED_LEDC_TIMER) && defined(BUILTIN_LED_LEDC_CHANNEL)
         static GpioLed led(BUILTIN_LED_GPIO, BUILTIN_LED_OUTPUT_INVERT, BUILTIN_LED_LEDC_TIMER,
                            BUILTIN_LED_LEDC_CHANNEL);
 #else
         static GpioLed led(BUILTIN_LED_GPIO, true);
-#endif
 #endif
         return &led;
     }
