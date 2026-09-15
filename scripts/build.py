@@ -514,19 +514,6 @@ def _build_option_definitions(
     source = _board_source_text(board)
     definitions: list[dict[str, Any]] = []
 
-    for choice_name in ("DISPLAY_OLED_TYPE", "DISPLAY_LCD_TYPE"):
-        choice = _kconfig_choice(choice_name)
-        if board_config not in choice["board_configs"]:
-            continue
-        entries = [entry for entry in choice["entries"] if entry["value"] != "LCD_CUSTOM"]
-        definitions.append({
-            "key": "display_model",
-            "type": "select",
-            "default": _selected_choice_default(choice, assignments),
-            "choices": entries,
-        })
-        break
-
     # Message styles are implemented by the color LCD display path. OLED and
     # no-display boards deliberately do not expose a selector that has no effect.
     if re.search(r"\b[A-Za-z0-9_]*LcdDisplay\b", source):
@@ -557,18 +544,6 @@ def _build_option_definitions(
                 "default": assignments.get("CONFIG_USE_MULTILINE_CHAT_MESSAGE") == "y",
             },
         ))
-
-    aec_boards = _kconfig_config_board_dependencies("USE_DEVICE_AEC")
-    if board_config in aec_boards:
-        definitions.append({
-            "key": "aec_mode",
-            "type": "select",
-            "default": "device" if assignments.get("CONFIG_USE_DEVICE_AEC") == "y" else "off",
-            "choices": [
-                {"value": "off", "label": "Off"},
-                {"value": "device", "label": "Device-side AEC"},
-            ],
-        })
 
     # ESP32-P4 obtains networking through a companion chip and cannot enable
     # the local ESP-BluFi stack selected by this project option.
@@ -849,6 +824,8 @@ def _collect_variants(
         if board_dir.name == "common":
             continue
         board = board_dir.relative_to(_BOARDS_DIR).as_posix()
+        if not _board_type_exists(board):
+            continue
 
         try:
             with cfg_path.open(encoding='utf-8') as f:

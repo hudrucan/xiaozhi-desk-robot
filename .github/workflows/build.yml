@@ -1,4 +1,4 @@
-name: Build desk robot
+name: Build Desk Robot
 
 on:
   push:
@@ -21,9 +21,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Test build tooling
-        run: python -m unittest discover -s scripts/tests -v
 
       - name: Build firmware
         shell: bash

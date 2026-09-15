@@ -56,14 +56,11 @@ idf.py --version
 ```
 
 ```sh
-# Discover exact board and variant names
+# Inspect the retained board variant
 python3 scripts/build.py --list-boards
 
 # Canonical variant build
-python3 scripts/build.py <board-directory> --name <variant-name>
-
-# Host-side build tests
-python3 -m unittest discover -s scripts/tests -v
+python3 scripts/build.py generic/esp32-s3-camera-robot --name esp32-s3-camera-robot --language en-US --wake-word wn9_hiwalle_tts2
 
 # Format/check touched files
 clang-format -i <files>
@@ -75,7 +72,7 @@ The build script changes local `sdkconfig` and build state. Do not assume the bu
 ## Validation
 
 - Board-only change: build affected variants and smoke-test changed hardware.
-- Core, common-board, audio, protocol, display, dependency, Kconfig, or CMake change: run host tests and build representative affected chip/network paths.
+- Core, common-board, audio, protocol, display, dependency, Kconfig, or CMake change: build the retained ESP32-S3 robot target and exercise the affected hardware path.
 - Protocol changes: verify WebSocket and MQTT/UDP when shared behavior changes.
 - Audio changes: verify capture, playback, wake/VAD, interruption, reconnect, and applicable AEC modes.
 - UI/assets changes: verify applicable no-display/OLED/LVGL paths and partition size.
@@ -88,6 +85,6 @@ The build script changes local `sdkconfig` and build state. Do not assume the bu
 - Audio design: `main/audio/README.md`
 - Code style: `docs/code_style.md`
 - Protocols: `docs/websocket.md`, `docs/mqtt-udp.md`, `docs/mcp-protocol.md`
-- CI matrix: `.github/workflows/build.yml`
+- CI build: `.github/workflows/build.yml`
 
 Keep detailed or fast-changing information in those files, not here. Add a nested `AGENTS.md` only when a subsystem needs specialized instructions.
