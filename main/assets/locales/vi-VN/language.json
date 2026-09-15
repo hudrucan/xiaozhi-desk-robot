@@ -9,14 +9,9 @@
         "VERSION": "Phiên bản ",
         "LOADING_PROTOCOL": "Đang đăng nhập...",
         "INITIALIZING": "Đang khởi tạo...",
-        "PIN_ERROR": "Vui lòng cắm thẻ SIM",
-        "REG_ERROR": "Không thể truy cập mạng, vui lòng kiểm tra trạng thái thẻ SIM",
-        "DETECTING_MODULE": "Đang phát hiện module...",
         "REGISTERING_NETWORK": "Đang chờ mạng...",
         "CHECKING_NEW_VERSION": "Đang kiểm tra phiên bản mới...",
         "CHECK_NEW_VERSION_FAILED": "Kiểm tra phiên bản mới thất bại, sẽ thử lại sau %d giây: %s",
-        "SWITCH_TO_WIFI_NETWORK": "Đang chuyển sang Wi-Fi...",
-        "SWITCH_TO_4G_NETWORK": "Đang chuyển sang 4G...",
         "STANDBY": "Chờ",
         "CONNECT_TO": "Kết nối đến ",
         "CONNECTING": "Đang kết nối...",
@@ -51,9 +46,6 @@
         "LOADING_ASSETS": "Đang tải tài nguyên...",
         "PLEASE_WAIT": "Vui lòng đợi...",
         "FOUND_NEW_ASSETS": "Tìm thấy tài nguyên mới: %s",
-        "HELLO_MY_FRIEND": "Xin chào, bạn của tôi!",
-        "FLIGHT_MODE_OFF": "Chế độ máy bay đang tắt",
-        "FLIGHT_MODE_ON": "Chế độ máy bay đang bật",
-        "MODEM_INIT_ERROR": "Khởi tạo modem thất bại"
+        "HELLO_MY_FRIEND": "Xin chào, bạn của tôi!"
     }
 }

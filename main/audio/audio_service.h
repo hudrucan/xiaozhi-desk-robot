@@ -19,7 +19,6 @@
 #include "esp_opus_enc.h"
 
 #include "audio_codec.h"
-#include "audio_debugger.h"
 #include "audio_engine.h"
 #include "fixed_queue.h"
 #include "ogg_demuxer.h"
@@ -154,7 +153,6 @@ private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
     std::unique_ptr<AudioEngine> audio_engine_;
-    std::unique_ptr<AudioDebugger> audio_debugger_;
     void* opus_encoder_ = nullptr;
     void* opus_decoder_ = nullptr;
     std::mutex decoder_mutex_;

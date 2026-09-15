@@ -1,7 +1,6 @@
 #pragma once
 
 #include "display.h"
-#include "emoji_collection.h"
 #include "lvgl_font.h"
 #include "lvgl_image.h"
 
@@ -27,12 +26,9 @@ public:
     inline lv_color_t border_color() const { return border_color_; }
     inline lv_color_t low_battery_color() const { return low_battery_color_; }
     inline std::shared_ptr<LvglImage> background_image() const { return background_image_; }
-    inline std::shared_ptr<EmojiCollection> emoji_collection() const { return emoji_collection_; }
     inline std::shared_ptr<LvglFont> text_font() const { return text_font_; }
     virtual std::shared_ptr<LvglFont> GetTextFont() const override { return text_font_; }
     inline std::shared_ptr<LvglFont> icon_font() const { return icon_font_; }
-    inline std::shared_ptr<LvglFont> large_icon_font() const { return large_icon_font_; }
-    inline std::shared_ptr<LvglFont> emoji_font() const { return emoji_font_; }
     inline int spacing(int scale) const { return spacing_ * scale; }
 
     inline void set_background_color(lv_color_t background) { background_color_ = background; }
@@ -53,15 +49,8 @@ public:
     inline void set_background_image(std::shared_ptr<LvglImage> background_image) {
         background_image_ = background_image;
     }
-    inline void set_emoji_collection(std::shared_ptr<EmojiCollection> emoji_collection) {
-        emoji_collection_ = emoji_collection;
-    }
     inline void set_text_font(std::shared_ptr<LvglFont> text_font) { text_font_ = text_font; }
     inline void set_icon_font(std::shared_ptr<LvglFont> icon_font) { icon_font_ = icon_font; }
-    inline void set_large_icon_font(std::shared_ptr<LvglFont> large_icon_font) {
-        large_icon_font_ = large_icon_font;
-    }
-    inline void set_emoji_font(std::shared_ptr<LvglFont> emoji_font) { emoji_font_ = emoji_font; }
 
 private:
     int spacing_ = 2;
@@ -83,11 +72,6 @@ private:
     // fonts
     std::shared_ptr<LvglFont> text_font_ = nullptr;
     std::shared_ptr<LvglFont> icon_font_ = nullptr;
-    std::shared_ptr<LvglFont> large_icon_font_ = nullptr;
-    std::shared_ptr<LvglFont> emoji_font_ = nullptr;
-
-    // Emoji collection
-    std::shared_ptr<EmojiCollection> emoji_collection_ = nullptr;
 };
 
 class LvglThemeManager {

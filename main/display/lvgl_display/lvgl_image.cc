@@ -17,11 +17,6 @@ LvglRawImage::LvglRawImage(void* data, size_t size) {
     image_dsc_.header.h = 0;
 }
 
-bool LvglRawImage::IsGif() const {
-    auto ptr = (const uint8_t*)image_dsc_.data;
-    return ptr[0] == 'G' && ptr[1] == 'I' && ptr[2] == 'F';
-}
-
 LvglCBinImage::LvglCBinImage(void* data) {
     image_dsc_ = cbin_img_dsc_create(static_cast<uint8_t*>(data));
 }

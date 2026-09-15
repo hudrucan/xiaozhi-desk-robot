@@ -226,6 +226,10 @@ private:
         .full_anchor_min_voltage_v = BATTERY_SOC_FULL_ANCHOR_MIN_VOLTAGE_V,
         .full_anchor_taper_current_ma = BATTERY_SOC_FULL_ANCHOR_TAPER_CURRENT_MA,
         .full_anchor_qualification_us = BATTERY_SOC_FULL_ANCHOR_QUALIFICATION_MS * 1000LL,
+        .bootstrap_full_anchor_min_voltage_soc_percent =
+            BATTERY_SOC_BOOTSTRAP_FULL_ANCHOR_MIN_VOLTAGE_SOC_PERCENT,
+        .bootstrap_voltage_rebase_min_delta_percent =
+            BATTERY_SOC_BOOTSTRAP_VOLTAGE_REBASE_MIN_DELTA_PERCENT,
         .empty_anchor_max_voltage_v = BATTERY_SOC_EMPTY_ANCHOR_MAX_VOLTAGE_V,
         .empty_anchor_qualification_us = BATTERY_SOC_EMPTY_ANCHOR_QUALIFICATION_MS * 1000LL,
     }};
@@ -245,6 +249,7 @@ private:
     std::atomic<float> battery_soc_voltage_reference_percent_{0.0f};
     std::atomic<float> battery_soc_voltage_correction_mah_{0.0f};
     std::atomic_bool battery_soc_full_anchored_{false};
+    std::atomic_bool battery_soc_bootstrap_voltage_rebased_{false};
     std::atomic_bool battery_soc_empty_anchored_{false};
     std::atomic_bool battery_charging_{false};
     std::atomic_bool battery_discharging_{false};
@@ -704,8 +709,11 @@ private:
                         ESP_LOGI(TAG, "Battery SoC seeded from %.3f V: %.2f%%",
                                  reading.battery_voltage_v, battery_soc_estimator_.GetSocPercent());
                     }
+                    const float soc_before_update = battery_soc_estimator_.GetSocPercent();
                     const bool was_quasi_resting = battery_soc_estimator_.IsQuasiResting();
                     const bool was_full_anchored = battery_soc_estimator_.IsFullAnchored();
+                    const bool was_bootstrap_voltage_rebased =
+                        battery_soc_estimator_.WasBootstrapVoltageRebased();
                     const bool was_empty_anchored = battery_soc_estimator_.IsEmptyAnchored();
                     battery_soc_estimator_.Update(reading.battery_voltage_v, reading.current_ma,
                                                   !motors_.IsActive(), reading.charging, now_us);
@@ -721,6 +729,13 @@ private:
                     if (full_anchor_applied) {
                         ESP_LOGI(TAG, "Battery full anchor qualified at %.3f V, %+.1f mA",
                                  reading.battery_voltage_v, reading.current_ma);
+                    }
+                    const bool bootstrap_voltage_rebase_applied =
+                        !was_bootstrap_voltage_rebased &&
+                        battery_soc_estimator_.WasBootstrapVoltageRebased();
+                    if (bootstrap_voltage_rebase_applied) {
+                        ESP_LOGI(TAG, "Battery startup SoC rebased from %.2f%% to %.2f%%",
+                                 soc_before_update, battery_soc_estimator_.GetSocPercent());
                     }
                     const bool empty_anchor_applied =
                         !was_empty_anchored && battery_soc_estimator_.IsEmptyAnchored();
@@ -746,6 +761,8 @@ private:
                     battery_soc_voltage_correction_mah_.store(
                         battery_soc_estimator_.GetCumulativeVoltageCorrectionMah());
                     battery_soc_full_anchored_.store(battery_soc_estimator_.IsFullAnchored());
+                    battery_soc_bootstrap_voltage_rebased_.store(
+                        battery_soc_estimator_.WasBootstrapVoltageRebased());
                     battery_soc_empty_anchored_.store(battery_soc_estimator_.IsEmptyAnchored());
                     battery_charging_.store(reading.charging);
                     battery_discharging_.store(reading.discharging);
@@ -760,13 +777,21 @@ private:
                         std::fabs(remaining_mah - soc_last_saved_remaining_mah) >=
                             kSocMinimumSaveChangeMah ||
                         degraded_changed;
-                    if (full_anchor_applied || empty_anchor_applied || seeded_soc ||
+                    if (full_anchor_applied || bootstrap_voltage_rebase_applied ||
+                        empty_anchor_applied || seeded_soc ||
                         (meaningful_change &&
                          now_us - soc_last_save_us >= kSocMinimumSaveIntervalUs)) {
-                        PersistBatterySoc(full_anchor_applied    ? "full anchor"
-                                          : empty_anchor_applied ? "empty anchor"
-                                          : seeded_soc           ? "voltage seed"
-                                                                 : "periodic");
+                        const char* save_reason = "periodic";
+                        if (full_anchor_applied) {
+                            save_reason = "full anchor";
+                        } else if (bootstrap_voltage_rebase_applied) {
+                            save_reason = "startup voltage rebase";
+                        } else if (empty_anchor_applied) {
+                            save_reason = "empty anchor";
+                        } else if (seeded_soc) {
+                            save_reason = "voltage seed";
+                        }
+                        PersistBatterySoc(save_reason);
                         soc_last_save_us = now_us;
                         soc_last_saved_remaining_mah = remaining_mah;
                         soc_last_saved_degraded = battery_soc_estimator_.IsTrackingDegraded();
@@ -2755,6 +2780,8 @@ private:
                                         battery_soc_voltage_correction_mah_.load());
                 cJSON_AddBoolToObject(root, "battery_soc_full_anchored",
                                       battery_soc_full_anchored_.load());
+                cJSON_AddBoolToObject(root, "battery_soc_bootstrap_voltage_rebased",
+                                      battery_soc_bootstrap_voltage_rebased_.load());
                 cJSON_AddBoolToObject(root, "battery_soc_empty_anchored",
                                       battery_soc_empty_anchored_.load());
                 cJSON_AddBoolToObject(root, "battery_conversion_ready",
@@ -3067,6 +3094,8 @@ private:
                                             battery_soc_voltage_correction_mah_.load());
                     cJSON_AddBoolToObject(result, "soc_full_anchored",
                                           battery_soc_full_anchored_.load());
+                    cJSON_AddBoolToObject(result, "soc_bootstrap_voltage_rebased",
+                                          battery_soc_bootstrap_voltage_rebased_.load());
                     cJSON_AddBoolToObject(result, "soc_empty_anchored",
                                           battery_soc_empty_anchored_.load());
                     cJSON_AddBoolToObject(result, "conversion_ready",
@@ -3126,17 +3155,10 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
-#if AUDIO_MIC_IS_PDM
-        static NoAudioCodecSimplexPdm audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-                                                  AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK,
-                                                  AUDIO_I2S_SPK_GPIO_DOUT, AUDIO_I2S_MIC_GPIO_SCK,
-                                                  AUDIO_I2S_MIC_GPIO_DIN);
-#else
         static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
                                                AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK,
                                                AUDIO_I2S_SPK_GPIO_DOUT, AUDIO_I2S_MIC_GPIO_SCK,
                                                AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
-#endif
         return &audio_codec;
     }
 

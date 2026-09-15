@@ -184,7 +184,6 @@ Semantics match the WebSocket protocol. Supported types:
 - **System** - system control, e.g. `"command": "reboot"`.
 - **Alert** - show an alert on the UI; fields: `status`, `message`, `emotion`.
 - **Goodbye** - server-initiated shutdown of the audio session. The device responds by closing the UDP channel without sending its own goodbye.
-- **Custom** (optional, enabled via `CONFIG_RECEIVE_CUSTOM_MESSAGE`).
 
 Example alert:
 ```json

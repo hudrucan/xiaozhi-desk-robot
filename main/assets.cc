@@ -328,36 +328,6 @@ bool Assets::LvglStrategy::Apply(Assets* assets, bool refresh_display_theme) {
         }
     }
 
-    cJSON* emoji_collection = cJSON_GetObjectItem(root.get(), "emoji_collection");
-    if (cJSON_IsArray(emoji_collection)) {
-        auto custom_emoji_collection = std::make_shared<EmojiCollection>();
-        int emoji_count = cJSON_GetArraySize(emoji_collection);
-        for (int i = 0; i < emoji_count; i++) {
-            cJSON* emoji = cJSON_GetArrayItem(emoji_collection, i);
-            if (cJSON_IsObject(emoji)) {
-                cJSON* name = cJSON_GetObjectItem(emoji, "name");
-                cJSON* file = cJSON_GetObjectItem(emoji, "file");
-                cJSON* eaf = cJSON_GetObjectItem(emoji, "eaf");
-                if (cJSON_IsString(name) && cJSON_IsString(file) && (NULL == eaf)) {
-                    if (!assets->GetAssetData(file->valuestring, ptr, size)) {
-                        ESP_LOGE(TAG, "Emoji %s image file %s is not found", name->valuestring,
-                                 file->valuestring);
-                        continue;
-                    }
-                    custom_emoji_collection->AddEmoji(name->valuestring,
-                                                      new LvglRawImage(ptr, size));
-                }
-            }
-        }
-        if (light_theme != nullptr) {
-            light_theme->set_emoji_collection(custom_emoji_collection);
-        }
-        if (dark_theme != nullptr) {
-            dark_theme->set_emoji_collection(custom_emoji_collection);
-        }
-        Board::GetInstance().GetDisplay()->SetEmojiCollection(custom_emoji_collection);
-    }
-
     cJSON* skin = cJSON_GetObjectItem(root.get(), "skin");
     if (cJSON_IsObject(skin)) {
         cJSON* light_skin = cJSON_GetObjectItem(skin, "light");

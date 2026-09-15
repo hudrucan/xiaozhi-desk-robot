@@ -1,6 +1,5 @@
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
-            "audio/audio_debugger.cc"
             "audio/audio_service.cc"
             "audio/demuxer/ogg_demuxer.cc"
             "notify/notify_player.cc"
@@ -10,13 +9,10 @@ set(SOURCES "audio/audio_codec.cc"
             "display/text_glyph.cc"
             "display/lcd_display.cc"
             "display/lvgl_display/lvgl_display.cc"
-            "display/lvgl_display/emoji_collection.cc"
             "display/lvgl_display/lvgl_theme.cc"
             "display/lvgl_display/lvgl_font.cc"
             "display/lvgl_display/dynamic_glyph_cache.cc"
             "display/lvgl_display/lvgl_image.cc"
-            "display/lvgl_display/gif/lvgl_gif.cc"
-            "display/lvgl_display/gif/gifdec.c"
             "display/lvgl_display/jpg/image_to_jpeg.cpp"
             "display/lvgl_display/jpg/jpeg_to_image.c"
             "protocols/protocol.cc"
@@ -68,7 +64,6 @@ if(CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT)
     set(BOARD_DIR "generic/esp32-s3-camera-robot")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
-    set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
 elseif(NOT CMAKE_BUILD_EARLY_EXPANSION)
     message(FATAL_ERROR "CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT must be enabled")
 endif()
@@ -288,15 +283,6 @@ function(build_default_assets_bin)
         if(EXISTS "${NOTO_FONTS_PATH}/manifest.json")
             list(APPEND DEFAULT_ASSETS_DEPENDENCIES "${NOTO_FONTS_PATH}/manifest.json")
         endif()
-    endif()
-
-    # Add default emoji collection if defined
-    if(DEFAULT_EMOJI_COLLECTION)
-        list(APPEND BUILD_ARGS "--emoji_collection" "${DEFAULT_EMOJI_COLLECTION}")
-        file(GLOB DEFAULT_EMOJI_FILES CONFIGURE_DEPENDS
-            "${NOTO_FONTS_PATH}/png/${DEFAULT_EMOJI_COLLECTION}/*"
-        )
-        list(APPEND DEFAULT_ASSETS_DEPENDENCIES ${DEFAULT_EMOJI_FILES})
     endif()
 
     # Add default assets extra files if defined

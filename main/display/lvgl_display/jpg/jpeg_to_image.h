@@ -1,6 +1,3 @@
-#include "sdkconfig.h"
-#ifndef CONFIG_IDF_TARGET_ESP32
-
 #include <esp_err.h>
 
 #ifdef __cplusplus
@@ -10,8 +7,7 @@ extern "C" {
 /**
  * @brief Decodes a JPEG image from memory to raw RGB565 pixel data
  *
- * This function attempts to decode a JPEG image using hardware acceleration first (if enabled),
- * falling back to a software decoder if hardware decoding fails or is unavailable.
+ * This function decodes a JPEG image using esp_new_jpeg.
  *
  * @param[in] src Pointer to the JPEG bitstream in memory
  * @param[in] src_len Length of the JPEG bitstream in bytes
@@ -41,15 +37,7 @@ extern "C" {
  *              }
  *              @endcode
  *
- * @note Configuration dependency:
- *       - When CONFIG_XIAOZHI_ENABLE_HARDWARE_JPEG_DECODER is enabled, hardware acceleration is attempted first
- *       - Both hardware and software paths allocate memory that requires heap_caps_free() for deallocation
- *       - The decoded image format is always RGB565 (2 bytes per pixel)
- *
- * @note When using hardware decoder, the decoded image dimensions might be aligned up to 16-byte boundaries.
- *       For YUV420 or YUV422 compressed images, both width and height will be rounded up to the nearest multiple of 16.
- *       See details at
- *       <https://docs.espressif.com/projects/esp-idf/en/stable/esp32p4/api-reference/peripherals/jpeg.html#jpeg-decoder-engine>
+ * @note The decoded image format is always RGB565 (2 bytes per pixel).
  *
  */
 esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
@@ -58,5 +46,3 @@ esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_
 #ifdef __cplusplus
 }
 #endif
-
-#endif  // CONFIG_IDF_TARGET_ESP32

@@ -6,8 +6,6 @@
 
 #define AUDIO_INPUT_SAMPLE_RATE 16000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
-#define AUDIO_MIC_IS_PDM 0
-
 // INMP441 microphone.
 #define AUDIO_I2S_MIC_GPIO_WS GPIO_NUM_1
 #define AUDIO_I2S_MIC_GPIO_SCK GPIO_NUM_2
@@ -125,6 +123,11 @@
 #define BATTERY_SOC_FULL_ANCHOR_MIN_VOLTAGE_V 4.20f
 #define BATTERY_SOC_FULL_ANCHOR_TAPER_CURRENT_MA 150.0f
 #define BATTERY_SOC_FULL_ANCHOR_QUALIFICATION_MS 60000
+// A fully charged cold boot under the robot's idle load measured 94.99% on the OCV curve. This
+// one-shot recovery handles charging completed while the ESP32 was switched off.
+#define BATTERY_SOC_BOOTSTRAP_FULL_ANCHOR_MIN_VOLTAGE_SOC_PERCENT 94.5f
+// Ignore small OCV/load-model differences; startup recovery only repairs a meaningful upward delta.
+#define BATTERY_SOC_BOOTSTRAP_VOLTAGE_REBASE_MIN_DELTA_PERCENT 2.0f
 // Controlled 2026-09-15 discharge stayed operational at 3.199 V and collapsed around
 // 3.11-3.17 V under a 0.64-0.71 A idle load. Anchor before the power disappears.
 #define BATTERY_SOC_EMPTY_ANCHOR_MAX_VOLTAGE_V 3.20f

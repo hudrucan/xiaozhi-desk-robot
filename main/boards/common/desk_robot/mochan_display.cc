@@ -1655,9 +1655,8 @@ void MochanDisplay::ResetTyping() {
 }
 
 void MochanDisplay::SetTheme(Theme* theme) {
-    // Asset updates call this after Wi-Fi connects.  LcdDisplay::SetTheme()
-    // expects the stock status-bar widgets, which Mochan deliberately does
-    // not create; delegating to it dereferences those null pointers.
+    // Asset updates call this after Wi-Fi connects. Apply them directly to
+    // the custom Mochan hierarchy.
     if (theme == nullptr) {
         return;
     }

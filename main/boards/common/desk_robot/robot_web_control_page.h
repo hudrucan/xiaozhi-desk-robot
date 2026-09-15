@@ -2489,7 +2489,10 @@ Waiting for system logs…</pre
             ? " · full anchored"
             : j.battery_soc_empty_anchored
               ? " · empty anchored"
-              : "";
+              : "",
+          recoveryState = j.battery_soc_bootstrap_voltage_rebased
+            ? " · startup voltage estimate"
+            : "";
         $("#socState").textContent = batteryReady
           ? remainingMah.toFixed(0) +
             " mAh remaining · " +
@@ -2498,6 +2501,7 @@ Waiting for system logs…</pre
             flow +
             restState +
             anchorState +
+            recoveryState +
             (j.battery_soc_tracking_degraded ? " · tracking degraded" : "")
           : "SoC waiting for valid measurement";
         $("#capacityStart").disabled = !j.battery_available || capacityActive;

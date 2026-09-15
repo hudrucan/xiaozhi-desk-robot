@@ -7,7 +7,7 @@ for the current board configuration.
 
 Usage:
     ./build_default_assets.py --sdkconfig <path> --builtin_text_font <font_name> \
-        --default_emoji_collection <collection_name> --output <output_path>
+        --output <output_path>
 """
 
 import argparse
@@ -18,7 +18,6 @@ import shutil
 import sys
 import json
 import struct
-from datetime import datetime
 
 
 # =============================================================================
@@ -160,8 +159,6 @@ def copy_directory(src, dst):
 # slice renamed before srmodels.bin is packed.
 WN10_PIE_VERSIONS = {
     "esp32s3": "p1",
-    "esp32p4": "p2",
-    "esp32s31": "p2",
 }
 
 
@@ -272,34 +269,6 @@ def process_text_font(text_font_file, assets_dir):
     return None
 
 
-def process_emoji_collection(emoji_collection_dir, assets_dir):
-    """Process emoji_collection parameter"""
-    if not emoji_collection_dir:
-        return []
-    
-    emoji_list = []
-    
-    # Copy each image from input directory to build/assets directory
-    for root, dirs, files in os.walk(emoji_collection_dir):
-        for file in files:
-            if file.lower().endswith(('.png', '.gif')):
-                # Copy file
-                src_file = os.path.join(root, file)
-                dst_file = os.path.join(assets_dir, file)
-                if copy_file(src_file, dst_file):
-                    # Get filename without extension
-                    filename_without_ext = os.path.splitext(file)[0]
-                    
-                    # Add main emoji entry
-                    emoji_list.append({
-                        "name": filename_without_ext,
-                        "file": file
-                    })
-                    
-    
-    return emoji_list
-
-
 def process_extra_files(extra_files_dir, assets_dir):
     """Process default_assets_extra_files parameter"""
     if not extra_files_dir:
@@ -330,7 +299,7 @@ def process_extra_files(extra_files_dir, assets_dir):
     return extra_files_list
 
 
-def generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra_files=None,
+def generate_index_json(assets_dir, srmodels, text_font, extra_files=None,
                         multinet_model_info=None, font_bundle_id=None):
     """Generate index.json file"""
     index_data = {
@@ -358,9 +327,6 @@ def generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra
             }
             index_data["text_font_meta"] = text_font_meta
     
-    if emoji_collection:
-        index_data["emoji_collection"] = emoji_collection
-    
     if extra_files:
         index_data["extra_files"] = extra_files
     
@@ -375,24 +341,11 @@ def generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra
     print(f"Generated: {index_path}")
 
 
-def generate_config_json(build_dir, assets_dir):
+def generate_config_json(build_dir):
     """Generate config.json file"""
     config_data = {
-        "include_path": os.path.join(build_dir, "include"),
-        "assets_path": assets_dir,
         "image_file": os.path.join(build_dir, "output", "assets.bin"),
-        "lvgl_ver": "9.3.0",
-        "assets_size": "0x400000",
-        "support_format": ".png, .gif, .jpg, .bin, .json",
         "name_length": "32",
-        "split_height": "0",
-        "support_qoi": False,
-        "support_spng": False,
-        "support_sjpg": False,
-        "support_sqoi": False,
-        "support_raw": False,
-        "support_raw_dither": False,
-        "support_raw_bgr": False
     }
     
     # Write config.json
@@ -418,7 +371,7 @@ def sort_key(filename):
     return extension, basename
 
 
-def pack_assets_simple(target_path, include_path, out_file, assets_path, max_name_len=32):
+def pack_assets_simple(target_path, out_file, max_name_len=32):
     """
     Simplified version of pack_assets that handles basic file packing
     """
@@ -428,7 +381,6 @@ def pack_assets_simple(target_path, include_path, out_file, assets_path, max_nam
 
     # Ensure output directory exists
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    os.makedirs(include_path, exist_ok=True)
 
     file_list = sorted(os.listdir(target_path), key=sort_key)
     for filename in file_list:
@@ -472,32 +424,6 @@ def pack_assets_simple(target_path, include_path, out_file, assets_path, max_nam
 
     with open(out_file, 'wb') as output_bin:
         output_bin.write(final_data)
-
-    # Generate header file
-    current_year = datetime.now().year
-    asset_name = os.path.basename(assets_path)
-    header_file_path = os.path.join(include_path, f'mmap_generate_{asset_name}.h')
-    with open(header_file_path, 'w', encoding='utf-8') as output_header:
-        output_header.write('/*\n')
-        output_header.write(' * SPDX-FileCopyrightText: 2022-{} Espressif Systems (Shanghai) CO LTD\n'.format(current_year))
-        output_header.write(' *\n')
-        output_header.write(' * SPDX-License-Identifier: Apache-2.0\n')
-        output_header.write(' */\n\n')
-        output_header.write('/**\n')
-        output_header.write(' * @file\n')
-        output_header.write(" * @brief This file was generated by esp_mmap_assets, don't modify it\n")
-        output_header.write(' */\n\n')
-        output_header.write('#pragma once\n\n')
-        output_header.write("#include \"esp_mmap_assets.h\"\n\n")
-        output_header.write(f'#define MMAP_{asset_name.upper()}_FILES           {total_files}\n')
-        output_header.write(f'#define MMAP_{asset_name.upper()}_CHECKSUM        0x{combined_checksum:04X}\n\n')
-        output_header.write(f'enum MMAP_{asset_name.upper()}_LISTS {{\n')
-
-        for i, (file_name, _, _, _, _) in enumerate(file_info_list):
-            enum_name = file_name.replace('.', '_')
-            output_header.write(f'    MMAP_{asset_name.upper()}_{enum_name.upper()} = {i},        /*!< {file_name} */\n')
-
-        output_header.write('};\n')
 
     print(f'All files have been merged into {os.path.basename(out_file)}')
 
@@ -601,14 +527,12 @@ def read_wake_word_type_from_sdkconfig(sdkconfig_path):
     if not os.path.exists(sdkconfig_path):
         print(f"Warning: sdkconfig file not found: {sdkconfig_path}")
         return {
-            'use_esp_wake_word': False,
             'use_afe_wake_word': False,
             'use_custom_wake_word': False,
             'wake_word_disabled': True
         }
         
     config_values = {
-        'use_esp_wake_word': False,
         'use_afe_wake_word': False,
         'use_custom_wake_word': False,
         'wake_word_disabled': False
@@ -621,9 +545,7 @@ def read_wake_word_type_from_sdkconfig(sdkconfig_path):
                 continue
                 
             # Check for wake word type configuration
-            if 'CONFIG_USE_ESP_WAKE_WORD=y' in line:
-                config_values['use_esp_wake_word'] = True
-            elif 'CONFIG_USE_AFE_WAKE_WORD=y' in line:
+            if 'CONFIG_USE_AFE_WAKE_WORD=y' in line:
                 config_values['use_afe_wake_word'] = True
             elif 'CONFIG_USE_CUSTOM_WAKE_WORD=y' in line:
                 config_values['use_custom_wake_word'] = True
@@ -767,48 +689,8 @@ def get_text_font_path(builtin_text_font, noto_fonts_path):
         return None
 
 
-def get_emoji_collection_path(default_emoji_collection, noto_fonts_path, project_root=None):
-    """
-    Get the emoji collection path if needed
-    Returns the emoji directory path or None if no emoji collection is needed
-    
-    Supports:
-    - PNG emoji collections from noto-fonts (e.g., noto-color-emoji_32)
-    - Otto GIF emoji collection (otto-gif)
-    """
-    if not default_emoji_collection:
-        return None
-    
-    # Special handling for otto-gif collection
-    if default_emoji_collection == 'otto-gif':
-        if project_root:
-            otto_gif_path = os.path.join(project_root, 'managed_components', 
-                                        'txp666__otto-emoji-gif-component', 'gifs')
-            if os.path.exists(otto_gif_path):
-                return otto_gif_path
-            else:
-                print(f"Warning: Otto GIF emoji collection directory not found: {otto_gif_path}")
-                return None
-        else:
-            print("Warning: project_root not provided, cannot locate otto-gif collection")
-            return None
-    
-    # Try PNG emoji collections first.
-    emoji_path = os.path.join(noto_fonts_path, 'png', default_emoji_collection)
-    if os.path.exists(emoji_path):
-        return emoji_path
-    
-    # Try GIF emoji collections (e.g., noto-emoji_128, noto-emoji_64, noto-emoji_32)
-    emoji_path = os.path.join(noto_fonts_path, 'gif', default_emoji_collection)
-    if os.path.exists(emoji_path):
-        return emoji_path
-    
-    print(f"Warning: Emoji collection directory not found in png/ or gif/: {default_emoji_collection}")
-    return None
-
-
 def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font_path,
-                            emoji_collection_path, extra_files_path, output_path,
+                            extra_files_path, output_path,
                             multinet_model_info=None, font_bundle_id=None, max_size=None,
                             idf_target=None):
     """
@@ -833,24 +715,22 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
             idf_target=idf_target,
         ) if (wakenet_model_paths or multinet_model_paths) else None
         text_font = process_text_font(text_font_path, assets_dir) if text_font_path else None
-        emoji_collection = process_emoji_collection(emoji_collection_path, assets_dir) if emoji_collection_path else None
         extra_files = process_extra_files(extra_files_path, assets_dir) if extra_files_path else None
         
         # Generate index.json
-        generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra_files,
+        generate_index_json(assets_dir, srmodels, text_font, extra_files,
                             multinet_model_info, font_bundle_id)
         
         # Generate config.json for packing
-        config_path = generate_config_json(temp_build_dir, assets_dir)
+        config_path = generate_config_json(temp_build_dir)
         
         # Load config and pack assets
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
         
         # Use simplified packing function
-        include_path = config_data['include_path']
         image_file = config_data['image_file']
-        pack_assets_simple(assets_dir, include_path, image_file, "assets", int(config_data['name_length']))
+        pack_assets_simple(assets_dir, image_file, int(config_data['name_length']))
         
         # Copy final assets.bin to output location
         if os.path.exists(image_file):
@@ -886,7 +766,6 @@ def main():
     parser = argparse.ArgumentParser(description='Build default assets based on configuration')
     parser.add_argument('--sdkconfig', required=True, help='Path to sdkconfig file')
     parser.add_argument('--builtin_text_font', help='Builtin text font name (e.g., font_noto_sans_basic_16_4)')
-    parser.add_argument('--emoji_collection', help='Default emoji collection name (e.g., noto-color-emoji_32)')
     parser.add_argument('--output', required=True, help='Output path for assets.bin')
     parser.add_argument('--esp_sr_model_path', help='Path to ESP-SR model directory')
     parser.add_argument('--noto_fonts_path', help='Path to noto-fonts component directory')
@@ -911,7 +790,6 @@ def main():
     print("Building default assets...")
     print(f"  sdkconfig: {args.sdkconfig}")
     print(f"  builtin_text_font: {args.builtin_text_font}")
-    print(f"  emoji_collection: {args.emoji_collection}")
     print(f"  output: {args.output}")
     
     idf_target = read_idf_target_from_sdkconfig(args.sdkconfig)
@@ -929,11 +807,11 @@ def main():
     wakenet_model_paths = []
     multinet_model_paths = []
     
-    # 1. Only package wakenet models if USE_ESP_WAKE_WORD=y or USE_AFE_WAKE_WORD=y
-    if wake_word_config['use_esp_wake_word'] or wake_word_config['use_afe_wake_word']:
+    # 1. Only package wakenet models if USE_AFE_WAKE_WORD=y
+    if wake_word_config['use_afe_wake_word']:
         wakenet_model_paths = get_wakenet_model_paths(wakenet_model_names, args.esp_sr_model_path)
     elif wakenet_model_names:
-        print(f"  Note: Found wakenet models {wakenet_model_names} but wake word type is not ESP/AFE, skipping")
+        print(f"  Note: Found wakenet models {wakenet_model_names} but AFE wake word is disabled, skipping")
     
     # 2. Error check: if USE_CUSTOM_WAKE_WORD=y but no multinet models selected, report error
     if wake_word_config['use_custom_wake_word'] and not multinet_model_names:
@@ -962,12 +840,6 @@ def main():
             font_bundle_id = json.load(f).get("bundle_id")
         if not isinstance(font_bundle_id, str) or not font_bundle_id:
             raise ValueError("noto-fonts manifest.json must define bundle_id")
-    
-    # Get emoji collection path if needed
-    # Calculate project root from script location for otto-gif support
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    emoji_collection_path = get_emoji_collection_path(args.emoji_collection, args.noto_fonts_path, project_root)
     
     # Get extra files path if provided
     extra_files_path = args.extra_files
@@ -998,8 +870,8 @@ def main():
         print(f"  wake word threshold: {custom_wake_word_config['threshold']}")
     
     # Check if we have anything to build
-    if not wakenet_model_paths and not multinet_model_paths and not text_font_path and not emoji_collection_path and not extra_files_path and not multinet_model_info:
-        print("Warning: No assets to build (no SR models, text font, emoji collection, extra files, or custom wake word)")
+    if not wakenet_model_paths and not multinet_model_paths and not text_font_path and not extra_files_path and not multinet_model_info:
+        print("Warning: No assets to build (no SR models, text font, extra files, or custom wake word)")
         # Create an empty assets.bin file
         os.makedirs(os.path.dirname(args.output), exist_ok=True)
         with open(args.output, 'wb') as f:
@@ -1009,8 +881,8 @@ def main():
     
     # Build the assets
     success = build_assets_integrated(
-        wakenet_model_paths, multinet_model_paths, text_font_path, emoji_collection_path,
-        extra_files_path, args.output, multinet_model_info, font_bundle_id, args.max_size,
+        wakenet_model_paths, multinet_model_paths, text_font_path, extra_files_path,
+        args.output, multinet_model_info, font_bundle_id, args.max_size,
         idf_target=idf_target)
     
     if not success:

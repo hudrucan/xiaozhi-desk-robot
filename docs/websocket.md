@@ -296,20 +296,7 @@ WebSocket text frames carry JSON. The most common `"type"` values and their sema
      - `message`: detailed message.
      - `emotion`: emotion shown while alerting (e.g. `"sad"`, `"neutral"`).
 
-8. **Custom** (optional)
-   - Available when `CONFIG_RECEIVE_CUSTOM_MESSAGE` is enabled.
-   - Example:
-     ```json
-     {
-       "session_id": "xxx",
-       "type": "custom",
-       "payload": {
-         "message": "anything you want"
-       }
-     }
-     ```
-
-9. **Binary audio frames**
+8. **Binary audio frames**
    - When the server pushes Opus-encoded audio as binary frames, the device decodes and plays them.
    - Frames received while the device is in the `listening` state are dropped to avoid conflicts with the microphone stream.
 

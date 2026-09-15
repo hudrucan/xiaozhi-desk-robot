@@ -21,6 +21,8 @@ public:
         float full_anchor_min_voltage_v;
         float full_anchor_taper_current_ma;
         int64_t full_anchor_qualification_us;
+        float bootstrap_full_anchor_min_voltage_soc_percent;
+        float bootstrap_voltage_rebase_min_delta_percent;
         float empty_anchor_max_voltage_v;
         int64_t empty_anchor_qualification_us;
     };
@@ -52,6 +54,7 @@ public:
     float GetQuasiRestVoltageSocPercent() const { return quasi_rest_voltage_soc_percent_; }
     float GetCumulativeVoltageCorrectionMah() const { return cumulative_voltage_correction_mah_; }
     bool IsFullAnchored() const { return full_anchored_; }
+    bool WasBootstrapVoltageRebased() const { return bootstrap_voltage_rebased_; }
     bool IsEmptyAnchored() const { return empty_anchored_; }
     PersistedState GetPersistedState() const;
 
@@ -65,6 +68,7 @@ private:
     void ResetFullAnchorCandidate();
     void UpdateFullAnchor(float battery_voltage_v, float current_ma, bool motors_idle,
                           bool charging, int64_t now_us);
+    void UpdateBootstrapVoltageRecovery();
     void ResetEmptyAnchorCandidate();
     void UpdateEmptyAnchor(float battery_voltage_v, float current_ma, bool motors_idle,
                            bool discharging, int64_t now_us);
@@ -89,6 +93,8 @@ private:
     float full_anchor_min_voltage_v_;
     float full_anchor_taper_current_ma_;
     int64_t full_anchor_qualification_us_;
+    float bootstrap_full_anchor_min_voltage_soc_percent_;
+    float bootstrap_voltage_rebase_min_delta_percent_;
     float empty_anchor_max_voltage_v_;
     int64_t empty_anchor_qualification_us_;
     int64_t quasi_rest_correction_elapsed_us_ = 0;
@@ -106,6 +112,8 @@ private:
     float cumulative_voltage_correction_mah_ = 0.0f;
     int64_t full_anchor_candidate_started_us_ = 0;
     bool full_anchor_charge_seen_ = false;
+    bool bootstrap_voltage_recovery_pending_ = false;
+    bool bootstrap_voltage_rebased_ = false;
     bool full_anchored_ = false;
     int64_t empty_anchor_candidate_started_us_ = 0;
     bool empty_anchored_ = false;

@@ -242,14 +242,6 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
         last_input_clip_us_.store(now, std::memory_order_relaxed);
     }
 
-#if CONFIG_USE_AUDIO_DEBUGGER
-    // 音频调试：发送原始音频数据
-    if (audio_debugger_ == nullptr) {
-        audio_debugger_ = std::make_unique<AudioDebugger>();
-    }
-    audio_debugger_->Feed(data);
-#endif
-
     return true;
 }
 

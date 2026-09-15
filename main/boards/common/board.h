@@ -23,13 +23,7 @@ enum class NetworkEvent {
     Connected,             // Network connected successfully (data: SSID/network name)
     Disconnected,          // Network disconnected
     WifiConfigModeEnter,   // Entered WiFi configuration mode
-    WifiConfigModeExit,    // Exited WiFi configuration mode
-    // Cellular modem specific events
-    ModemDetecting,        // Detecting modem (baud rate, module type)
-    ModemErrorNoSim,       // No SIM card detected
-    ModemErrorRegDenied,   // Network registration denied
-    ModemErrorInitFailed,  // Modem initialization failed
-    ModemErrorTimeout      // Operation timeout
+    WifiConfigModeExit     // Exited WiFi configuration mode
 };
 
 // Power save level enumeration

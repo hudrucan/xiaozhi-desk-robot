@@ -36,7 +36,7 @@ The message has no acknowledgement, notification ID, state, kind, or expiry fiel
 
 The file is read incrementally. The device does not allocate memory based on the complete response length and does not download the complete file before playback. Notification streaming uses the existing bounded HTTP response queue, a 2 KB Ogg logical-packet buffer, the shared 20-packet Opus decode queue, and the existing two-frame PCM playback queue. The decode queue represents 1.2 seconds at the firmware's normal 60 ms packet duration. These buffers provide TCP backpressure while keeping the feature usable on devices without PSRAM.
 
-On devices that use the standalone LiteAudioEngine WakeNet, WakeNet resources are released while a notification is playing and recreated when the device returns to `Idle`. AFE-based devices keep their existing local wake behavior.
+The ESP32-S3 AFE keeps its existing local wake behavior while a notification is playing.
 
 Opus packet duration is read from the Opus TOC byte instead of being supplied in the MQTT message. Integer packet durations from 5 ms through 120 ms that are supported by the firmware decoder are accepted. The current implementation rejects stereo streams, detected Ogg or Opus structural errors, incomplete streams, oversized logical packets, and 2.5 ms packets.
 
