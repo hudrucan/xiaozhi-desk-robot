@@ -393,7 +393,6 @@ _BOARDS_DIR = Path("main/boards")
 _DISPLAY_STYLE_SYMBOLS = {
     "default": "CONFIG_USE_DEFAULT_MESSAGE_STYLE",
     "wechat": "CONFIG_USE_WECHAT_MESSAGE_STYLE",
-    "emote": "CONFIG_USE_EMOTE_MESSAGE_STYLE",
 }
 _DYNAMIC_CAMERA_MIRROR_BOARD_CONFIGS: set[str] = set()
 _OPTIONAL_CAMERA_ENABLE_SYMBOLS: dict[str, str] = {}
@@ -447,24 +446,6 @@ def _kconfig_choice(
     }
 
 
-def _kconfig_config_board_dependencies(
-    symbol: str,
-    kconfig_path: Path = Path("main/Kconfig.projbuild"),
-) -> set[str]:
-    """Return CONFIG_BOARD_TYPE_* names mentioned by one config entry."""
-    content = kconfig_path.read_text(encoding="utf-8")
-    start = re.search(rf"^\s*config\s+{re.escape(symbol)}\s*$", content, re.MULTILINE)
-    if not start:
-        raise ValueError(f"Kconfig config {symbol} was not found in {kconfig_path}")
-    remainder = content[start.end():]
-    end = re.search(r"^\s*(?:config\s+|endchoice\s*$|endmenu\s*$)", remainder, re.MULTILINE)
-    block = remainder[:end.start()] if end else remainder
-    return {
-        f"CONFIG_{item}"
-        for item in re.findall(r"\b(BOARD_TYPE_[A-Za-z0-9_]+)\b", block)
-    }
-
-
 def _board_source_text(board: str) -> str:
     board_dir = _BOARDS_DIR / board
     parts: list[str] = []
@@ -505,13 +486,10 @@ def _build_option_definitions(
     # no-display boards deliberately do not expose a selector that has no effect.
     if re.search(r"\b[A-Za-z0-9_]*LcdDisplay\b", source):
         style_choice = _kconfig_choice("DISPLAY_STYLE")
-        emote_boards = _kconfig_config_board_dependencies("USE_EMOTE_MESSAGE_STYLE")
         style_choices = [
             {"value": "default", "label": "Default"},
             {"value": "wechat", "label": "WeChat"},
         ]
-        if board_config in emote_boards:
-            style_choices.append({"value": "emote", "label": "Emote animation"})
         style_default = "default"
         selected_style = _selected_choice_default(style_choice, assignments)
         for value, symbol in _DISPLAY_STYLE_SYMBOLS.items():
@@ -616,7 +594,6 @@ def _normalize_build_options(
 def _build_options_sdkconfig(
     definitions: list[dict[str, Any]],
     options: dict[str, object],
-    base_assignments: dict[str, str],
 ) -> list[str]:
     """Expand semantic build options into a complete, mutually-exclusive fragment."""
     by_key = {definition["key"]: definition for definition in definitions}
@@ -638,22 +615,6 @@ def _build_options_sdkconfig(
             value = choice["value"]
             symbol = _DISPLAY_STYLE_SYMBOLS[value]
             result.append(f"{symbol}={'y' if value == selected else 'n'}")
-        flash_symbols = (
-            "CONFIG_FLASH_NONE_ASSETS",
-            "CONFIG_FLASH_DEFAULT_ASSETS",
-            "CONFIG_FLASH_CUSTOM_ASSETS",
-            "CONFIG_FLASH_EXPRESSION_ASSETS",
-        )
-        if selected == "emote" and base_assignments.get("CONFIG_FLASH_CUSTOM_ASSETS") != "y":
-            result.extend(
-                f"{symbol}={'y' if symbol == 'CONFIG_FLASH_EXPRESSION_ASSETS' else 'n'}"
-                for symbol in flash_symbols
-            )
-        elif selected != "emote" and base_assignments.get("CONFIG_FLASH_EXPRESSION_ASSETS") == "y":
-            result.extend(
-                f"{symbol}={'y' if symbol == 'CONFIG_FLASH_DEFAULT_ASSETS' else 'n'}"
-                for symbol in flash_symbols
-            )
 
     if "multiline_chat" in options:
         result.append(f"CONFIG_USE_MULTILINE_CHAT_MESSAGE={'y' if options['multiline_chat'] else 'n'}")
@@ -1516,7 +1477,6 @@ def build_board(
             build_option_sdkconfig = _build_options_sdkconfig(
                 option_definitions,
                 selected_build_options,
-                _sdkconfig_assignments(build_sdkconfig_append),
             )
             user_options.extend(build_option_sdkconfig)
 

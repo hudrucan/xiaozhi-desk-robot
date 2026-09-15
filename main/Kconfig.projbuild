@@ -8,8 +8,7 @@ config OTA_URL
 
 choice
     prompt "Flash Assets"
-    default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE
-    default FLASH_EXPRESSION_ASSETS if USE_EMOTE_MESSAGE_STYLE
+    default FLASH_DEFAULT_ASSETS
     help
         Select the assets to flash.
 
@@ -17,12 +16,8 @@ choice
         bool "Do not flash assets"
     config FLASH_DEFAULT_ASSETS
         bool "Flash Default Assets"
-        depends on !USE_EMOTE_MESSAGE_STYLE
     config FLASH_CUSTOM_ASSETS
         bool "Flash Custom Assets"
-    config FLASH_EXPRESSION_ASSETS
-        bool "Flash Emote Assets"
-        depends on USE_EMOTE_MESSAGE_STYLE
 endchoice
 
 config CUSTOM_ASSETS_FILE
@@ -63,12 +58,6 @@ choice DISPLAY_STYLE
 
     config USE_WECHAT_MESSAGE_STYLE
         bool "Enable WeChat Message Style"
-
-    config USE_EMOTE_MESSAGE_STYLE
-        bool "Emote animation style"
-        depends on BOARD_TYPE_ESP32_S3_BOX || BOARD_TYPE_ESP32_S3_BOX_3 \
-            || BOARD_TYPE_ESP_VOCAT || BOARD_TYPE_LICHUANG_DEV_S3 || BOARD_TYPE_RYMCU_BIGSMART \
-            || BOARD_TYPE_ESP_SENSAIRSHUTTLE
 endchoice
 
 config USE_MULTILINE_CHAT_MESSAGE
