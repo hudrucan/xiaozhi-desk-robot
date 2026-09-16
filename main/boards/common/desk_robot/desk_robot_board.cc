@@ -2862,8 +2862,8 @@ private:
                     }
                 }
 #endif
-                const esp_app_desc_t* app = esp_app_get_description();
-                cJSON_AddStringToObject(root, "version", app != nullptr ? app->version : "unknown");
+                const esp_app_desc_t* app_desc = esp_app_get_description();
+                cJSON_AddStringToObject(root, "version", app_desc != nullptr ? app_desc->version : "unknown");
                 cJSON_AddStringToObject(root, "ip",
                                         WifiManager::GetInstance().GetIpAddress().c_str());
                 wifi_ap_record_t access_point = {};
