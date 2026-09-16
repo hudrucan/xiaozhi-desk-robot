@@ -1212,11 +1212,13 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
     if (GetAsrTurnConfig().provider == AsrProvider::kGemini) {
-        // The backend channel remains open for the later typed-text bridge, but
-        // Gemini turns must not start or feed the Xiaozhi ASR session.
+        // Keep microphone audio on Gemini, but still notify Xiaozhi about the
+        // wake invocation so the existing wake acknowledgement/TTS lifecycle
+        // remains intact before the first Gemini speech turn.
         if (!PrimeAudioChannelForGemini()) {
             return;
         }
+        protocol_->SendWakeWordDetected(wake_word);
         play_popup_on_listening_ = true;
         SetListeningMode(GetDefaultListeningMode());
         return;
