@@ -20,6 +20,7 @@
 #include "mpu6050_motion_sensor.h"
 #endif
 #include "robot_web_control_server.h"
+#include "sensors/auxiliary_i2c.h"
 #include "secondary_oled.h"
 #include "settings.h"
 
@@ -136,9 +137,8 @@ private:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
 #ifdef AUXILIARY_I2C_SDA_PIN
-    i2c_master_bus_handle_t auxiliary_i2c_bus_ = nullptr;
-    std::mutex auxiliary_i2c_mutex_;
-    TaskHandle_t auxiliary_init_task_ = nullptr;
+    AuxiliaryI2c auxiliary_i2c_{AUXILIARY_I2C_PORT, AUXILIARY_I2C_SDA_PIN,
+                                AUXILIARY_I2C_SCL_PIN};
 #endif
 #ifdef INA219_I2C_ADDRESS
     Ina219PowerMonitor power_monitor_;
@@ -258,71 +258,24 @@ private:
 #endif
 
 #ifdef AUXILIARY_I2C_SDA_PIN
-    void InitializeAuxiliaryI2c() {
-        i2c_master_bus_config_t bus_config = {
-            .i2c_port = AUXILIARY_I2C_PORT,
-            .sda_io_num = AUXILIARY_I2C_SDA_PIN,
-            .scl_io_num = AUXILIARY_I2C_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .intr_priority = 0,
-            .trans_queue_depth = 0,
-            .flags = {.enable_internal_pullup = true},
-        };
-        const esp_err_t error = i2c_new_master_bus(&bus_config, &auxiliary_i2c_bus_);
-        if (error != ESP_OK) {
-            auxiliary_i2c_bus_ = nullptr;
-            ESP_LOGW(TAG, "Cannot create auxiliary I2C bus on SDA GPIO%d/SCL GPIO%d: %s",
-                     AUXILIARY_I2C_SDA_PIN, AUXILIARY_I2C_SCL_PIN, esp_err_to_name(error));
-            return;
-        }
-        ESP_LOGI(TAG, "Auxiliary I2C bus ready on SDA GPIO%d/SCL GPIO%d", AUXILIARY_I2C_SDA_PIN,
-                 AUXILIARY_I2C_SCL_PIN);
-    }
-
-    static void DeferredAuxiliaryInitTask(void* arg) {
+    static void InitializeDeferredAuxiliaryDevices(void* arg) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
-
-        // This task is queued from Application::Run(), after Application::Initialize() returns.
-        // A short delay also lets the main display and audio DMA settle before another driver is
-        // added.
-        vTaskDelay(pdMS_TO_TICKS(250));
-        ESP_LOGI(TAG, "Deferred auxiliary I2C initialization starting");
-
-        self->InitializeAuxiliaryI2c();
-        if (self->auxiliary_i2c_bus_ != nullptr) {
-            // Do not start any periodic I2C task until every device has completed its one-time
-            // setup. This guarantees that SSD1306 panel creation cannot overlap a sensor read.
+        // Do not start any periodic I2C task until every device has completed its one-time setup.
+        // This guarantees that SSD1306 panel creation cannot overlap a sensor read.
 #ifdef INA219_I2C_ADDRESS
-            self->InitializePowerMonitor();
-            vTaskDelay(pdMS_TO_TICKS(50));
+        self->InitializePowerMonitor();
+        vTaskDelay(pdMS_TO_TICKS(50));
 #endif
 #ifdef MPU6050_I2C_ADDRESS
-            self->InitializeMotionSensor();
-            vTaskDelay(pdMS_TO_TICKS(50));
+        self->InitializeMotionSensor();
+        vTaskDelay(pdMS_TO_TICKS(50));
 #endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-            self->InitializeSecondaryOled();
+        self->InitializeSecondaryOled();
 #endif
 #if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
-            self->StartAuxiliarySensorTask();
+        self->StartAuxiliarySensorTask();
 #endif
-        }
-
-        ESP_LOGI(TAG, "Deferred auxiliary I2C initialization complete");
-        self->auxiliary_init_task_ = nullptr;
-        vTaskDelete(nullptr);
-    }
-
-    void StartDeferredAuxiliaryInit() {
-        if (auxiliary_init_task_ != nullptr) {
-            return;
-        }
-        if (xTaskCreate(DeferredAuxiliaryInitTask, "aux_i2c_init", 10240, this, 1,
-                        &auxiliary_init_task_) != pdPASS) {
-            auxiliary_init_task_ = nullptr;
-            ESP_LOGE(TAG, "Failed to create deferred auxiliary I2C initialization task");
-        }
     }
 #endif
 
@@ -353,13 +306,13 @@ private:
         } else if (soc_state.version != 0) {
             ESP_LOGW(TAG, "Ignoring incompatible or invalid persisted battery SoC state");
         }
-        std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
-        if (auxiliary_i2c_bus_ == nullptr ||
-            i2c_master_probe(auxiliary_i2c_bus_, INA219_I2C_ADDRESS, 100) != ESP_OK) {
+        std::lock_guard<std::mutex> lock(auxiliary_i2c_.mutex());
+        if (auxiliary_i2c_.handle() == nullptr ||
+            i2c_master_probe(auxiliary_i2c_.handle(), INA219_I2C_ADDRESS, 100) != ESP_OK) {
             ESP_LOGW(TAG, "INA219 not detected at 0x%02x", INA219_I2C_ADDRESS);
             return;
         }
-        if (!power_monitor_.Initialize(auxiliary_i2c_bus_, INA219_I2C_ADDRESS,
+        if (!power_monitor_.Initialize(auxiliary_i2c_.handle(), INA219_I2C_ADDRESS,
                                        INA219_SHUNT_RESISTANCE_OHMS)) {
             ESP_LOGW(TAG, "INA219 initialization failed");
         }
@@ -478,9 +431,9 @@ private:
     bool InitializeMotionSensor() {
         Settings settings("desk_robot", false);
         motion_emotions_enabled_.store(settings.GetBool("motion_emotions", true));
-        std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
-        if (auxiliary_i2c_bus_ == nullptr ||
-            !motion_sensor_.Initialize(auxiliary_i2c_bus_, MPU6050_I2C_ADDRESS)) {
+        std::lock_guard<std::mutex> lock(auxiliary_i2c_.mutex());
+        if (auxiliary_i2c_.handle() == nullptr ||
+            !motion_sensor_.Initialize(auxiliary_i2c_.handle(), MPU6050_I2C_ADDRESS)) {
             ESP_LOGW(TAG, "MPU6050 not detected at 0x68 or 0x69");
             return false;
         }
@@ -613,7 +566,7 @@ private:
                 Ina219PowerMonitor::Reading reading;
                 bool read_ok = false;
                 {
-                    std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
+                    std::lock_guard<std::mutex> lock(auxiliary_i2c_.mutex());
                     read_ok = power_monitor_.Read(reading);
                 }
                 battery_conversion_ready_.store(reading.conversion_ready);
@@ -854,7 +807,7 @@ private:
                 Mpu6050MotionSensor::Sample sample;
                 bool read_ok = false;
                 {
-                    std::lock_guard<std::mutex> lock(auxiliary_i2c_mutex_);
+                    std::lock_guard<std::mutex> lock(auxiliary_i2c_.mutex());
                     read_ok = motion_sensor_.Read(sample);
                 }
                 if (!read_ok) {
@@ -1653,7 +1606,7 @@ private:
         oled_config.brand = settings.GetString("oled_brand", "Desk Robot");
         oled_config.distance_prefix = settings.GetString("oled_prefix", "Dist");
         LoadSecondaryOledWidgets(settings, oled_config);
-        if (!secondary_oled_.Initialize(auxiliary_i2c_bus_, auxiliary_i2c_mutex_,
+        if (!secondary_oled_.Initialize(auxiliary_i2c_.handle(), auxiliary_i2c_.mutex(),
                                         SECONDARY_OLED_I2C_ADDRESS, SECONDARY_OLED_WIDTH,
                                         SECONDARY_OLED_HEIGHT, oled_config.flip_180)) {
             return;
@@ -3084,7 +3037,10 @@ public:
 #ifdef AUXILIARY_I2C_SDA_PIN
         // Board construction runs inside Application::Initialize(). Queue only the lightweight
         // task creation here; Application::Run() executes it after initialization has returned.
-        Application::GetInstance().Schedule([this]() { StartDeferredAuxiliaryInit(); });
+        Application::GetInstance().Schedule([this]() {
+            auxiliary_i2c_.StartDeferredInitialization(
+                this, &DeskRobotBoard::InitializeDeferredAuxiliaryDevices);
+        });
 #endif
     }
 
