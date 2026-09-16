@@ -99,9 +99,9 @@
 #define SECONDARY_OLED_HEIGHT 32
 #define SECONDARY_OLED_FLIP_180 true
 
-// INA219 breakout with both A0/A1 jumpers open and an R100 (0.1 ohm) shunt.
+// INA219 breakout with both A0/A1 jumpers open and an R005 (0.005 ohm) shunt.
 #define INA219_I2C_ADDRESS 0x40
-#define INA219_SHUNT_RESISTANCE_OHMS 0.1f
+#define INA219_SHUNT_RESISTANCE_OHMS 0.005f
 #define INA219_SAMPLE_PERIOD_MS 100
 #define BATTERY_SOC_USABLE_CAPACITY_MAH 2862.1f
 // Initial diagnostic limit: ten nominal INA219 periods. Hardware logs should be used to confirm
