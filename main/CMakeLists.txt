@@ -72,6 +72,8 @@ list(APPEND SOURCES
     "robot/control/robot_controller.cc"
     "robot/control/robot_settings.cc"
     "robot/display/mochan_display.cc"
+    "robot/display/mochan_face_renderer.cc"
+    "robot/display/mochan_display_overlay.cc"
     "robot/display/secondary_display_controller.cc"
     "robot/display/secondary_oled.cc"
     "robot/mcp/robot_mcp_tools.cc"

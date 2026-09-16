@@ -117,6 +117,8 @@ private:
     bool RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
     bool RenderMouthTarget(const std::string& emotion);
     void UpdateMouth(uint8_t blink_amount, const std::string& emotion);
+    static bool HasMouthGeometry(const std::string& emotion);
+    static bool GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y);
 
     void SetFaceState(FaceState state);
     void AdvanceEyeAnimation();
