@@ -86,12 +86,12 @@ main/
 ├── display/                       Reusable display infrastructure
 ├── mcp_server.*                   Device-side MCP framework
 ├── platform/                      Board, Wi-Fi and hardware adapters
-└── robot/                         Desk-robot implementation, config and tuning
+└── robot/                         Desk-robot implementation, adapters, UI, config and tuning
 ```
 
 The robot-specific subsystem under `main/robot/` owns the motor
-controller, Mochan display, secondary OLED, Web Control server, battery monitor/SoC,
-MPU6050 integration and other desk-robot behavior.
+controller, Mochan display, secondary OLED, typed MCP/Web adapters, editable Web UI,
+battery monitor/SoC, MPU6050 integration and other desk-robot behavior.
 
 ## Typed Web Chat
 
@@ -140,12 +140,21 @@ It provides:
 - typed conversation
 - live system log
 
-The Web Control server lives in:
+Web Control is split by responsibility:
 
 ```text
-main/robot/robot_web_control_server.*
-main/robot/robot_web_control_page.h
+main/robot/robot_web_control_server.*       HTTP routes, logs, chat/ASR, snapshots
+main/robot/web/robot_web_adapter.*          Robot actions and status JSON
+main/robot/web/ui/index.html                Editable markup
+main/robot/web/ui/style.css                 Editable styling
+main/robot/web/ui/app.js                    Editable browser behavior
+main/robot/web/robot_web_control_page.h.in  Build-tree generated-page template
 ```
+
+CMake assembles the three UI source files into a self-contained generated header in the
+build tree. Edit the HTML/CSS/JavaScript sources, not generated build output. The firmware
+continues to serve the complete page from `/`; no separate asset routes or frontend
+toolchain are required.
 
 ## MCP
 
@@ -153,6 +162,14 @@ The generic device-side MCP framework is intentionally retained as an extension 
 
 Robot-specific MCP tools expose hardware state and actions such as camera input, motion,
 distance, battery/status and motor-related behavior.
+
+Their robot-facing registration and serialization live in:
+
+```text
+main/robot/mcp/robot_mcp_tools.*
+```
+
+The generic schema, dispatch and tool framework remains in `main/mcp_server.*`.
 
 Typed Web Chat also uses the AI-visible tool:
 

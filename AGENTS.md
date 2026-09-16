@@ -31,6 +31,8 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/camera/desk_robot_camera.*` — camera capture ownership and concurrency policy.
 - `main/robot/control/robot_settings.*` — typed access to persistent robot and audio preferences.
 - `main/robot/control/robot_controller.*` and `main/robot/control/robot_status.h` — typed robot control/status boundary.
+- `main/robot/mcp/robot_mcp_tools.*` — robot-specific MCP registration and serialization
+  through the typed controller boundary.
 - `main/robot/display/` — secondary OLED rendering, telemetry orchestration and persisted layout.
 - `main/robot/motion/` — gyro-turn lifecycle and motion-reaction policy.
 - `main/robot/sensors/auxiliary_i2c.*` — deferred shared auxiliary-bus ownership and lifecycle.
@@ -40,8 +42,13 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/motion/motor_controller.*` — drive control.
 - `main/robot/display/mochan_display.*` — main robot-face display.
 - `main/robot/sensors/mpu6050_motion_sensor.*` — motion sensing.
-- `main/robot/robot_web_control_server.*` — local HTTP/API server.
-- `main/robot/robot_web_control_page.h` — embedded Web Control UI.
+- `main/robot/robot_web_control_server.*` — local HTTP routes, logs, chat/ASR and
+  snapshot transport.
+- `main/robot/web/robot_web_adapter.*` — Web action mapping and robot-status JSON
+  serialization through `RobotController`.
+- `main/robot/web/ui/` — editable Web Control HTML, CSS and JavaScript source.
+- `main/robot/web/robot_web_control_page.h.in` — build-tree generated Web Control page
+  template; do not edit generated output.
 - `main/CMakeLists.txt`, `main/Kconfig.projbuild` and `sdkconfig.robot` — single-target build configuration.
 - `scripts/build.py` — configured build helper.
 
@@ -62,7 +69,7 @@ code unless it is genuinely transport/hardware independent.
 - Preserve `cJSON` ownership and validate network input.
 - Treat NVS keys as persistent state/API; migrate deliberately if renamed.
 - Do not edit generated/vendor output such as `build/`, `managed_components/`,
-  generated asset headers, or generated mmap files.
+  generated asset headers (including the assembled Web Control header), or generated mmap files.
 - Avoid unrelated formatting churn.
 
 ## User-owned build / hardware validation
