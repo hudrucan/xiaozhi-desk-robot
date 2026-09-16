@@ -434,9 +434,12 @@ void MochanDisplay::UpdateStatusDot() {
     }
 
     // Matches the original Mochan status language: green idle, yellow
-    // listening, blue speaking. Thinking keeps the quieter brass indicator.
+    // listening, blue speaking. ASR preparation/processing uses a brighter
+    // coral red so it is visibly busy rather than ready to hear speech.
     lv_color_t color = lv_color_hex(0x53c58b);
-    if (activity_state_ == FaceState::kListening) {
+    if (status_dot_busy_) {
+        color = lv_color_hex(0xff6257);
+    } else if (activity_state_ == FaceState::kListening) {
         color = lv_color_hex(0xf0c94b);
     } else if (activity_state_ == FaceState::kSpeaking) {
         color = lv_color_hex(0x4aa3ff);
@@ -1457,6 +1460,8 @@ void MochanDisplay::SetStatus(const char* status) {
     }
     FaceState next_activity = FaceState::kIdle;
     bool clear_emotion = false;
+    const bool status_dot_busy = std::strcmp(status, Lang::Strings::PREPARING_ASR) == 0 ||
+                                 std::strcmp(status, Lang::Strings::PROCESSING) == 0;
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
         next_activity = FaceState::kListening;
         clear_emotion = true;
@@ -1474,6 +1479,7 @@ void MochanDisplay::SetStatus(const char* status) {
     DisplayLockGuard lock(this);
     FreezeMouthForExit();
     activity_state_ = next_activity;
+    status_dot_busy_ = status_dot_busy;
     if (clear_emotion) {
         emotion_active_ = false;
     }

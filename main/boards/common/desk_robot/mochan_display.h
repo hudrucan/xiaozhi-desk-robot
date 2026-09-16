@@ -176,6 +176,7 @@ private:
     bool typing_finishing_ = false;
     FaceState face_state_ = FaceState::kIdle;
     FaceState activity_state_ = FaceState::kIdle;
+    bool status_dot_busy_ = false;
     bool emotion_active_ = false;
     uint16_t animation_phase_ = 0;
     uint16_t blink_countdown_ = 90;
