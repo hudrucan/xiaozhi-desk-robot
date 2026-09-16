@@ -140,7 +140,7 @@ void McpServer::AddUserOnlyTools() {
                         return true;
                     });
 
-#ifndef CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
+#ifndef XIAOZHI_DISABLE_OFFICIAL_FIRMWARE_UPGRADE
     // Firmware upgrade is not exposed on custom Desk Robot builds because the
     // official OTA service cannot provide this fork's board-specific image.
     AddUserOnlyTool(

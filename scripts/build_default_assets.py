@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Build default assets based on configuration
 
 This script reads configuration from sdkconfig and builds the appropriate assets.bin
-for the current board configuration.
+for the current firmware configuration.
 
 Usage:
     ./build_default_assets.py --sdkconfig <path> --builtin_text_font <font_name> \

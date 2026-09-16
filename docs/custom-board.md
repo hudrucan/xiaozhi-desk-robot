@@ -1,37 +1,24 @@
-# Hardware variant guide
+# Fixed hardware target
 
 This repository is intentionally scoped to one ESP32-S3 camera desk robot. The retained build is:
 
 ```sh
-python scripts/build.py generic/esp32-s3-camera-robot \
-  --name esp32-s3-camera-robot \
-  --language en-US \
+python scripts/build.py --language en-US \
   --wake-word wn9_hiwalle_tts2
 ```
 
 ## Existing hardware
 
-The compatibility-sensitive identity is `esp32-s3-camera-robot`. Its files are under
-`main/boards/generic/esp32-s3-camera-robot/`; shared robot behavior is under
-`main/boards/common/desk_robot/`.
+The compatibility-sensitive identity is `esp32-s3-camera-robot`. Its authoritative pin map is
+`main/robot/config/hardware_config.h`, its fixed sdkconfig fragment is `sdkconfig.robot`, and robot
+behavior is under `main/robot/`.
 
 Do not change the existing pin map to represent different hardware. That identity is persisted and
-reported through OTA. Small changes to the same physical unit belong in its `config.h`; a genuinely
-different PCB needs a new uniquely named variant.
+reported through OTA. Small changes to the same physical unit belong in `hardware_config.h`.
+Supporting a different PCB is outside this repository's single-target scope.
 
-## Adding a variant
-
-A new hardware variant requires updating the complete selection chain:
-
-1. Add a board directory with `config.json`, `config.h`, and its board factory source.
-2. Give it a unique lowercase `type` and build `name`; choose the real ESP-IDF target.
-3. Add the corresponding board symbol in `main/Kconfig.projbuild`.
-4. Select its directory and sources in `main/CMakeLists.txt`.
-5. Ensure the selected build exports exactly one `DECLARE_BOARD(...)` factory.
-6. Add only the drivers and managed-component dependencies that variant actually uses.
-
-Core modules must depend on the `Board` interface rather than a concrete board class or a board
-`config.h`. Camera, display, backlight, LED, battery, and sensors remain optional capabilities.
+Core modules must depend on the `Board` interface rather than a concrete board class or the robot
+hardware config. Camera, display, backlight, LED, battery, and sensors remain optional capabilities.
 
 ## Runtime rules
 

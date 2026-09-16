@@ -47,7 +47,7 @@ Current physical target:
 ### Important buses and GPIOs
 
 The authoritative pin map is
-[`main/boards/generic/esp32-s3-camera-robot/config.h`](main/boards/generic/esp32-s3-camera-robot/config.h).
+[`main/robot/config/hardware_config.h`](main/robot/config/hardware_config.h).
 
 | Function | GPIO |
 | --- | --- |
@@ -83,14 +83,11 @@ main/
 ├── audio/                         Capture, playback, Opus, wake word
 ├── display/                       Reusable display infrastructure
 ├── mcp_server.*                   Device-side MCP framework
-└── boards/
-    ├── generic/
-    │   └── esp32-s3-camera-robot/ Current physical board / pin map
-    └── common/
-        └── desk_robot/            Robot-specific implementation
+├── platform/                      Board, Wi-Fi and hardware adapters
+└── robot/                         Desk-robot implementation and pin map
 ```
 
-The robot-specific subsystem under `main/boards/common/desk_robot/` owns the motor
+The robot-specific subsystem under `main/robot/` owns the motor
 controller, Mochan display, secondary OLED, Web Control server, battery monitor/SoC,
 MPU6050 integration and other desk-robot behavior.
 
@@ -144,8 +141,8 @@ It provides:
 The Web Control server lives in:
 
 ```text
-main/boards/common/desk_robot/robot_web_control_server.*
-main/boards/common/desk_robot/robot_web_control_page.h
+main/robot/robot_web_control_server.*
+main/robot/robot_web_control_page.h
 ```
 
 ## MCP
@@ -179,34 +176,33 @@ source /path/to/esp-idf/export.sh
 idf.py --version
 ```
 
-The project contains one supported physical board:
+The project contains one supported physical target:
 
 ```text
-generic/esp32-s3-camera-robot
+esp32-s3-camera-robot
 ```
 
 Canonical configured build:
 
 ```bash
-python3 scripts/build.py generic/esp32-s3-camera-robot \
-  --name esp32-s3-camera-robot \
-  --language vi-VN
+python scripts/build.py --language vi-VN
 ```
+
+Fixed hardware-specific sdkconfig values live in `sdkconfig.robot`; the build helper
+combines that fragment with the normal project defaults and requested language/wake word.
 
 Wake word can be selected when needed:
 
 ```bash
-python3 scripts/build.py generic/esp32-s3-camera-robot \
-  --name esp32-s3-camera-robot \
-  --language vi-VN \
+python scripts/build.py --language vi-VN \
   --wake-word wn9_nihaoxiaozhi_tts
 ```
 
 Useful discovery commands:
 
 ```bash
-python3 scripts/build.py --list-languages
-python3 scripts/build.py --list-wake-words
+python scripts/build.py --list-languages
+python scripts/build.py --list-wake-words
 ```
 
 After the project has been configured, normal ESP-IDF commands can be used:

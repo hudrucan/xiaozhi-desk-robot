@@ -8,8 +8,8 @@ This repository is the **single-target Xiaozhi Desk Robot firmware**, derived fr
 It supports one physical target only:
 
 ```text
-generic/esp32-s3-camera-robot
-ESP32-S3 / CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
+esp32-s3-camera-robot
+ESP32-S3
 ```
 
 Do not treat this as the old generic multi-board Xiaozhi repository and do not
@@ -24,17 +24,18 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/protocols/` — shared protocol API, MQTT+UDP and WebSocket.
 - `main/audio/` — capture/playback, Opus, wake word and audio tasks.
 - `main/mcp_server.*` — generic device-side MCP framework.
-- `main/boards/generic/esp32-s3-camera-robot/` — current board identity and authoritative pin map.
-- `main/boards/common/desk_robot/` — robot-specific hardware and behavior.
-- `main/boards/common/desk_robot/desk_robot_board.cc` — desk-robot integration.
-- `main/boards/common/desk_robot/motor_controller.*` — drive control.
-- `main/boards/common/desk_robot/mochan_display.*` — main robot-face display.
-- `main/boards/common/desk_robot/secondary_oled.*` — 128×32 SSD1306.
-- `main/boards/common/desk_robot/ina219_power_monitor.*` and `battery_soc_estimator.*` — battery telemetry/SoC.
-- `main/boards/common/desk_robot/mpu6050_motion_sensor.*` — motion sensing.
-- `main/boards/common/desk_robot/robot_web_control_server.*` — local HTTP/API server.
-- `main/boards/common/desk_robot/robot_web_control_page.h` — embedded Web Control UI.
-- `main/CMakeLists.txt` and `main/Kconfig.projbuild` — single-target build configuration.
+- `main/platform/` — board, Wi-Fi and reusable hardware adapters.
+- `main/robot/config/hardware_config.h` — authoritative board identity and pin map.
+- `main/robot/` — robot-specific hardware and behavior.
+- `main/robot/desk_robot_board.cc` — desk-robot integration.
+- `main/robot/motor_controller.*` — drive control.
+- `main/robot/mochan_display.*` — main robot-face display.
+- `main/robot/secondary_oled.*` — 128×32 SSD1306.
+- `main/robot/ina219_power_monitor.*` and `battery_soc_estimator.*` — battery telemetry/SoC.
+- `main/robot/mpu6050_motion_sensor.*` — motion sensing.
+- `main/robot/robot_web_control_server.*` — local HTTP/API server.
+- `main/robot/robot_web_control_page.h` — embedded Web Control UI.
+- `main/CMakeLists.txt`, `main/Kconfig.projbuild` and `sdkconfig.robot` — single-target build configuration.
 - `scripts/build.py` — configured build helper.
 
 Prefer the narrowest owning subsystem. Do not move desk-robot behavior into generic core
@@ -78,7 +79,7 @@ Never claim physical hardware validation unless the user reports it.
 The authoritative GPIO definitions are in:
 
 ```text
-main/boards/generic/esp32-s3-camera-robot/config.h
+main/robot/config/hardware_config.h
 ```
 
 Important shared buses:
@@ -189,23 +190,20 @@ hardware-tested separately.
 
 ## Build helper
 
-This is now a single-target repository. `scripts/build.py` may keep compatibility CLI
-surface, but its implementation should not rediscover or validate a nonexistent
-multi-board tree.
+This is a single-target repository. `scripts/build.py` configures the fixed ESP32-S3
+target directly and must not rediscover or validate a nonexistent multi-board tree.
 
 Canonical configured build:
 
 ```bash
-python3 scripts/build.py generic/esp32-s3-camera-robot \
-  --name esp32-s3-camera-robot \
-  --language vi-VN
+python scripts/build.py --language vi-VN
 ```
 
 Useful list commands:
 
 ```bash
-python3 scripts/build.py --list-languages
-python3 scripts/build.py --list-wake-words
+python scripts/build.py --list-languages
+python scripts/build.py --list-wake-words
 ```
 
 Do not spend agent tokens repeatedly rebuilding or re-auditing completed debloat phases.

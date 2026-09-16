@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 import argparse
 import json
@@ -16,15 +16,11 @@ os.chdir(Path(__file__).resolve().parent.parent)
 # Single-target project constants
 ################################################################################
 
-_BOARD = "generic/esp32-s3-camera-robot"
-_BOARD_DIR = Path("main/boards") / _BOARD
-_BOARD_CONFIG_SYMBOL = "CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT"
 _SUPPORTED_TARGET = "esp32s3"
 _SUPPORTED_LANGUAGES = ("en-US", "vi-VN")
 
 _WAKE_WORD_MODEL_PATTERN = re.compile(r"^wn9[sl]?_[a-z0-9_]+$")
 _ESP_SR_KCONFIG = Path("managed_components/espressif__esp-sr/Kconfig.projbuild")
-_REPORTED_IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9.-]+$")
 
 
 ################################################################################
@@ -55,137 +51,16 @@ def _get_idf_command() -> list[str]:
     )
 
 
-def _run_idf(*args: str, preview: bool = False) -> None:
+def _run_idf(*args: str) -> None:
     command = _get_idf_command()
-    if preview:
-        command.append("--preview")
     command.extend(args)
     if subprocess.run(command, check=False).returncode != 0:
         print(f"{' '.join(command)} failed", file=sys.stderr)
         sys.exit(1)
 
 
-def merge_bin(preview: bool = False) -> None:
-    _run_idf("merge-bin", preview=preview)
-
-
-################################################################################
-# Board configuration
-################################################################################
-
-
-def _validate_reported_identifier(value: object, field: str) -> str:
-    """Validate compatibility-sensitive OTA-reported identifiers."""
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"missing non-empty {field}")
-    if not _REPORTED_IDENTIFIER_PATTERN.fullmatch(value):
-        raise ValueError(
-            f"{field} {value!r} must contain only lowercase letters, "
-            'digits, "." and "-"'
-        )
-    return value
-
-
-def _load_board_config(
-    config_filename: str = "config.json",
-) -> tuple[dict, dict]:
-    """Load the one supported desk-robot board configuration."""
-    cfg_path = _BOARD_DIR / config_filename
-    if not cfg_path.is_file():
-        raise RuntimeError(f"Board configuration not found: {cfg_path}")
-
-    with cfg_path.open(encoding="utf-8") as file:
-        cfg = json.load(file)
-
-    target = cfg.get("target")
-    if target != _SUPPORTED_TARGET:
-        raise ValueError(
-            f"{cfg_path}: target must be {_SUPPORTED_TARGET!r}, got {target!r}"
-        )
-
-    _validate_reported_identifier(cfg.get("type"), 'top-level "type"')
-
-    builds = cfg.get("builds")
-    if not isinstance(builds, list) or len(builds) != 1:
-        raise ValueError(
-            f"{cfg_path}: standalone desk-robot config must contain exactly "
-            "one build entry"
-        )
-
-    build = builds[0]
-    if not isinstance(build, dict):
-        raise ValueError(f"{cfg_path}: build entry must be an object")
-
-    _validate_reported_identifier(build.get("name"), 'build "name"')
-
-    sdkconfig_append = build.get("sdkconfig_append", [])
-    if not isinstance(sdkconfig_append, list) or not all(
-        isinstance(item, str) for item in sdkconfig_append
-    ):
-        raise ValueError(f"{cfg_path}: sdkconfig_append must be a string list")
-
-    preview = cfg.get("preview", False)
-    if not isinstance(preview, bool):
-        raise ValueError(f"{cfg_path}: preview must be a boolean")
-
-    return cfg, build
-
-
-def _board_summary(config_filename: str = "config.json") -> dict[str, object]:
-    cfg, build = _load_board_config(config_filename)
-    manufacturer = cfg.get("manufacturer")
-    name = _validate_reported_identifier(build.get("name"), 'build "name"')
-    full_name = (
-        f"{manufacturer}-{name}"
-        if isinstance(manufacturer, str)
-        and manufacturer
-        and not name.startswith(f"{manufacturer}-")
-        else name
-    )
-    return {
-        "board": _BOARD,
-        "name": name,
-        "full_name": full_name,
-        "type": _validate_reported_identifier(
-            cfg.get("type"), 'top-level "type"'
-        ),
-        "target": _SUPPORTED_TARGET,
-        "config": _BOARD_CONFIG_SYMBOL,
-        "wake_word_supported": True,
-    }
-
-
-################################################################################
-# sdkconfig helpers
-################################################################################
-
-
-def _sdkconfig_assignments(options: list[str]) -> dict[str, str]:
-    """Return the final value for each CONFIG_* assignment."""
-    assignments: dict[str, str] = {}
-    for option in options:
-        key, separator, value = option.strip().partition("=")
-        if not separator or not key.startswith("CONFIG_"):
-            raise ValueError(f"Invalid sdkconfig assignment: {option!r}")
-        assignments[key] = value
-    return assignments
-
-
-def _merge_sdkconfig_options(
-    base_options: list[str],
-    override_options: list[str],
-) -> list[str]:
-    """Merge sdkconfig assignments by key, with later overrides winning."""
-    keys: list[str] = []
-    values: dict[str, str] = {}
-
-    for option in (*base_options, *override_options):
-        key = option.split("=", 1)[0]
-        if key not in values:
-            keys.append(key)
-        values[key] = option
-
-    return [values[key] for key in keys]
+def merge_bin() -> None:
+    _run_idf("merge-bin")
 
 
 def _language_sdkconfig_option(language: str) -> tuple[str, str]:
@@ -298,7 +173,7 @@ def _enabled_default_wake_word_symbols() -> list[str]:
 
     for path in (
         Path("sdkconfig.defaults"),
-        Path("sdkconfig.defaults.esp32s3"),
+        Path("sdkconfig.robot"),
     ):
         if not path.exists():
             continue
@@ -431,7 +306,7 @@ def _sync_vscode_target(
     return True
 
 
-def _prepare_target(target: str, preview: bool) -> None:
+def _prepare_target(target: str) -> None:
     """Full-clean only when an existing CMake build targets another chip."""
     cache_target = _target_from_cmake_cache()
     current_target = _configured_target()
@@ -444,7 +319,7 @@ def _prepare_target(target: str, preview: bool) -> None:
         print(
             f"[INFO] Switching target from {cache_target} to {target}."
         )
-        _run_idf("fullclean", preview=preview)
+        _run_idf("fullclean")
     elif current_target:
         print(
             f"[INFO] Configuring target {target} "
@@ -455,9 +330,7 @@ def _prepare_target(target: str, preview: bool) -> None:
 
 
 def _configure_build(
-    sdkconfig_append: list[str],
-    board_name: str,
-    preview: bool,
+    user_options: list[str],
 ) -> None:
     """Configure the fixed ESP32-S3 target and selected user options."""
     sdkconfig = Path("sdkconfig")
@@ -472,7 +345,7 @@ def _configure_build(
     fragment.parent.mkdir(parents=True, exist_ok=True)
     fragment.write_text(
         "# Generated by scripts/build.py\n"
-        + "\n".join(sdkconfig_append)
+        + "\n".join(user_options)
         + "\n",
         encoding="utf-8",
     )
@@ -480,14 +353,13 @@ def _configure_build(
     defaults: list[str] = []
     if Path("sdkconfig.defaults").exists():
         defaults.append("sdkconfig.defaults")
+    defaults.append("sdkconfig.robot")
     defaults.append(fragment.as_posix())
 
     _run_idf(
         f"-DIDF_TARGET={_SUPPORTED_TARGET}",
         f"-DSDKCONFIG_DEFAULTS={';'.join(defaults)}",
-        f"-DBOARD_NAME={board_name}",
         "reconfigure",
-        preview=preview,
     )
     _sync_vscode_target(_SUPPORTED_TARGET)
 
@@ -530,44 +402,14 @@ def _validate_configured_symbols(
 
 def build_robot(
     *,
-    config_filename: str = "config.json",
-    name_filter: Optional[str] = None,
     language: Optional[str] = None,
     wake_word: Optional[str] = None,
 ) -> None:
     """Configure and build the single supported ESP32-S3 desk robot."""
-    cfg, build = _load_board_config(config_filename)
-
-    reported_type = _validate_reported_identifier(
-        cfg.get("type"),
-        'top-level "type"',
-    )
-    board_name = _validate_reported_identifier(
-        build.get("name"),
-        'build "name"',
-    )
-
-    if name_filter is not None and name_filter != board_name:
-        raise ValueError(
-            f"Only build name {board_name!r} is supported; "
-            f"got {name_filter!r}"
-        )
-
-    preview = bool(cfg.get("preview", False))
-    sdkconfig_append = list(build.get("sdkconfig_append", []))
-
-    # The standalone repository has one physical target and one board symbol.
-    sdkconfig_append = _merge_sdkconfig_options(
-        sdkconfig_append,
-        [f"{_BOARD_CONFIG_SYMBOL}=y"],
-    )
-
     selected_language: Optional[str] = None
     selected_wake_word: Optional[str] = None
 
-    validations: list[tuple[list[str], str]] = [
-        ([_BOARD_CONFIG_SYMBOL], "board selection"),
-    ]
+    validations: list[tuple[list[str], str]] = []
     user_options: list[str] = []
 
     if language is not None:
@@ -586,38 +428,25 @@ def build_robot(
         user_options.extend(wake_options)
         validations.append((wake_symbols, "--wake-word"))
 
-    sdkconfig_append = _merge_sdkconfig_options(
-        sdkconfig_append,
-        user_options,
-    )
-    _sdkconfig_assignments(sdkconfig_append)
-
     print("-" * 80)
     print(f"project_version: {get_project_version()}")
-    print(f"board: {_BOARD}")
-    print(f"name: {board_name}")
-    print(f"reported_type: {reported_type}")
     print(f"target: {_SUPPORTED_TARGET}")
     if selected_language:
         print(f"language: {selected_language}")
     if selected_wake_word:
         print(f"wake_word: {selected_wake_word}")
-    for item in sdkconfig_append:
-        print(f"sdkconfig_append: {item}")
+    for item in user_options:
+        print(f"user_option: {item}")
 
     os.environ.pop("IDF_TARGET", None)
-    _prepare_target(_SUPPORTED_TARGET, preview)
-    _configure_build(
-        sdkconfig_append,
-        board_name,
-        preview,
-    )
+    _prepare_target(_SUPPORTED_TARGET)
+    _configure_build(user_options)
 
     for symbols, option_name in validations:
         _validate_configured_symbols(symbols, option_name)
 
-    _run_idf("build", preview=preview)
-    merge_bin(preview)
+    _run_idf("build")
+    merge_bin()
 
 
 ################################################################################
@@ -625,41 +454,9 @@ def build_robot(
 ################################################################################
 
 
-def _validate_board_argument(board: Optional[str]) -> None:
-    """Keep old invocation syntax without retaining multi-board machinery."""
-    if board is None:
-        return
-    if board in (_BOARD, "all"):
-        return
-
-    raise ValueError(
-        f"This standalone repository supports only {_BOARD!r}; "
-        f"got {board!r}"
-    )
-
-
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         description="Configure and build the Xiaozhi ESP32-S3 desk robot.",
-    )
-    parser.add_argument(
-        "board",
-        nargs="?",
-        default=None,
-        help=(
-            f"Optional compatibility argument; only {_BOARD!r} is supported"
-        ),
-    )
-    parser.add_argument(
-        "-c",
-        "--config",
-        default="config.json",
-        help="Board config filename (default: config.json)",
-    )
-    parser.add_argument(
-        "--list-boards",
-        action="store_true",
-        help="Print the single supported board",
     )
     parser.add_argument(
         "--list-languages",
@@ -675,10 +472,6 @@ def main(argv: Optional[list[str]] = None) -> None:
         "--json",
         action="store_true",
         help="Use JSON output with a list command",
-    )
-    parser.add_argument(
-        "--name",
-        help="Compatibility option; must match the single configured build name",
     )
     parser.add_argument(
         "--language",
@@ -703,7 +496,6 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     list_count = sum(
         (
-            bool(args.list_boards),
             bool(args.list_languages),
             bool(args.list_wake_words),
         )
@@ -714,8 +506,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.list_languages:
         if any(
             (
-                args.board,
-                args.name,
                 args.language,
                 args.wake_word,
             )
@@ -734,8 +524,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.list_wake_words:
         if any(
             (
-                args.board,
-                args.name,
                 args.language,
                 args.wake_word,
             )
@@ -755,34 +543,11 @@ def main(argv: Optional[list[str]] = None) -> None:
             _print_wake_word_list(wake_words)
         return
 
-    if args.list_boards:
-        if any(
-            (
-                args.board,
-                args.name,
-                args.language,
-                args.wake_word,
-            )
-        ):
-            parser.error(
-                "--list-boards cannot be combined with build options"
-            )
-        board = _board_summary(args.config)
-        if args.json:
-            print(json.dumps([board]))
-        else:
-            print(board["board"])
-            print(f"  - {board['name']}")
-        return
-
     if args.json:
         parser.error("--json is only valid with a --list-* option")
 
     try:
-        _validate_board_argument(args.board)
         build_robot(
-            config_filename=args.config,
-            name_filter=args.name,
             language=args.language,
             wake_word=args.wake_word,
         )

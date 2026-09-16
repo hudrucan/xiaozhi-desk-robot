@@ -33,15 +33,15 @@ set(SOURCES "audio/asr_settings.cc"
 
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
 
-# Add board common files
+# Platform abstractions shared with the application layer.
 list(APPEND SOURCES
-    "boards/common/board.cc"
-    "boards/common/wifi_board.cc"
-    "boards/common/backlight.cc"
-    "boards/common/button.cc"
-    "boards/common/esp32_camera.cc"
+    "platform/board.cc"
+    "platform/wifi_board.cc"
+    "platform/backlight.cc"
+    "platform/button.cc"
+    "platform/esp32_camera.cc"
 )
-list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
+list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/platform)
 
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
@@ -57,71 +57,29 @@ function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
     endforeach()
 endfunction()
 
-# Set default BUILTIN_TEXT_FONT and BUILTIN_ICON_FONT
-set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
-set(BUILTIN_ICON_FONT font_material_symbols_14_1)
-
-# This firmware supports one physical target: the ESP32-S3 camera desk robot.
-if(CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT)
-    set(BOARD_DIR "generic/esp32-s3-camera-robot")
-    set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
-    set(BUILTIN_ICON_FONT font_material_symbols_20_4)
-elseif(NOT CMAKE_BUILD_EARLY_EXPANSION)
-    message(FATAL_ERROR "CONFIG_BOARD_TYPE_ESP32_S3_CAMERA_ROBOT must be enabled")
-endif()
-
-set(BOARD_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/config.json")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_CONFIG_FILE}")
-
-# BOARD_TYPE and BOARD_MANUFACTURER are reported by the firmware.
-# Prefer config.json and fall back to values derived from the full board directory.
-set(BOARD_TYPE "")
-set(BOARD_MANUFACTURER "")
-if(EXISTS "${BOARD_CONFIG_FILE}")
-    file(READ "${BOARD_CONFIG_FILE}" BOARD_CONFIG_JSON)
-    string(REGEX MATCH "\"type\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]+)\"" BOARD_TYPE_MATCH "${BOARD_CONFIG_JSON}")
-    if(BOARD_TYPE_MATCH)
-        set(BOARD_TYPE "${CMAKE_MATCH_1}")
-    endif()
-    string(REGEX MATCH "\"manufacturer\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]+)\"" BOARD_MANUFACTURER_MATCH "${BOARD_CONFIG_JSON}")
-    if(BOARD_MANUFACTURER_MATCH)
-        set(BOARD_MANUFACTURER "${CMAKE_MATCH_1}")
-    endif()
-endif()
-if(NOT BOARD_TYPE)
-    string(REPLACE "/" "-" BOARD_TYPE "${BOARD_DIR}")
-endif()
-if(NOT BOARD_MANUFACTURER AND BOARD_DIR MATCHES "^([^/]+)/")
-    set(BOARD_MANUFACTURER "${CMAKE_MATCH_1}")
-endif()
-if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT BOARD_TYPE MATCHES "^[a-z0-9.-]+$")
-    message(FATAL_ERROR
-        "Invalid BOARD_TYPE '${BOARD_TYPE}': only lowercase letters, digits, '.' and '-' are allowed"
-    )
-endif()
-
-file(GLOB BOARD_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.c
-)
-list(APPEND SOURCES ${BOARD_SOURCES})
+# Fixed product identity and display assets for the only supported target.
+set(BOARD_TYPE "esp32-s3-camera-robot")
+set(BOARD_NAME "esp32-s3-camera-robot")
+set(BOARD_MANUFACTURER "generic")
+set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
+set(BUILTIN_ICON_FONT font_material_symbols_20_4)
 
 list(APPEND SOURCES
-    "boards/common/desk_robot/desk_robot_board.cc"
-    "boards/common/desk_robot/mochan_display.cc"
-    "boards/common/desk_robot/motor_controller.cc"
-    "boards/common/desk_robot/robot_web_control_server.cc"
-    "boards/common/desk_robot/secondary_oled.cc"
-    "boards/common/desk_robot/battery_soc_estimator.cc"
-    "boards/common/desk_robot/ina219_power_monitor.cc"
-    "boards/common/desk_robot/mpu6050_motion_sensor.cc"
+    "robot/desk_robot_board.cc"
+    "robot/mochan_display.cc"
+    "robot/motor_controller.cc"
+    "robot/robot_web_control_server.cc"
+    "robot/secondary_oled.cc"
+    "robot/battery_soc_estimator.cc"
+    "robot/ina219_power_monitor.cc"
+    "robot/mpu6050_motion_sensor.cc"
     "audio/engines/afe_audio_engine.cc"
     "audio/wake_words/custom_wake_word.cc"
     "audio/wake_words/wake_word_audio_cache.cc"
 )
 list(APPEND INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/desk_robot"
-    "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/config"
 )
 
 # Select language directory according to Kconfig
@@ -188,16 +146,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     target_compile_options(${COMPONENT_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++23>)
 endif()
 
-# Use target_compile_definitions to define the reported board identity
-# If BOARD_NAME is empty, use BOARD_TYPE
-if(NOT BOARD_NAME)
-    set(BOARD_NAME ${BOARD_TYPE})
-endif()
-if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT BOARD_NAME MATCHES "^[a-z0-9.-]+$")
-    message(FATAL_ERROR
-        "Invalid BOARD_NAME '${BOARD_NAME}': only lowercase letters, digits, '.' and '-' are allowed"
-    )
-endif()
+# Define the compatibility-sensitive reported product identity.
 string(REGEX MATCH "^font_noto_sans_basic_([0-9]+)_([0-9]+)$" _font_match "${BUILTIN_TEXT_FONT}")
 if(NOT _font_match)
     message(FATAL_ERROR "Unsupported built-in text font name: ${BUILTIN_TEXT_FONT}")
@@ -208,13 +157,13 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     target_compile_definitions(${COMPONENT_LIB}
                         PRIVATE BOARD_TYPE=\"${BOARD_TYPE}\" BOARD_NAME=\"${BOARD_NAME}\"
                         PRIVATE BOARD_MANUFACTURER=\"${BOARD_MANUFACTURER}\"
+                        PRIVATE XIAOZHI_DISABLE_OFFICIAL_FIRMWARE_UPGRADE=1
                         PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
                         PRIVATE TEXT_FONT_SIZE=${TEXT_FONT_SIZE} TEXT_FONT_BPP=${TEXT_FONT_BPP}
                         )
     # ESP32-S3 LVGL builtin pool: PSRAM boards allocate it from PSRAM.
-    # Boards that set CONFIG_SPIRAM=n must not keep the 1MB chip-default
-    # pool as a .dram0.bss array (build.py also switches those variants
-    # back to CLIB malloc).
+    # A configuration with CONFIG_SPIRAM=n must not keep the 1MB pool as a
+    # .dram0.bss array; use CLIB malloc for such a configuration.
     if(CONFIG_IDF_TARGET_ESP32S3)
         idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
         if(lvgl_lib)

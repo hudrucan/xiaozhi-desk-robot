@@ -40,13 +40,6 @@ choice
         bool "Vietnamese"
 endchoice
 
-config BOARD_TYPE_ESP32_S3_CAMERA_ROBOT
-    bool "ESP32-S3 Camera Robot"
-    default y
-    depends on IDF_TARGET_ESP32S3
-    help
-        Fixed hardware target for this desk-robot firmware.
-
 choice WAKE_WORD_TYPE
     prompt "Wake Word Implementation Type"
     default USE_AFE_WAKE_WORD if IDF_TARGET_ESP32S3 && SPIRAM
