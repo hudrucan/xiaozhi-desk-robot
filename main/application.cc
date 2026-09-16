@@ -1250,6 +1250,8 @@ void Application::HandleStateChangedEvent() {
     if (new_state != kDeviceStateListening) {
         gemini_asr_restart_pending_ = false;
         gemini_listening_deadline_us_ = 0;
+        asr_ready_.store(false);
+        gemini_asr_preparing_.store(false);
     }
 
     auto& board = Board::GetInstance();
@@ -1278,7 +1280,14 @@ void Application::HandleStateChangedEvent() {
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
-            display->SetStatus(Lang::Strings::LISTENING);
+            if (!text_chat_pending_.load() &&
+                GetAsrTurnConfig().provider == AsrProvider::kGemini) {
+                display->SetStatus(Lang::Strings::PREPARING_ASR);
+                asr_ready_.store(false);
+                gemini_asr_preparing_.store(true);
+            } else {
+                display->SetStatus(Lang::Strings::LISTENING);
+            }
             display->SetEmotion("neutral");
 
             // Idle-origin typed chat is pre-armed synchronously in RunTextChat()
@@ -1358,6 +1367,8 @@ void Application::StartListeningAudio() {
     protocol_->SendStartListening(listening_mode_);
     audio_service_.SetAsrProvider(AsrProvider::kXiaozhi, nullptr);
     audio_service_.EnableVoiceProcessing(true);
+    gemini_asr_preparing_.store(false);
+    asr_ready_.store(true);
 
     ConfigureWakeWordForListening();
 
@@ -1378,6 +1389,9 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     audio_service_.EnableWakeWordDetection(false);
+    Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PREPARING_ASR);
+    asr_ready_.store(false);
+    gemini_asr_preparing_.store(true);
     gemini_vad_turn_active_.store(false);
     gemini_vad_speech_started_.store(false);
     gemini_vad_end_pending_.store(false);
@@ -1439,6 +1453,9 @@ void Application::HandleGeminiAsrReady(uint32_t turn_id) {
     audio_service_.SetAsrProvider(AsrProvider::kGemini, &gemini_asr_client_);
     audio_service_.EnableVoiceProcessing(true);
     ConfigureWakeWordForListening();
+    asr_ready_.store(true);
+    gemini_asr_preparing_.store(false);
+    Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::LISTENING);
     gemini_listening_deadline_us_ =
         esp_timer_get_time() +
         static_cast<int64_t>(Protocol::kChannelInactivityTimeoutSeconds) * 1000 * 1000;
@@ -1466,6 +1483,8 @@ void Application::HandleGeminiVadChange() {
     // PCM queue. The WebSocket send remains entirely on the Gemini worker task.
     ESP_LOGI(TAG, "Gemini ASR VAD end turn=%lu",
              static_cast<unsigned long>(gemini_asr_turn_id_));
+    asr_ready_.store(false);
+    Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PROCESSING);
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     gemini_audio_stream_end_requested_ = true;
@@ -1495,6 +1514,8 @@ void Application::HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript)
         return;
     }
 
+    asr_ready_.store(false);
+    Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PROCESSING);
     ESP_LOGI(TAG, "Gemini ASR final received bytes=%u",
              static_cast<unsigned>(transcript.size()));
     StopGeminiAsrTurn();
@@ -1528,6 +1549,8 @@ void Application::RecoverGeminiAsrTurn(uint32_t turn_id, const char* reason) {
     if (GetDeviceState() == kDeviceStateListening && protocol_ &&
         protocol_->IsAudioChannelOpened()) {
         gemini_asr_restart_pending_ = true;
+        gemini_asr_preparing_.store(true);
+        Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PREPARING_ASR);
     }
 }
 
@@ -1590,6 +1613,8 @@ void Application::StopGeminiAsrTurn() {
     gemini_audio_stream_end_requested_ = false;
     gemini_asr_restart_pending_ = false;
     gemini_listening_deadline_us_ = 0;
+    asr_ready_.store(false);
+    gemini_asr_preparing_.store(false);
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     active_asr_provider_ = AsrProvider::kXiaozhi;
@@ -1934,6 +1959,7 @@ void Application::RunTextChat(const std::string& text) {
             StopGeminiAsrTurn();
             ResetAsrTurnConfig();
         }
+        asr_ready_.store(false);
         audio_service_.EnableVoiceProcessing(false);
     }
 

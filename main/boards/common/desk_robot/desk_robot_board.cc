@@ -2713,13 +2713,15 @@ private:
                 return HandleWebAction(action, duration_ms, text, message);
             },
             [this]() {
-                const char* state =
-                    DeviceStateMachine::GetStateName(Application::GetInstance().GetDeviceState());
+                auto& app = Application::GetInstance();
+                const char* state = DeviceStateMachine::GetStateName(app.GetDeviceState());
                 cJSON* root = cJSON_CreateObject();
                 if (root == nullptr) {
                     return std::string(R"({"state":"unknown","error":"out of memory"})");
                 }
                 cJSON_AddStringToObject(root, "state", state != nullptr ? state : "unknown");
+                cJSON_AddBoolToObject(root, "asr_ready", app.IsAsrReady());
+                cJSON_AddBoolToObject(root, "asr_preparing", app.IsGeminiAsrPreparing());
                 cJSON_AddBoolToObject(root, "camera_available",
                                       camera_ != nullptr && camera_->IsAvailable());
                 cJSON_AddBoolToObject(root, "camera_flipped", camera_flipped_.load());

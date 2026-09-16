@@ -72,6 +72,8 @@ public:
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+    bool IsAsrReady() const { return asr_ready_.load(); }
+    bool IsGeminiAsrPreparing() const { return gemini_asr_preparing_.load(); }
 
     /**
      * Request state transition
@@ -182,6 +184,8 @@ private:
     bool gemini_audio_stream_end_requested_ = false;
     bool gemini_asr_restart_pending_ = false;
     int64_t gemini_listening_deadline_us_ = 0;
+    std::atomic_bool asr_ready_{false};
+    std::atomic_bool gemini_asr_preparing_{false};
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 

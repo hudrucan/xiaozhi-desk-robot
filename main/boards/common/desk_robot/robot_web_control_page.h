@@ -2482,7 +2482,13 @@ Waiting for system logs…</pre
         if (!idle && browserLive) stopBrowserLive("Paused until Idle", true);
         $("#online").classList.add("ok");
         $("#online span").textContent = "Online";
-        $("#state").textContent = (j.state || "idle").replaceAll("_", " ");
+        const visibleState =
+          j.state === "listening" && !j.asr_ready
+            ? j.asr_preparing
+              ? "preparing ASR"
+              : "processing"
+            : (j.state || "idle").replaceAll("_", " ");
+        $("#state").textContent = visibleState;
         $("#camera").textContent = !j.camera_available
           ? "Offline"
           : j.live_camera

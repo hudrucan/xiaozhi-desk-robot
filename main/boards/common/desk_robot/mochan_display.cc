@@ -1463,6 +1463,8 @@ void MochanDisplay::SetStatus(const char* status) {
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
         next_activity = FaceState::kSpeaking;
     } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0 ||
+               std::strcmp(status, Lang::Strings::PREPARING_ASR) == 0 ||
+               std::strcmp(status, Lang::Strings::PROCESSING) == 0 ||
                std::strcmp(status, Lang::Strings::REGISTERING_NETWORK) == 0) {
         next_activity = FaceState::kThinking;
     } else {

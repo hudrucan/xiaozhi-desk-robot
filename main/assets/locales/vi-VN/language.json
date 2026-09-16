@@ -17,6 +17,8 @@
         "CONNECTING": "Đang kết nối...",
         "CONNECTION_SUCCESSFUL": "Kết nối thành công",
         "CONNECTED_TO": "Đã kết nối đến ",
+        "PREPARING_ASR": "Đang chuẩn bị nhận giọng nói...",
+        "PROCESSING": "Đang xử lý...",
         "LISTENING": "Đang lắng nghe...",
         "SPEAKING": "Đang nói...",
         "SERVER_NOT_FOUND": "Đang tìm dịch vụ khả dụng",

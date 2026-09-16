@@ -17,6 +17,8 @@
         "CONNECTING": "Connecting...",
         "CONNECTION_SUCCESSFUL": "Connection Successful",
         "CONNECTED_TO": "Connected to ",
+        "PREPARING_ASR": "Preparing ASR...",
+        "PROCESSING": "Processing...",
         "LISTENING": "Listening...",
         "SPEAKING": "Speaking...",
         "SERVER_NOT_FOUND": "Looking for available service",
