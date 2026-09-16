@@ -12,6 +12,7 @@
 #include "websocket_protocol.h"
 
 #include <driver/gpio.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <arpa/inet.h>
 #include <cJSON.h>
@@ -1327,6 +1328,7 @@ void Application::HandleStateChangedEvent() {
             if (!text_chat_tts_active_.load()) {
                 audio_service_.ResetDecoder();
             }
+            MaybeStartGeminiAsrPrewarm();
             break;
         case kDeviceStateNotifying:
             display->SetStatus(Lang::Strings::SPEAKING);
@@ -1381,23 +1383,94 @@ void Application::StartListeningAudio() {
 
 void Application::StartGeminiAsrTurn(const AsrConfig& config) {
     if (active_asr_provider_ == AsrProvider::kGemini) {
+        if (!gemini_asr_prewarming_.load()) {
+            return;
+        }
+
+        const int64_t elapsed_us = gemini_asr_prewarm_started_us_ > 0
+                                       ? esp_timer_get_time() - gemini_asr_prewarm_started_us_
+                                       : 0;
+        gemini_asr_prewarming_ = false;
+        gemini_asr_prewarm_started_us_ = 0;
+        ESP_LOGI(TAG,
+                 "Gemini ASR prewarm promoted state=%s elapsed_ms=%lld free_internal=%u "
+                 "min_internal=%u",
+                 GeminiTranscribeClient::StateName(gemini_asr_client_.state()),
+                 static_cast<long long>(elapsed_us / 1000),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)));
+
+        const auto client_state = gemini_asr_client_.state();
+        if (client_state == GeminiTranscribeClient::State::kReady ||
+            client_state == GeminiTranscribeClient::State::kStreaming) {
+            HandleGeminiAsrReady(gemini_asr_turn_id_);
+        } else if (!gemini_asr_client_.IsRunning()) {
+            StopGeminiAsrTurn();
+            StartGeminiAsrClient(config, false);
+        }
+        return;
+    }
+
+    if (gemini_asr_client_.IsRunning()) {
+        gemini_asr_restart_pending_ = true;
+        ESP_LOGI(TAG, "Gemini ASR waiting for previous worker before cold start");
+        return;
+    }
+
+    StartGeminiAsrClient(config, false);
+}
+
+void Application::MaybeStartGeminiAsrPrewarm() {
+    if (GetDeviceState() != kDeviceStateSpeaking || !protocol_ ||
+        !protocol_->IsAudioChannelOpened() || active_asr_provider_ == AsrProvider::kGemini ||
+        gemini_asr_client_.IsRunning()) {
+        return;
+    }
+
+    const bool will_resume_listening =
+        listening_mode_ != kListeningModeManualStop || text_chat_resume_listening_;
+    if (!will_resume_listening) {
+        return;
+    }
+
+    const AsrConfig& config = GetAsrTurnConfig();
+    if (config.provider != AsrProvider::kGemini || !config.IsGeminiConfigured()) {
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "Gemini ASR prewarm starting free_internal=%u min_internal=%u largest_internal=%u",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+    StartGeminiAsrClient(config, true);
+}
+
+void Application::StartGeminiAsrClient(const AsrConfig& config, bool prewarming) {
+    if (active_asr_provider_ == AsrProvider::kGemini || gemini_asr_client_.IsRunning()) {
         return;
     }
 
     // Keep processed PCM away from both ASR providers while the blocking
     // connect/setup work runs on GeminiTranscribeClient's worker task.
-    audio_service_.EnableVoiceProcessing(false);
+    if (!prewarming) {
+        audio_service_.EnableVoiceProcessing(false);
+    }
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
-    audio_service_.EnableWakeWordDetection(false);
-    Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PREPARING_ASR);
+    if (!prewarming) {
+        audio_service_.EnableWakeWordDetection(false);
+        Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PREPARING_ASR);
+    }
     asr_ready_.store(false);
-    gemini_asr_preparing_.store(true);
+    gemini_asr_preparing_.store(!prewarming);
     gemini_vad_turn_active_.store(false);
     gemini_vad_speech_started_.store(false);
     gemini_vad_end_pending_.store(false);
     gemini_vad_speech_start_handled_ = false;
     gemini_audio_stream_end_requested_ = false;
     gemini_asr_restart_pending_ = false;
+    gemini_asr_prewarming_.store(prewarming);
+    gemini_asr_prewarm_started_us_ = prewarming ? esp_timer_get_time() : 0;
     gemini_listening_deadline_us_ = 0;
 
     active_asr_provider_ = AsrProvider::kGemini;
@@ -1421,24 +1494,47 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
         Schedule([this, turn_id]() { HandleGeminiAsrFinalTimeout(turn_id); });
     };
     callbacks.on_error = [this, turn_id](const std::string& error) {
-        Schedule([this, turn_id, error]() { HandleGeminiAsrError(turn_id, error); });
+        const bool failed_during_prewarm = gemini_asr_prewarming_.load();
+        Schedule([this, turn_id, error, failed_during_prewarm]() {
+            HandleGeminiAsrError(turn_id, error, failed_during_prewarm);
+        });
     };
 
     if (!gemini_asr_client_.Start(config, std::move(callbacks))) {
-        HandleGeminiAsrError(turn_id, gemini_asr_client_.GetLastError());
+        HandleGeminiAsrError(turn_id, gemini_asr_client_.GetLastError(), prewarming);
     }
 }
 
 void Application::HandleGeminiAsrReady(uint32_t turn_id) {
     if (turn_id != gemini_asr_turn_id_ ||
-        active_asr_provider_ != AsrProvider::kGemini ||
-        GetDeviceState() != kDeviceStateListening) {
+        active_asr_provider_ != AsrProvider::kGemini) {
         return;
     }
 
     const auto state = gemini_asr_client_.state();
     if (state != GeminiTranscribeClient::State::kReady &&
         state != GeminiTranscribeClient::State::kStreaming) {
+        return;
+    }
+
+    if (gemini_asr_prewarming_.load()) {
+        const int64_t elapsed_us = gemini_asr_prewarm_started_us_ > 0
+                                       ? esp_timer_get_time() - gemini_asr_prewarm_started_us_
+                                       : 0;
+        ESP_LOGI(TAG,
+                 "Gemini ASR prewarm ready total_ms=%lld connect_ms=%lu free_internal=%u "
+                 "min_internal=%u",
+                 static_cast<long long>(elapsed_us / 1000),
+                 static_cast<unsigned long>(gemini_asr_client_.connect_latency_ms()),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)));
+        return;
+    }
+
+    if (GetDeviceState() != kDeviceStateListening) {
+        return;
+    }
+    if (asr_ready_.load()) {
         return;
     }
 
@@ -1588,9 +1684,25 @@ void Application::HandleGeminiTimers() {
     }
 }
 
-void Application::HandleGeminiAsrError(uint32_t turn_id, std::string error) {
+void Application::HandleGeminiAsrError(uint32_t turn_id, std::string error,
+                                       bool failed_during_prewarm) {
     if (turn_id != gemini_asr_turn_id_ ||
         active_asr_provider_ != AsrProvider::kGemini) {
+        return;
+    }
+
+    if (failed_during_prewarm) {
+        ESP_LOGW(TAG, "Gemini ASR prewarm failed; cold start will be used: %s", error.c_str());
+        StopGeminiAsrTurn();
+        ResetAsrTurnConfig();
+        if (GetDeviceState() == kDeviceStateListening && protocol_ &&
+            protocol_->IsAudioChannelOpened()) {
+            gemini_asr_preparing_.store(true);
+            Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::PREPARING_ASR);
+            if (!pending_listening_start_) {
+                gemini_asr_restart_pending_ = true;
+            }
+        }
         return;
     }
 
@@ -1604,6 +1716,8 @@ void Application::StopGeminiAsrTurn() {
         return;
     }
 
+    const bool was_prewarming = gemini_asr_prewarming_.load();
+
     // Stop capture before clearing its route. An in-flight callback may still
     // finish against the live client; only then does the worker receive Cancel().
     gemini_vad_turn_active_.store(false);
@@ -1612,10 +1726,14 @@ void Application::StopGeminiAsrTurn() {
     gemini_vad_speech_start_handled_ = false;
     gemini_audio_stream_end_requested_ = false;
     gemini_asr_restart_pending_ = false;
+    gemini_asr_prewarming_ = false;
+    gemini_asr_prewarm_started_us_ = 0;
     gemini_listening_deadline_us_ = 0;
     asr_ready_.store(false);
     gemini_asr_preparing_.store(false);
-    audio_service_.EnableVoiceProcessing(false);
+    if (!was_prewarming) {
+        audio_service_.EnableVoiceProcessing(false);
+    }
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     active_asr_provider_ = AsrProvider::kXiaozhi;
     ++gemini_asr_turn_id_;

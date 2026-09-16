@@ -183,6 +183,8 @@ private:
     bool gemini_vad_speech_start_handled_ = false;
     bool gemini_audio_stream_end_requested_ = false;
     bool gemini_asr_restart_pending_ = false;
+    std::atomic_bool gemini_asr_prewarming_{false};
+    int64_t gemini_asr_prewarm_started_us_ = 0;
     int64_t gemini_listening_deadline_us_ = 0;
     std::atomic_bool asr_ready_{false};
     std::atomic_bool gemini_asr_preparing_{false};
@@ -210,12 +212,14 @@ private:
     void CompleteTextChatAfterPlayback();
     void ResumeListeningAfterTextChat();
     void StartListeningAudio();
+    void MaybeStartGeminiAsrPrewarm();
     void StartGeminiAsrTurn(const AsrConfig& config);
+    void StartGeminiAsrClient(const AsrConfig& config, bool prewarming);
     void HandleGeminiAsrReady(uint32_t turn_id);
     void HandleGeminiVadChange();
     void HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript);
     void HandleGeminiAsrFinalTimeout(uint32_t turn_id);
-    void HandleGeminiAsrError(uint32_t turn_id, std::string error);
+    void HandleGeminiAsrError(uint32_t turn_id, std::string error, bool failed_during_prewarm);
     void RecoverGeminiAsrTurn(uint32_t turn_id, const char* reason);
     void HandleGeminiTimers();
     void StopGeminiAsrTurn();
