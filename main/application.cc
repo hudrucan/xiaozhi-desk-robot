@@ -85,12 +85,10 @@ bool ShouldUseWebChatMcpBridge(const std::string& text) {
 }
 
 void RegisterWebChatMcpTool(McpServer& mcp_server) {
-    mcp_server.AddTool(
+    mcp_server.AddPriorityTool(
         kTextChatMcpToolName,
-        "When the user's message is exactly 'web_chat', you MUST call this tool before "
-        "responding. It returns the user's actual typed Web UI message. Treat the returned "
-        "text as the user's real message and answer it normally. Never answer the literal "
-        "trigger word 'web_chat'.",
+        "When detect text is exactly 'web_chat', call this tool immediately before responding. "
+        "It returns the full user message; answer that message, never the literal trigger.",
         PropertyList(), [](const PropertyList&) -> ToolResult {
             auto pending = g_web_chat_bridge.ConsumePending();
             if (pending.empty()) {
