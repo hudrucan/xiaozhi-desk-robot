@@ -15,6 +15,7 @@
 #include <esp_log.h>
 #include <arpa/inet.h>
 #include <cJSON.h>
+#include <algorithm>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -152,11 +153,42 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-bool Application::SetDeviceState(DeviceState state) { return state_machine_.TransitionTo(state); }
+bool Application::SetDeviceState(DeviceState state) {
+    const DeviceState old_state = GetDeviceState();
+    const bool starts_asr_turn =
+        !asr_turn_config_valid_ && old_state != state &&
+        (state == kDeviceStateConnecting || state == kDeviceStateListening);
+    if (starts_asr_turn) {
+        GetAsrTurnConfig();
+    }
+
+    const bool transitioned = state_machine_.TransitionTo(state);
+    if (!transitioned) {
+        if (starts_asr_turn) {
+            ResetAsrTurnConfig();
+        }
+        return false;
+    }
+
+    if (state != kDeviceStateConnecting && state != kDeviceStateListening &&
+        (old_state == kDeviceStateConnecting || old_state == kDeviceStateListening)) {
+        ResetAsrTurnConfig();
+    }
+    return true;
+}
 
 void Application::Initialize() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
+
+    {
+        AsrConfig persisted_asr_config = AsrSettings::Load();
+        ESP_LOGI(TAG, "ASR config loaded provider=%s configured=%d",
+                 AsrProviderName(persisted_asr_config.provider),
+                 persisted_asr_config.IsGeminiConfigured() ? 1 : 0);
+        std::fill(persisted_asr_config.gemini_api_key.begin(),
+                  persisted_asr_config.gemini_api_key.end(), '\0');
+    }
 
     // Setup the display
     auto display = board.GetDisplay();
@@ -432,6 +464,9 @@ void Application::HandleNetworkDisconnectedEvent() {
     }
     if (state == kDeviceStateConnecting || state == kDeviceStateListening ||
         state == kDeviceStateSpeaking) {
+        if (active_asr_provider_ == AsrProvider::kGemini) {
+            StopGeminiAsrTurn();
+        }
         ESP_LOGI(TAG, "Closing audio channel due to network disconnection");
         protocol_->CloseAudioChannel();
     }
@@ -984,6 +1019,9 @@ void Application::HandleToggleChatEvent() {
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
     } else if (state == kDeviceStateListening) {
+        if (active_asr_provider_ == AsrProvider::kGemini) {
+            StopGeminiAsrTurn();
+        }
         protocol_->CloseAudioChannel();
     }
 }
@@ -1056,7 +1094,9 @@ void Application::HandleStopListeningEvent() {
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     } else if (state == kDeviceStateListening) {
-        if (protocol_) {
+        if (active_asr_provider_ == AsrProvider::kGemini) {
+            StopGeminiAsrTurn();
+        } else if (protocol_) {
             protocol_->SendStopListening();
         }
         SetDeviceState(kDeviceStateIdle);
@@ -1078,6 +1118,13 @@ void Application::HandleWakeWordDetectedEvent() {
         StopNotification();
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+        if (state == kDeviceStateListening &&
+            active_asr_provider_ == AsrProvider::kGemini) {
+            // Listening-mode wake-word detection is optional. If enabled, keep
+            // the current Gemini turn instead of starting Xiaozhi ASR.
+            audio_service_.EnableWakeWordDetection(true);
+            return;
+        }
         AbortSpeaking(kAbortReasonWakeWordDetected);
         // Clear send queue to avoid sending residues to server
         while (audio_service_.PopPacketFromSendQueue())
@@ -1102,7 +1149,9 @@ void Application::HandleWakeWordDetectedEvent() {
 
 void Application::BeginWakeWordInvoke(const std::string& wake_word) {
     // Must run in the main task with the device in idle state
-    audio_service_.EncodeWakeWord();
+    if (GetAsrTurnConfig().provider == AsrProvider::kXiaozhi) {
+        audio_service_.EncodeWakeWord();
+    }
 
     // Always pass through the connecting state, even if the audio channel is
     // already opened. ContinueWakeWordInvoke() rejects any other state, so
@@ -1110,6 +1159,7 @@ void Application::BeginWakeWordInvoke(const std::string& wake_word) {
     if (!SetDeviceState(kDeviceStateConnecting)) {
         // Wake word detection was stopped by the detection itself; restore it
         // so the device does not become unresponsive to wake words.
+        ResetAsrTurnConfig();
         audio_service_.EnableWakeWordDetection(true);
         return;
     }
@@ -1145,6 +1195,13 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     }
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    if (GetAsrTurnConfig().provider == AsrProvider::kGemini) {
+        // The backend channel remains open for the later typed-text bridge, but
+        // Gemini turns must not start or feed the Xiaozhi ASR session.
+        play_popup_on_listening_ = true;
+        SetListeningMode(GetDefaultListeningMode());
+        return;
+    }
 #if CONFIG_SEND_WAKE_WORD_DATA
     // Encode and send the wake word data to the server
     while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -1167,6 +1224,11 @@ void Application::HandleStateChangedEvent() {
     // Any state change invalidates a pending deferred listening start;
     // the Listening case below re-arms it when needed.
     pending_listening_start_ = false;
+
+    if (new_state != kDeviceStateListening &&
+        active_asr_provider_ == AsrProvider::kGemini) {
+        StopGeminiAsrTurn();
+    }
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
@@ -1208,7 +1270,8 @@ void Application::HandleStateChangedEvent() {
             }
 
             // Make sure the audio processor is running
-            if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
+            if (GetAsrTurnConfig().provider == AsrProvider::kGemini ||
+                play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
                 // For auto mode, wait for the playback queue to drain before enabling
                 // voice processing. This prevents audio truncation when STOP arrives
                 // late due to network jitter. Instead of blocking the main loop here,
@@ -1256,8 +1319,22 @@ void Application::StartListeningAudio() {
         return;
     }
 
-    // Send the start listening command
+    const AsrConfig& asr_config = GetAsrTurnConfig();
+    ESP_LOGI(TAG, "ASR turn start provider=%s configured=%d",
+             AsrProviderName(asr_config.provider),
+             asr_config.IsGeminiConfigured() ? 1 : 0);
+    if (asr_config.provider == AsrProvider::kGemini) {
+        StartGeminiAsrTurn(asr_config);
+        return;
+    }
+
+    // Preserve the existing Xiaozhi listening path.
+    if (active_asr_provider_ == AsrProvider::kGemini) {
+        StopGeminiAsrTurn();
+    }
+    active_asr_provider_ = AsrProvider::kXiaozhi;
     protocol_->SendStartListening(listening_mode_);
+    audio_service_.SetAsrProvider(AsrProvider::kXiaozhi, nullptr);
     audio_service_.EnableVoiceProcessing(true);
 
     ConfigureWakeWordForListening();
@@ -1267,6 +1344,120 @@ void Application::StartListeningAudio() {
         play_popup_on_listening_ = false;
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
     }
+}
+
+void Application::StartGeminiAsrTurn(const AsrConfig& config) {
+    if (active_asr_provider_ == AsrProvider::kGemini) {
+        return;
+    }
+
+    // Keep processed PCM away from both ASR providers while the blocking
+    // connect/setup work runs on GeminiTranscribeClient's worker task.
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
+    audio_service_.EnableWakeWordDetection(false);
+
+    active_asr_provider_ = AsrProvider::kGemini;
+    uint32_t turn_id = ++gemini_asr_turn_id_;
+    if (turn_id == 0) {
+        turn_id = ++gemini_asr_turn_id_;
+    }
+
+    GeminiTranscribeClient::Callbacks callbacks;
+    callbacks.on_state = [this, turn_id](GeminiTranscribeClient::State state) {
+        if (state == GeminiTranscribeClient::State::kReady) {
+            Schedule([this, turn_id]() { HandleGeminiAsrReady(turn_id); });
+        }
+    };
+    callbacks.on_final_transcript = [this, turn_id](const std::string& transcript) {
+        Schedule([this, turn_id, transcript]() {
+            HandleGeminiAsrFinal(turn_id, transcript);
+        });
+    };
+    callbacks.on_error = [this, turn_id](const std::string& error) {
+        Schedule([this, turn_id, error]() { HandleGeminiAsrError(turn_id, error); });
+    };
+
+    if (!gemini_asr_client_.Start(config, std::move(callbacks))) {
+        HandleGeminiAsrError(turn_id, gemini_asr_client_.GetLastError());
+    }
+}
+
+void Application::HandleGeminiAsrReady(uint32_t turn_id) {
+    if (turn_id != gemini_asr_turn_id_ ||
+        active_asr_provider_ != AsrProvider::kGemini ||
+        GetDeviceState() != kDeviceStateListening) {
+        return;
+    }
+
+    const auto state = gemini_asr_client_.state();
+    if (state != GeminiTranscribeClient::State::kReady &&
+        state != GeminiTranscribeClient::State::kStreaming) {
+        return;
+    }
+
+    // Publish the client route before capture starts. AudioService performs
+    // only a bounded non-blocking queue handoff from its AFE output callback.
+    play_popup_on_listening_ = false;
+    audio_service_.SetAsrProvider(AsrProvider::kGemini, &gemini_asr_client_);
+    audio_service_.EnableVoiceProcessing(true);
+    ConfigureWakeWordForListening();
+    ESP_LOGI(TAG, "Gemini ASR ready; voice processing enabled");
+}
+
+void Application::HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript) {
+    if (turn_id != gemini_asr_turn_id_ ||
+        active_asr_provider_ != AsrProvider::kGemini) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Gemini ASR final received bytes=%u",
+             static_cast<unsigned>(transcript.size()));
+    StopGeminiAsrTurn();
+    if (GetDeviceState() == kDeviceStateListening) {
+        SetDeviceState(kDeviceStateIdle);
+    }
+}
+
+void Application::HandleGeminiAsrError(uint32_t turn_id, std::string error) {
+    if (turn_id != gemini_asr_turn_id_ ||
+        active_asr_provider_ != AsrProvider::kGemini) {
+        return;
+    }
+
+    StopGeminiAsrTurn();
+    last_error_message_ = error.empty() ? "Gemini ASR failed" : "Gemini ASR: " + error;
+    xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+}
+
+void Application::StopGeminiAsrTurn() {
+    if (active_asr_provider_ != AsrProvider::kGemini) {
+        return;
+    }
+
+    // Stop capture before clearing its route. An in-flight callback may still
+    // finish against the live client; only then does the worker receive Cancel().
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
+    active_asr_provider_ = AsrProvider::kXiaozhi;
+    ++gemini_asr_turn_id_;
+    play_popup_on_listening_ = false;
+    gemini_asr_client_.Cancel();
+}
+
+const AsrConfig& Application::GetAsrTurnConfig() {
+    if (!asr_turn_config_valid_) {
+        asr_turn_config_ = AsrSettings::Load();
+        asr_turn_config_valid_ = true;
+    }
+    return asr_turn_config_;
+}
+
+void Application::ResetAsrTurnConfig() {
+    std::fill(asr_turn_config_.gemini_api_key.begin(),
+              asr_turn_config_.gemini_api_key.end(), '\0');
+    asr_turn_config_ = AsrConfig{};
+    asr_turn_config_valid_ = false;
 }
 
 void Application::ConfigureWakeWordForListening() {
@@ -1375,6 +1566,9 @@ void Application::Reboot() {
     if (GetDeviceState() == kDeviceStateNotifying) {
         StopNotification();
     }
+    if (active_asr_provider_ == AsrProvider::kGemini) {
+        StopGeminiAsrTurn();
+    }
     // Disconnect the audio channel
     if (protocol_ && protocol_->IsAudioChannelOpened()) {
         protocol_->CloseAudioChannel();
@@ -1412,6 +1606,9 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         Schedule([this]() { AbortSpeaking(kAbortReasonNone); });
     } else if (state == kDeviceStateListening) {
         Schedule([this]() {
+            if (active_asr_provider_ == AsrProvider::kGemini) {
+                StopGeminiAsrTurn();
+            }
             if (protocol_) {
                 protocol_->CloseAudioChannel();
             }
@@ -1715,6 +1912,9 @@ void Application::ResetProtocol() {
     Schedule([this]() {
         if (GetDeviceState() == kDeviceStateNotifying) {
             StopNotification();
+        }
+        if (active_asr_provider_ == AsrProvider::kGemini) {
+            StopGeminiAsrTurn();
         }
         // Close audio channel if opened
         if (protocol_ && protocol_->IsAudioChannelOpened()) {

@@ -2885,6 +2885,7 @@ private:
                                         heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
                 if (web_control_server_ != nullptr) {
                     web_control_server_->AppendConversationStatus(root);
+                    web_control_server_->AppendAsrStatus(root);
                 }
 
                 char* encoded = cJSON_PrintUnformatted(root);

@@ -1,5 +1,6 @@
 #include "robot_web_control_server.h"
 #include "robot_web_control_page.h"
+#include "asr_settings.h"
 
 #include <esp_log.h>
 #include <esp_log_write.h>
@@ -25,6 +26,7 @@ constexpr size_t kLogLineBufferSize = 768;
 constexpr size_t kLogReadChunkSize = 4 * 1024;
 constexpr size_t kChatProbeMaxCodepoints = 512;
 constexpr size_t kChatRequestMaxBytes = 4 * 1024;
+constexpr size_t kAsrConfigRequestMaxBytes = 2 * 1024;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
 
@@ -218,6 +220,22 @@ std::string ReadLogs(uint64_t requested_cursor, uint64_t& next_cursor, bool& res
     return result;
 }
 
+std::string EncodeAsrConfigResponse(bool ok, const char* message, const AsrConfig& config) {
+    cJSON* response = cJSON_CreateObject();
+    if (response == nullptr) {
+        return R"({"ok":false,"message":"Out of memory"})";
+    }
+    cJSON_AddBoolToObject(response, "ok", ok);
+    cJSON_AddStringToObject(response, "message", message);
+    cJSON_AddStringToObject(response, "provider", AsrProviderName(config.provider));
+    cJSON_AddBoolToObject(response, "gemini_configured", config.IsGeminiConfigured());
+    char* encoded = cJSON_PrintUnformatted(response);
+    const std::string result = encoded != nullptr ? encoded : R"({"ok":false})";
+    cJSON_free(encoded);
+    cJSON_Delete(response);
+    return result;
+}
+
 }  // namespace
 
 RobotWebControlServer::RobotWebControlServer(ActionHandler action_handler,
@@ -251,7 +269,7 @@ bool RobotWebControlServer::Start(int port) {
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
-    config.max_uri_handlers = 7;
+    config.max_uri_handlers = 9;
     config.stack_size = 6144;
 
     if (httpd_start(&server_, &config) != ESP_OK) {
@@ -302,13 +320,27 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleClearConversation,
         .user_ctx = this,
     };
+    const httpd_uri_t save_asr_config = {
+        .uri = "/api/asr",
+        .method = HTTP_POST,
+        .handler = HandleSaveAsrConfig,
+        .user_ctx = this,
+    };
+    const httpd_uri_t clear_gemini_api_key = {
+        .uri = "/api/asr",
+        .method = HTTP_DELETE,
+        .handler = HandleClearGeminiApiKey,
+        .user_ctx = this,
+    };
     if (httpd_register_uri_handler(server_, &root) != ESP_OK ||
         httpd_register_uri_handler(server_, &status) != ESP_OK ||
         httpd_register_uri_handler(server_, &action) != ESP_OK ||
         httpd_register_uri_handler(server_, &logs) != ESP_OK ||
         httpd_register_uri_handler(server_, &snapshot) != ESP_OK ||
         httpd_register_uri_handler(server_, &chat_probe) != ESP_OK ||
-        httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK) {
+        httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK ||
+        httpd_register_uri_handler(server_, &save_asr_config) != ESP_OK ||
+        httpd_register_uri_handler(server_, &clear_gemini_api_key) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register local control routes");
         Stop();
         return false;
@@ -346,6 +378,16 @@ void RobotWebControlServer::AppendConversationStatus(cJSON* root) {
         cJSON_AddStringToObject(item, "text", message.text.c_str());
         cJSON_AddItemToArray(messages, item);
     }
+}
+
+void RobotWebControlServer::AppendAsrStatus(cJSON* root) {
+    const AsrConfig config = AsrSettings::Load();
+    cJSON* asr = cJSON_AddObjectToObject(root, "asr");
+    if (asr == nullptr) {
+        return;
+    }
+    cJSON_AddStringToObject(asr, "provider", AsrProviderName(config.provider));
+    cJSON_AddBoolToObject(asr, "gemini_configured", config.IsGeminiConfigured());
 }
 
 void RobotWebControlServer::TrimConversationLocked() {
@@ -586,6 +628,85 @@ esp_err_t RobotWebControlServer::HandleClearConversation(httpd_req_t* request) {
     }
     ESP_LOGI(TAG, "Conversation history cleared");
     return SendJson(request, "200 OK", R"({"ok":true,"message":"Conversation cleared"})");
+}
+
+esp_err_t RobotWebControlServer::HandleSaveAsrConfig(httpd_req_t* request) {
+    if (request->content_len <= 0 ||
+        static_cast<size_t>(request->content_len) > kAsrConfigRequestMaxBytes) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid request"})");
+    }
+
+    std::vector<char> body(static_cast<size_t>(request->content_len) + 1, '\0');
+    size_t received = 0;
+    while (received < static_cast<size_t>(request->content_len)) {
+        const int result =
+            httpd_req_recv(request, body.data() + received, request->content_len - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return ESP_FAIL;
+        }
+        received += result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), received);
+    const cJSON* provider =
+        root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "provider") : nullptr;
+    const cJSON* api_key =
+        root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "api_key") : nullptr;
+    if (!cJSON_IsString(provider) || provider->valuestring == nullptr ||
+        (api_key != nullptr &&
+         (!cJSON_IsString(api_key) || api_key->valuestring == nullptr))) {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid ASR configuration"})");
+    }
+
+    AsrProvider selected_provider;
+    if (std::strcmp(provider->valuestring, "xiaozhi") == 0) {
+        selected_provider = AsrProvider::kXiaozhi;
+    } else if (std::strcmp(provider->valuestring, "gemini") == 0) {
+        selected_provider = AsrProvider::kGemini;
+    } else {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Unknown ASR provider"})");
+    }
+
+    // Persist a new secret first so selecting Gemini in the same request can
+    // validate against it. Blank/masked values intentionally preserve the key.
+    if (api_key != nullptr) {
+        AsrSettings::UpdateGeminiApiKey(api_key->valuestring);
+    }
+    cJSON_Delete(root);
+
+    const bool provider_saved = AsrSettings::SetProvider(selected_provider);
+    const AsrConfig config = AsrSettings::Load();
+    const bool persisted = provider_saved && config.provider == selected_provider;
+    ESP_LOGI(TAG, "ASR config after save provider=%s configured=%d saved=%d",
+             AsrProviderName(config.provider), config.IsGeminiConfigured() ? 1 : 0,
+             persisted ? 1 : 0);
+    if (!persisted) {
+        const char* message =
+            selected_provider == AsrProvider::kGemini && !config.IsGeminiConfigured()
+                ? "Gemini API key is not configured"
+                : "ASR provider was not persisted";
+        return SendJson(request, "400 Bad Request",
+                        EncodeAsrConfigResponse(false, message, config));
+    }
+    return SendJson(request, "200 OK",
+                    EncodeAsrConfigResponse(true, "ASR settings saved", config));
+}
+
+esp_err_t RobotWebControlServer::HandleClearGeminiApiKey(httpd_req_t* request) {
+    AsrSettings::ClearGeminiApiKey();
+    const AsrConfig config = AsrSettings::Load();
+    ESP_LOGI(TAG, "Gemini API key cleared; provider=%s", AsrProviderName(config.provider));
+
+    return SendJson(request, "200 OK",
+                    EncodeAsrConfigResponse(true, "Gemini API key cleared", config));
 }
 
 esp_err_t RobotWebControlServer::HandleSnapshot(httpd_req_t* request) {

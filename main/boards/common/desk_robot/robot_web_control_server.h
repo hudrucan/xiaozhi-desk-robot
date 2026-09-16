@@ -28,6 +28,7 @@ public:
     static void BeginLogCapture();
 
     void AppendConversationStatus(cJSON* root);
+    void AppendAsrStatus(cJSON* root);
     void OnChatProbeEvent(const std::string& event, const std::string& text);
 
     bool Start(int port = 8080);
@@ -41,6 +42,8 @@ private:
     static esp_err_t HandleSnapshot(httpd_req_t* request);
     static esp_err_t HandleChatProbe(httpd_req_t* request);
     static esp_err_t HandleClearConversation(httpd_req_t* request);
+    static esp_err_t HandleSaveAsrConfig(httpd_req_t* request);
+    static esp_err_t HandleClearGeminiApiKey(httpd_req_t* request);
     static esp_err_t SendJson(httpd_req_t* request, const char* status, const std::string& body);
 
     httpd_handle_t server_ = nullptr;

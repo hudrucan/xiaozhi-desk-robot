@@ -84,9 +84,15 @@ private:
         kError,
     };
 
+    struct ServerMessage {
+        std::string payload;
+        bool binary = false;
+    };
+
     std::atomic<State> state_{State::kIdle};
     std::atomic<bool> worker_running_{false};
     std::atomic<bool> worker_created_{false};
+    std::atomic<bool> first_server_message_logged_{false};
     std::atomic<uint32_t> pcm_drop_count_{0};
     std::atomic<uint32_t> connect_latency_ms_{0};
 
@@ -94,7 +100,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     FixedQueue<std::vector<int16_t>, kPcmQueueCapacity> pcm_queue_;
-    FixedQueue<std::string, kMessageQueueCapacity> message_queue_;
+    FixedQueue<ServerMessage, kMessageQueueCapacity> message_queue_;
     AsrConfig config_;
     Callbacks callbacks_;
     std::unique_ptr<WebSocket> websocket_;
@@ -114,7 +120,7 @@ private:
     void Fail(const std::string& error);
     bool IsCancelRequested() const;
     bool SendPcmChunk(const int16_t* samples, size_t sample_count);
-    ServerMessageResult HandleServerMessage(const std::string& message);
+    ServerMessageResult HandleServerMessage(const ServerMessage& message);
     std::string BuildSetupMessage(std::string& error) const;
     void CloseSocket();
 };

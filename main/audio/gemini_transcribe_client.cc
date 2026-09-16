@@ -26,6 +26,7 @@ constexpr char kWebSocketEndpoint[] =
     "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=";
 constexpr char kAudioMimeType[] = "audio/pcm;rate=16000";
 constexpr size_t kMaxVocabularyTerms = 1000;
+constexpr size_t kFirstResponsePreviewBytes = 160;
 
 #if defined(CONFIG_LOG_DYNAMIC_LEVEL_CONTROL) && CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
 std::mutex sensitive_websocket_connect_mutex;
@@ -120,6 +121,79 @@ std::string TrimTranscript(const char* text) {
     return std::string(trimmed);
 }
 
+bool IsValidUtf8(std::string_view value) {
+    for (size_t i = 0; i < value.size();) {
+        const auto lead = static_cast<uint8_t>(value[i]);
+        size_t continuation_count = 0;
+        if (lead <= 0x7F) {
+            ++i;
+            continue;
+        } else if (lead >= 0xC2 && lead <= 0xDF) {
+            continuation_count = 1;
+        } else if (lead >= 0xE0 && lead <= 0xEF) {
+            continuation_count = 2;
+        } else if (lead >= 0xF0 && lead <= 0xF4) {
+            continuation_count = 3;
+        } else {
+            return false;
+        }
+        if (i + continuation_count >= value.size()) {
+            return false;
+        }
+        for (size_t offset = 1; offset <= continuation_count; ++offset) {
+            const auto byte = static_cast<uint8_t>(value[i + offset]);
+            if ((byte & 0xC0) != 0x80) {
+                return false;
+            }
+        }
+        const auto second = static_cast<uint8_t>(value[i + 1]);
+        if ((lead == 0xE0 && second < 0xA0) || (lead == 0xED && second >= 0xA0) ||
+            (lead == 0xF0 && second < 0x90) || (lead == 0xF4 && second > 0x8F)) {
+            return false;
+        }
+        i += continuation_count + 1;
+    }
+    return true;
+}
+
+void LogFirstServerMessage(const char* data, size_t length, bool binary,
+                           std::string_view secret) {
+    char first_bytes_hex[3 * 8] = {};
+    size_t hex_offset = 0;
+    const size_t hex_length = data == nullptr ? 0 : std::min<size_t>(length, 8);
+    for (size_t i = 0; i < hex_length; ++i) {
+        const int written = snprintf(first_bytes_hex + hex_offset,
+                                     sizeof(first_bytes_hex) - hex_offset, "%02X%s",
+                                     static_cast<unsigned char>(data[i]),
+                                     i + 1 < hex_length ? " " : "");
+        if (written <= 0) {
+            break;
+        }
+        hex_offset += static_cast<size_t>(written);
+    }
+
+    bool printable = data != nullptr && length > 0;
+    for (size_t i = 0; printable && i < length; ++i) {
+        const auto byte = static_cast<unsigned char>(data[i]);
+        printable = (byte >= 0x20 && byte <= 0x7E) || byte == '\r' || byte == '\n' ||
+                    byte == '\t';
+    }
+
+    std::string preview;
+    if (printable) {
+        preview.assign(data, std::min(length, kFirstResponsePreviewBytes));
+        std::replace_if(preview.begin(), preview.end(),
+                        [](char value) { return value == '\r' || value == '\n' || value == '\t'; },
+                        ' ');
+        preview = RedactSecret(std::move(preview), secret);
+    }
+
+    // TEMP: Remove after the first Gemini hardware response has been verified.
+    ESP_LOGI(TAG, "Gemini first response binary=%d length=%zu first8=%s%s%s", binary,
+             length, first_bytes_hex, printable ? " preview=" : "",
+             printable ? preview.c_str() : "");
+}
+
 }  // namespace
 
 GeminiTranscribeClient::GeminiTranscribeClient() {
@@ -178,6 +252,7 @@ bool GeminiTranscribeClient::Start(const AsrConfig& config, Callbacks callbacks)
     remote_disconnected_ = false;
     setup_complete_ = false;
     final_callback_sent_ = false;
+    first_server_message_logged_.store(false);
     pcm_drop_count_.store(0);
     connect_latency_ms_.store(0);
     state_.store(State::kIdle);
@@ -372,7 +447,7 @@ void GeminiTranscribeClient::WorkerLoop() {
     }
 
     while (!failed && !final_received && !IsCancelRequested()) {
-        std::string server_message;
+        ServerMessage server_message;
         std::vector<int16_t> pcm;
         std::string network_error;
         bool disconnected = false;
@@ -405,7 +480,7 @@ void GeminiTranscribeClient::WorkerLoop() {
             }
         }
 
-        if (!server_message.empty()) {
+        if (!server_message.payload.empty()) {
             const auto result = HandleServerMessage(server_message);
             if (result == ServerMessageResult::kFinalReceived) {
                 final_received = true;
@@ -485,9 +560,8 @@ void GeminiTranscribeClient::WorkerLoop() {
 }
 
 void GeminiTranscribeClient::QueueServerMessage(const char* data, size_t length, bool binary) {
-    if (binary) {
-        QueueNetworkError("Unexpected binary response");
-        return;
+    if (!first_server_message_logged_.exchange(true)) {
+        LogFirstServerMessage(data, length, binary, config_.gemini_api_key);
     }
     if (data == nullptr || length == 0 || length > kMaxServerMessageBytes) {
         QueueNetworkError("Invalid Gemini response size");
@@ -501,7 +575,7 @@ void GeminiTranscribeClient::QueueServerMessage(const char* data, size_t length,
         cv_.notify_one();
         return;
     }
-    message_queue_.push_back(std::string(data, length));
+    message_queue_.push_back(ServerMessage{std::string(data, length), binary});
     cv_.notify_one();
 }
 
@@ -562,20 +636,34 @@ bool GeminiTranscribeClient::SendPcmChunk(const int16_t* samples, size_t sample_
 }
 
 GeminiTranscribeClient::ServerMessageResult GeminiTranscribeClient::HandleServerMessage(
-    const std::string& message) {
-    cJSON* root = cJSON_ParseWithLength(message.data(), message.size());
+    const ServerMessage& message) {
+    if (!IsValidUtf8(message.payload)) {
+        Fail(message.binary ? "Gemini returned non-UTF-8 binary data"
+                            : "Gemini returned non-UTF-8 text data");
+        return ServerMessageResult::kError;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(message.payload.data(), message.payload.size());
     if (root == nullptr) {
-        Fail("Gemini returned invalid JSON");
+        Fail(message.binary ? "Gemini returned a non-JSON binary response"
+                            : "Gemini returned invalid JSON");
         return ServerMessageResult::kError;
     }
 
     const cJSON* error = cJSON_GetObjectItemCaseSensitive(root, "error");
     if (cJSON_IsObject(error)) {
         const cJSON* detail = cJSON_GetObjectItemCaseSensitive(error, "message");
-        const std::string safe_error =
-            cJSON_IsString(detail) && detail->valuestring != nullptr
-                ? std::string("Gemini rejected the session: ") + detail->valuestring
-                : "Gemini rejected the session";
+        const cJSON* code = cJSON_GetObjectItemCaseSensitive(error, "code");
+        std::string safe_error = "Gemini rejected the session";
+        if (cJSON_IsNumber(code)) {
+            safe_error.append(" (code ");
+            safe_error.append(std::to_string(code->valueint));
+            safe_error.push_back(')');
+        }
+        if (cJSON_IsString(detail) && detail->valuestring != nullptr) {
+            safe_error.append(": ");
+            safe_error.append(detail->valuestring);
+        }
         cJSON_Delete(root);
         Fail(safe_error);
         return ServerMessageResult::kError;

@@ -935,6 +935,18 @@ inline constexpr char kRobotWebControlPage[] = R"CONTROL(
       .field select:focus {
         border-color: var(--brass);
       }
+      .asr-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 11px;
+      }
+      .asr-note {
+        margin: 9px 0 0;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.4;
+      }
       .segment-toggles {
         grid-column: 1/-1;
         display: grid;
@@ -1587,6 +1599,40 @@ inline constexpr char kRobotWebControlPage[] = R"CONTROL(
           </section>
           <section class="card">
             <div class="section-title">
+              <strong>ASR</strong><span id="asrStatus">Checking</span>
+            </div>
+            <div class="display-settings">
+              <label class="field">
+                <span>ASR provider</span>
+                <select id="asrProvider">
+                  <option value="xiaozhi">Xiaozhi ASR</option>
+                  <option value="gemini">Gemini ASR</option>
+                </select>
+              </label>
+              <label class="field wide">
+                <span>Gemini API key</span>
+                <input
+                  id="geminiApiKey"
+                  class="text-input"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Leave blank to keep saved key"
+                />
+              </label>
+            </div>
+            <div class="asr-actions">
+              <button id="saveAsr" class="log-button">Save API key</button>
+              <button id="clearGeminiKey" class="log-button">
+                Clear API key
+              </button>
+            </div>
+            <p class="asr-note">
+              Provider switches are saved immediately and apply from the next listening turn.
+              The API key is saved separately.
+            </p>
+          </section>
+          <section class="card">
+            <div class="section-title">
               <strong>Emotions</strong><span>5-second preview</span>
             </div>
             <div class="emotion-grid">
@@ -1966,6 +2012,8 @@ Waiting for system logs…</pre
         toast = $("#toast");
       let toastTimer,
         statusTimer,
+        statusPending = false,
+        statusQueuedDelay = null,
         logCursor = 0,
         logStarted = false,
         logPaused = false,
@@ -1981,7 +2029,9 @@ Waiting for system logs…</pre
         oledPreviewSignature = "",
         conversationSignature = "",
         chatSubmitting = false,
-        chatBackendState = "Ready";
+        chatBackendState = "Ready",
+        asrEditing = false,
+        asrSaving = false;
       function notify(text) {
         toast.textContent = text;
         toast.classList.add("show");
@@ -2401,8 +2451,26 @@ Waiting for system logs…</pre
       $("#chatSend").onclick = submitChat;
       $("#chatClear").onclick = clearConversation;
       updateChatInput();
+      function applyAsrStatus(asr, forceProvider = false) {
+        if (
+          (forceProvider || !asrEditing) &&
+          (asr.provider === "xiaozhi" || asr.provider === "gemini")
+        ) {
+          $("#asrProvider").value = asr.provider;
+        }
+        const providerLabel = asr.provider === "gemini" ? "Gemini active" : "Xiaozhi active";
+        $("#asrStatus").textContent =
+          providerLabel +
+          (asr.gemini_configured ? " · Gemini key saved" : " · Gemini key not set");
+        $("#geminiApiKey").placeholder = asr.gemini_configured
+          ? "Leave blank to keep saved key"
+          : "Enter Gemini API key";
+        $("#clearGeminiKey").disabled =
+          asrSaving || !asr.gemini_configured;
+      }
       function renderStatus(j) {
         renderConversation(j.conversation || {});
+        applyAsrStatus(j.asr || {});
         const idle = j.state === "idle",
           m = j.motors || {},
           active = !!(m.moving || m.queued || m.sequence_active),
@@ -2645,6 +2713,8 @@ Waiting for system logs…</pre
         return active;
       }
       async function pollStatus() {
+        if (statusPending) return;
+        statusPending = true;
         let fast = false;
         try {
           const r = await fetch("/api/status", { cache: "no-store" });
@@ -2654,13 +2724,148 @@ Waiting for system logs…</pre
           $("#online").classList.remove("ok");
           $("#online span").textContent = "Offline";
         } finally {
-          statusTimer = setTimeout(pollStatus, fast ? 300 : 1000);
+          statusPending = false;
+          const delay =
+            statusQueuedDelay !== null ? statusQueuedDelay : fast ? 300 : 1000;
+          statusQueuedDelay = null;
+          clearTimeout(statusTimer);
+          statusTimer = setTimeout(pollStatus, delay);
         }
       }
       function queueStatus(delay = 0) {
         clearTimeout(statusTimer);
+        statusTimer = null;
+        if (statusPending) {
+          statusQueuedDelay =
+            statusQueuedDelay === null ? delay : Math.min(statusQueuedDelay, delay);
+          return;
+        }
         statusTimer = setTimeout(pollStatus, delay);
       }
+      async function setAsrProvider(provider) {
+        if (asrSaving) return;
+        asrSaving = true;
+        asrEditing = true;
+        const select = $("#asrProvider"),
+          keyInput = $("#geminiApiKey"),
+          saveButton = $("#saveAsr"),
+          clearButton = $("#clearGeminiKey");
+        $("#asrStatus").textContent = "Switching ASR…";
+        select.disabled = true;
+        keyInput.disabled = true;
+        saveButton.disabled = true;
+        clearButton.disabled = true;
+        try {
+          const response = await fetch("/api/asr", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider }),
+          });
+          const result = await response.json();
+          asrEditing = false;
+          if (result.provider) applyAsrStatus(result, true);
+          if (!response.ok || !result.ok) {
+            throw Error(result.message || "Could not change ASR provider");
+          }
+          notify(
+            result.provider === "gemini"
+              ? "Gemini ASR active from next listening turn"
+              : "Xiaozhi ASR active from next listening turn",
+          );
+        } catch (error) {
+          asrEditing = false;
+          notify(error.message || "Could not change ASR provider");
+        } finally {
+          asrSaving = false;
+          select.disabled = false;
+          keyInput.disabled = false;
+          saveButton.disabled = false;
+          queueStatus(0);
+        }
+      }
+      async function saveGeminiApiKey() {
+        if (asrSaving) return;
+        const keyInput = $("#geminiApiKey"),
+          key = keyInput.value.trim();
+        if (!key) {
+          notify("Enter a Gemini API key first");
+          return;
+        }
+        asrSaving = true;
+        asrEditing = true;
+        const select = $("#asrProvider"),
+          saveButton = $("#saveAsr"),
+          clearButton = $("#clearGeminiKey");
+        $("#asrStatus").textContent = "Saving Gemini key…";
+        select.disabled = true;
+        keyInput.disabled = true;
+        saveButton.disabled = true;
+        clearButton.disabled = true;
+        try {
+          const response = await fetch("/api/asr", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_key: key }),
+          });
+          const result = await response.json();
+          asrEditing = false;
+          if (result.provider) applyAsrStatus(result, true);
+          if (!response.ok || !result.ok) {
+            throw Error(result.message || "Could not save Gemini API key");
+          }
+          keyInput.value = "";
+          notify(result.message || "Gemini API key saved");
+        } catch (error) {
+          asrEditing = false;
+          notify(error.message || "Could not save Gemini API key");
+        } finally {
+          asrSaving = false;
+          select.disabled = false;
+          keyInput.disabled = false;
+          saveButton.disabled = false;
+          queueStatus(0);
+        }
+      }
+      async function clearGeminiApiKey() {
+        if (asrSaving || !confirm("Clear the saved Gemini API key?")) return;
+        asrSaving = true;
+        const select = $("#asrProvider"),
+          keyInput = $("#geminiApiKey"),
+          saveButton = $("#saveAsr"),
+          clearButton = $("#clearGeminiKey");
+        $("#asrStatus").textContent = "Clearing Gemini key…";
+        select.disabled = true;
+        keyInput.disabled = true;
+        saveButton.disabled = true;
+        clearButton.disabled = true;
+        try {
+          const response = await fetch("/api/asr", { method: "DELETE" });
+          const result = await response.json();
+          if (result.provider) {
+            asrEditing = false;
+            applyAsrStatus(result, true);
+          }
+          if (!response.ok || !result.ok) {
+            throw Error(result.message || "Could not clear Gemini API key");
+          }
+          $("#geminiApiKey").value = "";
+          notify(result.message || "Gemini API key cleared");
+        } catch (error) {
+          asrEditing = false;
+          notify(error.message || "Could not clear Gemini API key");
+        } finally {
+          asrSaving = false;
+          select.disabled = false;
+          keyInput.disabled = false;
+          saveButton.disabled = false;
+          queueStatus(0);
+        }
+      }
+      $("#asrProvider").onchange = (event) =>
+        setAsrProvider(event.target.value);
+      $("#geminiApiKey").oninput = () => (asrEditing = true);
+      $("#saveAsr").onclick = saveGeminiApiKey;
+      $("#clearGeminiKey").onclick = clearGeminiApiKey;
       const duration = $("#duration");
       duration.oninput = () =>
         ($("#durationLabel").textContent = fmtMs(+duration.value));
