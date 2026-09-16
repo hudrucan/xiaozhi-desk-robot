@@ -9,8 +9,7 @@
 #include "config/tuning.h"
 #include "display/lcd_display.h"
 #ifdef INA219_I2C_ADDRESS
-#include "battery_soc_estimator.h"
-#include "ina219_power_monitor.h"
+#include "power/battery_controller.h"
 #endif
 #include "led/gpio_led.h"
 #include "mcp_server.h"
@@ -141,53 +140,7 @@ private:
                                 AUXILIARY_I2C_SCL_PIN};
 #endif
 #ifdef INA219_I2C_ADDRESS
-    Ina219PowerMonitor power_monitor_;
-    BatterySocEstimator battery_soc_estimator_{BatterySocEstimator::Config {
-        .usable_capacity_mah = BATTERY_SOC_USABLE_CAPACITY_MAH,
-        .maximum_integration_gap_us = BATTERY_SOC_MAX_INTEGRATION_GAP_MS * 1000LL,
-        .quasi_rest_max_current_ma = BATTERY_SOC_QUASI_REST_MAX_CURRENT_MA,
-        .quasi_rest_current_stddev_ma = BATTERY_SOC_QUASI_REST_CURRENT_STDDEV_MA,
-        .quasi_rest_voltage_stddev_v = BATTERY_SOC_QUASI_REST_VOLTAGE_STDDEV_MV / 1000.0f,
-        .quasi_rest_current_transition_ma = BATTERY_SOC_QUASI_REST_CURRENT_TRANSITION_MA,
-        .quasi_rest_voltage_transition_v = BATTERY_SOC_QUASI_REST_VOLTAGE_TRANSITION_MV / 1000.0f,
-        .quasi_rest_qualification_us = BATTERY_SOC_QUASI_REST_QUALIFICATION_MS * 1000LL,
-        .quasi_rest_correction_interval_us = BATTERY_SOC_QUASI_REST_CORRECTION_INTERVAL_MS * 1000LL,
-        .quasi_rest_correction_time_constant_us =
-            BATTERY_SOC_QUASI_REST_CORRECTION_TIME_CONSTANT_MS * 1000LL,
-        .full_anchor_min_voltage_v = BATTERY_SOC_FULL_ANCHOR_MIN_VOLTAGE_V,
-        .full_anchor_taper_current_ma = BATTERY_SOC_FULL_ANCHOR_TAPER_CURRENT_MA,
-        .full_anchor_qualification_us = BATTERY_SOC_FULL_ANCHOR_QUALIFICATION_MS * 1000LL,
-        .bootstrap_full_anchor_min_voltage_soc_percent =
-            BATTERY_SOC_BOOTSTRAP_FULL_ANCHOR_MIN_VOLTAGE_SOC_PERCENT,
-        .bootstrap_voltage_rebase_min_delta_percent =
-            BATTERY_SOC_BOOTSTRAP_VOLTAGE_REBASE_MIN_DELTA_PERCENT,
-        .empty_anchor_max_voltage_v = BATTERY_SOC_EMPTY_ANCHOR_MAX_VOLTAGE_V,
-        .empty_anchor_qualification_us = BATTERY_SOC_EMPTY_ANCHOR_QUALIFICATION_MS * 1000LL,
-    }};
-    std::atomic_bool battery_valid_{false};
-    std::atomic_int battery_percent_{-1};
-    std::atomic<float> battery_voltage_v_{0.0f};
-    std::atomic<float> battery_current_ma_{0.0f};
-    std::atomic<float> battery_power_mw_{0.0f};
-    std::atomic<float> battery_signed_current_ma_{0.0f};
-    std::atomic<float> battery_shunt_voltage_mv_{0.0f};
-    std::atomic<float> battery_bus_voltage_v_{0.0f};
-    std::atomic<float> battery_remaining_mah_{0.0f};
-    std::atomic_bool battery_conversion_ready_{false};
-    std::atomic_bool battery_math_overflow_{false};
-    std::atomic_bool battery_soc_tracking_degraded_{false};
-    std::atomic_bool battery_soc_quasi_resting_{false};
-    std::atomic<float> battery_soc_voltage_reference_percent_{0.0f};
-    std::atomic<float> battery_soc_voltage_correction_mah_{0.0f};
-    std::atomic_bool battery_soc_full_anchored_{false};
-    std::atomic_bool battery_soc_bootstrap_voltage_rebased_{false};
-    std::atomic_bool battery_soc_empty_anchored_{false};
-    std::atomic_bool battery_charging_{false};
-    std::atomic_bool battery_discharging_{false};
-    std::atomic_bool battery_capacity_test_active_{false};
-    std::atomic_bool battery_capacity_test_measuring_{false};
-    std::atomic<uint32_t> battery_capacity_test_uah_{0};
-    std::atomic<uint32_t> battery_capacity_test_seconds_{0};
+    BatteryController battery_controller_;
 #endif
 #ifdef MPU6050_I2C_ADDRESS
     enum class MotionGesture : uint8_t {
@@ -281,66 +234,7 @@ private:
 
 #ifdef INA219_I2C_ADDRESS
     void InitializePowerMonitor() {
-        Settings settings("desk_robot", false);
-        battery_capacity_test_active_.store(settings.GetBool("cap_test_on", false));
-        battery_capacity_test_uah_.store(
-            static_cast<uint32_t>(std::max(settings.GetInt("cap_test_uah", 0), int32_t{0})));
-        battery_capacity_test_seconds_.store(
-            static_cast<uint32_t>(std::max(settings.GetInt("cap_test_sec", 0), int32_t{0})));
-        BatterySocEstimator::PersistedState soc_state;
-        soc_state.version = settings.GetInt("soc_ver", 0);
-        soc_state.remaining_uah = settings.GetInt("soc_rem_uah", -1);
-        soc_state.usable_capacity_uah = settings.GetInt("soc_cap_uah", -1);
-        soc_state.soc_basis_points = settings.GetInt("soc_bp", -1);
-        soc_state.last_voltage_mv = settings.GetInt("soc_last_mv", -1);
-        soc_state.tracking_degraded = settings.GetBool("soc_degraded", false);
-        if (battery_soc_estimator_.Restore(soc_state)) {
-            battery_remaining_mah_.store(battery_soc_estimator_.GetRemainingMah());
-            battery_percent_.store(
-                static_cast<int>(std::lround(battery_soc_estimator_.GetSocPercent())));
-            battery_soc_tracking_degraded_.store(battery_soc_estimator_.IsTrackingDegraded());
-            ESP_LOGI(TAG, "Battery SoC restored: %.1f mAh (%.2f%%), degraded=%s",
-                     battery_soc_estimator_.GetRemainingMah(),
-                     battery_soc_estimator_.GetSocPercent(),
-                     battery_soc_estimator_.IsTrackingDegraded() ? "yes" : "no");
-        } else if (soc_state.version != 0) {
-            ESP_LOGW(TAG, "Ignoring incompatible or invalid persisted battery SoC state");
-        }
-        std::lock_guard<std::mutex> lock(auxiliary_i2c_.mutex());
-        if (auxiliary_i2c_.handle() == nullptr ||
-            i2c_master_probe(auxiliary_i2c_.handle(), INA219_I2C_ADDRESS, 100) != ESP_OK) {
-            ESP_LOGW(TAG, "INA219 not detected at 0x%02x", INA219_I2C_ADDRESS);
-            return;
-        }
-        if (!power_monitor_.Initialize(auxiliary_i2c_.handle(), INA219_I2C_ADDRESS,
-                                       INA219_SHUNT_RESISTANCE_OHMS)) {
-            ESP_LOGW(TAG, "INA219 initialization failed");
-        }
-    }
-
-    void PersistBatteryCapacityTest() {
-        Settings settings("desk_robot", true);
-        settings.SetBool("cap_test_on", battery_capacity_test_active_.load());
-        settings.SetInt("cap_test_uah", static_cast<int32_t>(battery_capacity_test_uah_.load()));
-        settings.SetInt("cap_test_sec",
-                        static_cast<int32_t>(battery_capacity_test_seconds_.load()));
-    }
-
-    void PersistBatterySoc(const char* reason) {
-        if (!battery_soc_estimator_.IsInitialized()) {
-            return;
-        }
-        const auto state = battery_soc_estimator_.GetPersistedState();
-        Settings settings("desk_robot", true);
-        settings.SetInt("soc_ver", state.version);
-        settings.SetInt("soc_rem_uah", state.remaining_uah);
-        settings.SetInt("soc_cap_uah", state.usable_capacity_uah);
-        settings.SetInt("soc_bp", state.soc_basis_points);
-        settings.SetInt("soc_last_mv", state.last_voltage_mv);
-        settings.SetBool("soc_degraded", state.tracking_degraded);
-        ESP_LOGI(TAG, "Battery SoC saved (%s): %.1f mAh (%.2f%%), degraded=%s", reason,
-                 state.remaining_uah / 1000.0f, state.soc_basis_points / 100.0f,
-                 state.tracking_degraded ? "yes" : "no");
+        battery_controller_.Initialize(auxiliary_i2c_.handle(), auxiliary_i2c_.mutex());
     }
 #endif
 
@@ -518,27 +412,6 @@ private:
 
     void RunAuxiliarySensorTask() {
         TickType_t last_wake_time = xTaskGetTickCount();
-#ifdef INA219_I2C_ADDRESS
-        int64_t next_power_sample_us = 0;
-        bool power_filter_initialized = false;
-        float filtered_voltage_v = 0.0f;
-        float filtered_current_ma = 0.0f;
-        float filtered_power_mw = 0.0f;
-        unsigned power_failures = 0;
-        unsigned power_invalid_samples = 0;
-        int64_t next_battery_display_us = 0;
-        int64_t soc_last_save_us = esp_timer_get_time();
-        float soc_last_saved_remaining_mah = battery_soc_estimator_.GetRemainingMah();
-        bool soc_last_saved_degraded = battery_soc_estimator_.IsTrackingDegraded();
-        bool capacity_test_was_active = false;
-        bool capacity_previous_sample_valid = false;
-        int64_t capacity_previous_sample_us = 0;
-        float capacity_previous_current_ma = 0.0f;
-        int64_t capacity_last_save_us = 0;
-        double capacity_fractional_uah = 0.0;
-        int64_t capacity_fractional_time_us = 0;
-        int64_t capacity_low_voltage_started_us = 0;
-#endif
 #ifdef MPU6050_I2C_ADDRESS
         constexpr int kCalibrationSamples = 50;
         int calibration_samples = 0;
@@ -561,244 +434,11 @@ private:
         while (true) {
             const int64_t now_us = esp_timer_get_time();
 #ifdef INA219_I2C_ADDRESS
-            if (power_monitor_.IsAvailable() && now_us >= next_power_sample_us) {
-                next_power_sample_us = now_us + INA219_SAMPLE_PERIOD_MS * 1000LL;
-                Ina219PowerMonitor::Reading reading;
-                bool read_ok = false;
-                {
-                    std::lock_guard<std::mutex> lock(auxiliary_i2c_.mutex());
-                    read_ok = power_monitor_.Read(reading);
-                }
-                battery_conversion_ready_.store(reading.conversion_ready);
-                battery_math_overflow_.store(reading.math_overflow);
-                if (read_ok && reading.valid) {
-                    constexpr float kFilterAlpha = 0.25f;
-                    if (!power_filter_initialized) {
-                        filtered_voltage_v = reading.battery_voltage_v;
-                        filtered_current_ma = reading.current_ma;
-                        filtered_power_mw = reading.power_mw;
-                        power_filter_initialized = true;
-                    } else {
-                        filtered_voltage_v +=
-                            kFilterAlpha * (reading.battery_voltage_v - filtered_voltage_v);
-                        filtered_current_ma +=
-                            kFilterAlpha * (reading.current_ma - filtered_current_ma);
-                        filtered_power_mw += kFilterAlpha * (reading.power_mw - filtered_power_mw);
-                    }
-
-                    bool seeded_soc = false;
-                    if (!battery_soc_estimator_.IsInitialized()) {
-                        battery_soc_estimator_.SeedFromVoltage(reading.battery_voltage_v);
-                        seeded_soc = true;
-                        ESP_LOGI(TAG, "Battery SoC seeded from %.3f V: %.2f%%",
-                                 reading.battery_voltage_v, battery_soc_estimator_.GetSocPercent());
-                    }
-                    const float soc_before_update = battery_soc_estimator_.GetSocPercent();
-                    const bool was_quasi_resting = battery_soc_estimator_.IsQuasiResting();
-                    const bool was_full_anchored = battery_soc_estimator_.IsFullAnchored();
-                    const bool was_bootstrap_voltage_rebased =
-                        battery_soc_estimator_.WasBootstrapVoltageRebased();
-                    const bool was_empty_anchored = battery_soc_estimator_.IsEmptyAnchored();
-                    battery_soc_estimator_.Update(reading.battery_voltage_v, reading.current_ma,
-                                                  !motors_.IsActive(), reading.charging, now_us);
-                    if (was_quasi_resting != battery_soc_estimator_.IsQuasiResting()) {
-                        ESP_LOGI(TAG,
-                                 "Battery quasi-rest %s: voltage_soc=%.2f%% correction=%+.4f mAh",
-                                 battery_soc_estimator_.IsQuasiResting() ? "qualified" : "reset",
-                                 battery_soc_estimator_.GetQuasiRestVoltageSocPercent(),
-                                 battery_soc_estimator_.GetCumulativeVoltageCorrectionMah());
-                    }
-                    const bool full_anchor_applied =
-                        !was_full_anchored && battery_soc_estimator_.IsFullAnchored();
-                    if (full_anchor_applied) {
-                        ESP_LOGI(TAG, "Battery full anchor qualified at %.3f V, %+.1f mA",
-                                 reading.battery_voltage_v, reading.current_ma);
-                    }
-                    const bool bootstrap_voltage_rebase_applied =
-                        !was_bootstrap_voltage_rebased &&
-                        battery_soc_estimator_.WasBootstrapVoltageRebased();
-                    if (bootstrap_voltage_rebase_applied) {
-                        ESP_LOGI(TAG, "Battery startup SoC rebased from %.2f%% to %.2f%%",
-                                 soc_before_update, battery_soc_estimator_.GetSocPercent());
-                    }
-                    const bool empty_anchor_applied =
-                        !was_empty_anchored && battery_soc_estimator_.IsEmptyAnchored();
-                    if (empty_anchor_applied) {
-                        ESP_LOGI(TAG, "Battery empty anchor qualified at %.3f V, %+.1f mA",
-                                 reading.battery_voltage_v, reading.current_ma);
-                    }
-                    battery_voltage_v_.store(filtered_voltage_v);
-                    battery_current_ma_.store(std::fabs(filtered_current_ma));
-                    battery_power_mw_.store(std::fabs(filtered_power_mw));
-                    battery_signed_current_ma_.store(reading.current_ma);
-                    battery_shunt_voltage_mv_.store(reading.shunt_voltage_mv);
-                    battery_bus_voltage_v_.store(reading.bus_voltage_v);
-                    battery_remaining_mah_.store(battery_soc_estimator_.GetRemainingMah());
-                    battery_percent_.store(std::clamp(
-                        static_cast<int>(std::lround(battery_soc_estimator_.GetSocPercent())), 0,
-                        100));
-                    battery_soc_tracking_degraded_.store(
-                        battery_soc_estimator_.IsTrackingDegraded());
-                    battery_soc_quasi_resting_.store(battery_soc_estimator_.IsQuasiResting());
-                    battery_soc_voltage_reference_percent_.store(
-                        battery_soc_estimator_.GetQuasiRestVoltageSocPercent());
-                    battery_soc_voltage_correction_mah_.store(
-                        battery_soc_estimator_.GetCumulativeVoltageCorrectionMah());
-                    battery_soc_full_anchored_.store(battery_soc_estimator_.IsFullAnchored());
-                    battery_soc_bootstrap_voltage_rebased_.store(
-                        battery_soc_estimator_.WasBootstrapVoltageRebased());
-                    battery_soc_empty_anchored_.store(battery_soc_estimator_.IsEmptyAnchored());
-                    battery_charging_.store(reading.charging);
-                    battery_discharging_.store(reading.discharging);
-                    battery_valid_.store(true);
-
-                    constexpr int64_t kSocMinimumSaveIntervalUs = 5 * 60 * 1000000LL;
-                    constexpr float kSocMinimumSaveChangeMah = 10.0f;
-                    const float remaining_mah = battery_soc_estimator_.GetRemainingMah();
-                    const bool degraded_changed =
-                        battery_soc_estimator_.IsTrackingDegraded() != soc_last_saved_degraded;
-                    const bool meaningful_change =
-                        std::fabs(remaining_mah - soc_last_saved_remaining_mah) >=
-                            kSocMinimumSaveChangeMah ||
-                        degraded_changed;
-                    if (full_anchor_applied || bootstrap_voltage_rebase_applied ||
-                        empty_anchor_applied || seeded_soc ||
-                        (meaningful_change &&
-                         now_us - soc_last_save_us >= kSocMinimumSaveIntervalUs)) {
-                        const char* save_reason = "periodic";
-                        if (full_anchor_applied) {
-                            save_reason = "full anchor";
-                        } else if (bootstrap_voltage_rebase_applied) {
-                            save_reason = "startup voltage rebase";
-                        } else if (empty_anchor_applied) {
-                            save_reason = "empty anchor";
-                        } else if (seeded_soc) {
-                            save_reason = "voltage seed";
-                        }
-                        PersistBatterySoc(save_reason);
-                        soc_last_save_us = now_us;
-                        soc_last_saved_remaining_mah = remaining_mah;
-                        soc_last_saved_degraded = battery_soc_estimator_.IsTrackingDegraded();
-                    }
-
-                    const bool capacity_active = battery_capacity_test_active_.load();
-                    if (capacity_active && !capacity_test_was_active) {
-                        capacity_previous_sample_valid = false;
-                        capacity_previous_sample_us = 0;
-                        capacity_previous_current_ma = 0.0f;
-                        capacity_last_save_us = now_us;
-                        capacity_fractional_uah = 0.0;
-                        capacity_fractional_time_us = 0;
-                        capacity_low_voltage_started_us = 0;
-                    }
-                    const bool capacity_measuring = capacity_active && reading.discharging;
-                    battery_capacity_test_measuring_.store(capacity_measuring);
-                    if (capacity_measuring) {
-                        if (capacity_previous_sample_valid) {
-                            const int64_t elapsed_us = now_us - capacity_previous_sample_us;
-                            if (elapsed_us > 0 &&
-                                elapsed_us <= BATTERY_SOC_MAX_INTEGRATION_GAP_MS * 1000LL) {
-                                const double average_discharge_ma =
-                                    0.5 * (static_cast<double>(capacity_previous_current_ma) +
-                                           reading.current_ma);
-                                if (average_discharge_ma > 0.0) {
-                                    // mA * us / 3,600,000 = uAh.
-                                    capacity_fractional_uah +=
-                                        average_discharge_ma * elapsed_us / 3600000.0;
-                                    const uint32_t whole_uah =
-                                        static_cast<uint32_t>(capacity_fractional_uah);
-                                    if (whole_uah > 0) {
-                                        battery_capacity_test_uah_.fetch_add(whole_uah);
-                                        capacity_fractional_uah -= whole_uah;
-                                    }
-                                    capacity_fractional_time_us += elapsed_us;
-                                    const uint32_t whole_seconds = static_cast<uint32_t>(
-                                        capacity_fractional_time_us / 1000000LL);
-                                    if (whole_seconds > 0) {
-                                        battery_capacity_test_seconds_.fetch_add(whole_seconds);
-                                        capacity_fractional_time_us -=
-                                            static_cast<int64_t>(whole_seconds) * 1000000LL;
-                                    }
-                                }
-                            } else {
-                                ESP_LOGW(TAG,
-                                         "Capacity test skipped unknown integration gap: %lld us",
-                                         static_cast<long long>(elapsed_us));
-                            }
-                        }
-                        capacity_previous_sample_valid = true;
-                        capacity_previous_sample_us = now_us;
-                        capacity_previous_current_ma = reading.current_ma;
-                    } else {
-                        capacity_previous_sample_valid = false;
-                    }
-
-                    if (capacity_measuring &&
-                        reading.battery_voltage_v <= BATTERY_CAPACITY_LOW_VOLTAGE_V) {
-                        if (capacity_low_voltage_started_us == 0) {
-                            capacity_low_voltage_started_us = now_us;
-                        }
-                    } else {
-                        capacity_low_voltage_started_us = 0;
-                    }
-                    if (capacity_low_voltage_started_us > 0 &&
-                        now_us - capacity_low_voltage_started_us >=
-                            BATTERY_CAPACITY_LOW_VOLTAGE_DURATION_MS * 1000LL) {
-                        battery_capacity_test_active_.store(false);
-                        battery_capacity_test_measuring_.store(false);
-                        PersistBatteryCapacityTest();
-                        capacity_low_voltage_started_us = 0;
-                        capacity_previous_sample_valid = false;
-                        ESP_LOGI(TAG,
-                                 "Battery capacity measurement stopped after %d ms at/below "
-                                 "%.2f V",
-                                 BATTERY_CAPACITY_LOW_VOLTAGE_DURATION_MS,
-                                 BATTERY_CAPACITY_LOW_VOLTAGE_V);
-                    }
-                    if (capacity_measuring && now_us - capacity_last_save_us >= 60000000LL) {
-                        PersistBatteryCapacityTest();
-                        capacity_last_save_us = now_us;
-                    }
-                    capacity_test_was_active = battery_capacity_test_active_.load();
-                    power_failures = 0;
-                    power_invalid_samples = 0;
-
-                    if (now_us >= next_battery_display_us) {
-                        next_battery_display_us = now_us + 1000000LL;
-                        const int percent = battery_percent_.load();
-                        const float voltage = battery_voltage_v_.load();
-                        const bool charging = battery_charging_.load();
-                        Application::GetInstance().Schedule([this, percent, voltage, charging]() {
-                            display_->SetBatteryStatus(percent, voltage, charging);
-                        });
-                    }
-                } else {
-                    battery_valid_.store(false);
-                    battery_capacity_test_measuring_.store(false);
-                    capacity_previous_sample_valid = false;
-                    capacity_low_voltage_started_us = 0;
-                    battery_soc_estimator_.MarkMeasurementGap();
-                    battery_soc_tracking_degraded_.store(
-                        battery_soc_estimator_.IsTrackingDegraded());
-                    battery_soc_quasi_resting_.store(false);
-                    battery_soc_voltage_reference_percent_.store(0.0f);
-                    if (!read_ok) {
-                        power_invalid_samples = 0;
-                        if (++power_failures == 1 || power_failures % 30 == 0) {
-                            ESP_LOGW(TAG, "INA219 I2C read failed (%u consecutive)",
-                                     power_failures);
-                        }
-                    } else {
-                        power_failures = 0;
-                        if (++power_invalid_samples == 1 || power_invalid_samples % 30 == 0) {
-                            ESP_LOGW(TAG,
-                                     "INA219 sample invalid (%u consecutive): "
-                                     "conversion_ready=%s math_overflow=%s",
-                                     power_invalid_samples, reading.conversion_ready ? "yes" : "no",
-                                     reading.math_overflow ? "yes" : "no");
-                        }
-                    }
-                }
+            if (battery_controller_.Sample(now_us, !motors_.IsActive())) {
+                const auto status = battery_controller_.GetStatus();
+                Application::GetInstance().Schedule([this, status]() {
+                    display_->SetBatteryStatus(status.percent, status.voltage_v, status.charging);
+                });
             }
 #endif
 
@@ -972,7 +612,7 @@ private:
     void StartAuxiliarySensorTask() {
         const bool has_sensor =
 #ifdef INA219_I2C_ADDRESS
-            power_monitor_.IsAvailable() ||
+            battery_controller_.IsAvailable() ||
 #endif
 #ifdef MPU6050_I2C_ADDRESS
             motion_sensor_.IsAvailable() ||
@@ -1550,25 +1190,20 @@ private:
             telemetry.cliff_detected = self->IsCliffDetected();
 #endif
 #ifdef INA219_I2C_ADDRESS
-            telemetry.power_valid = self->battery_valid_.load(std::memory_order_relaxed);
-            telemetry.current_ma = static_cast<int>(
-                std::lround(self->battery_current_ma_.load(std::memory_order_relaxed)));
-            telemetry.power_mw = static_cast<int>(
-                std::lround(self->battery_power_mw_.load(std::memory_order_relaxed)));
-            telemetry.capacity_active =
-                self->battery_capacity_test_active_.load(std::memory_order_relaxed);
-            telemetry.capacity_measuring =
-                self->battery_capacity_test_measuring_.load(std::memory_order_relaxed);
-            telemetry.capacity_uah =
-                self->battery_capacity_test_uah_.load(std::memory_order_relaxed);
-            telemetry.capacity_seconds =
-                self->battery_capacity_test_seconds_.load(std::memory_order_relaxed);
-            telemetry.battery_percent = self->battery_percent_.load(std::memory_order_relaxed);
-            telemetry.battery_voltage_mv = static_cast<int>(
-                std::lround(self->battery_voltage_v_.load(std::memory_order_relaxed) * 1000.0f));
-            telemetry.low_battery =
-                telemetry.power_valid && !self->battery_charging_.load(std::memory_order_relaxed) &&
-                telemetry.battery_percent >= 0 && telemetry.battery_percent < 20;
+            const auto battery = self->battery_controller_.GetStatus();
+            telemetry.power_valid = battery.valid;
+            telemetry.current_ma = static_cast<int>(std::lround(battery.current_ma));
+            telemetry.power_mw = static_cast<int>(std::lround(battery.power_mw));
+            telemetry.capacity_active = battery.capacity_test_active;
+            telemetry.capacity_measuring = battery.capacity_test_measuring;
+            telemetry.capacity_uah = battery.capacity_test_uah;
+            telemetry.capacity_seconds = battery.capacity_test_seconds;
+            telemetry.battery_percent = battery.percent;
+            telemetry.battery_voltage_mv =
+                static_cast<int>(std::lround(battery.voltage_v * 1000.0f));
+            telemetry.low_battery = telemetry.power_valid && !battery.charging &&
+                                    telemetry.battery_percent >= 0 &&
+                                    telemetry.battery_percent < 20;
 #endif
 #ifdef MPU6050_I2C_ADDRESS
             telemetry.motion_valid = self->motion_sensor_valid_.load(std::memory_order_relaxed);
@@ -2525,28 +2160,20 @@ private:
         }
 #ifdef INA219_I2C_ADDRESS
         if (action == "battery_capacity_start") {
-            if (!power_monitor_.IsAvailable()) {
+            if (!battery_controller_.StartCapacityTest()) {
                 message = "INA219 is unavailable";
                 return false;
             }
-            battery_capacity_test_active_.store(true);
-            PersistBatteryCapacityTest();
             message = "Battery capacity measurement started";
             return true;
         }
         if (action == "battery_capacity_stop") {
-            battery_capacity_test_active_.store(false);
-            battery_capacity_test_measuring_.store(false);
-            PersistBatteryCapacityTest();
+            battery_controller_.StopCapacityTest();
             message = "Battery capacity measurement stopped";
             return true;
         }
         if (action == "battery_capacity_reset") {
-            battery_capacity_test_active_.store(false);
-            battery_capacity_test_measuring_.store(false);
-            battery_capacity_test_uah_.store(0);
-            battery_capacity_test_seconds_.store(0);
-            PersistBatteryCapacityTest();
+            battery_controller_.ResetCapacityTest();
             message = "Battery capacity measurement reset";
             return true;
         }
@@ -2639,57 +2266,54 @@ private:
                 cJSON_AddNumberToObject(root, "cliff_edge_mm", cliff_edge_mm_.load());
 #endif
 #ifdef INA219_I2C_ADDRESS
-                cJSON_AddBoolToObject(root, "battery_available", power_monitor_.IsAvailable());
-                cJSON_AddBoolToObject(root, "battery_valid", battery_valid_.load());
-                cJSON_AddNumberToObject(root, "battery_percent", battery_percent_.load());
-                cJSON_AddNumberToObject(root, "battery_voltage_v", battery_voltage_v_.load());
-                cJSON_AddNumberToObject(root, "battery_current_ma", battery_current_ma_.load());
-                cJSON_AddNumberToObject(root, "battery_power_mw", battery_power_mw_.load());
+                const auto battery = battery_controller_.GetStatus();
+                cJSON_AddBoolToObject(root, "battery_available", battery.available);
+                cJSON_AddBoolToObject(root, "battery_valid", battery.valid);
+                cJSON_AddNumberToObject(root, "battery_percent", battery.percent);
+                cJSON_AddNumberToObject(root, "battery_voltage_v", battery.voltage_v);
+                cJSON_AddNumberToObject(root, "battery_current_ma", battery.current_ma);
+                cJSON_AddNumberToObject(root, "battery_power_mw", battery.power_mw);
                 cJSON_AddNumberToObject(root, "battery_signed_current_ma",
-                                        battery_signed_current_ma_.load());
+                                        battery.signed_current_ma);
                 cJSON_AddNumberToObject(root, "battery_shunt_voltage_mv",
-                                        battery_shunt_voltage_mv_.load());
-                cJSON_AddNumberToObject(root, "battery_bus_voltage_v",
-                                        battery_bus_voltage_v_.load());
-                cJSON_AddNumberToObject(root, "battery_remaining_mah",
-                                        battery_remaining_mah_.load());
+                                        battery.shunt_voltage_mv);
+                cJSON_AddNumberToObject(root, "battery_bus_voltage_v", battery.bus_voltage_v);
+                cJSON_AddNumberToObject(root, "battery_remaining_mah", battery.remaining_mah);
                 cJSON_AddNumberToObject(root, "battery_capacity_mah",
                                         BATTERY_SOC_USABLE_CAPACITY_MAH);
                 cJSON_AddStringToObject(root, "battery_soc_method", "coulomb_quasi_rest_anchors");
                 cJSON_AddBoolToObject(root, "battery_soc_tracking_degraded",
-                                      battery_soc_tracking_degraded_.load());
+                                      battery.soc_tracking_degraded);
                 cJSON_AddBoolToObject(root, "battery_soc_quasi_resting",
-                                      battery_soc_quasi_resting_.load());
+                                      battery.soc_quasi_resting);
                 cJSON_AddNumberToObject(root, "battery_soc_voltage_reference_percent",
-                                        battery_soc_voltage_reference_percent_.load());
+                                        battery.soc_voltage_reference_percent);
                 cJSON_AddNumberToObject(root, "battery_soc_voltage_correction_mah",
-                                        battery_soc_voltage_correction_mah_.load());
+                                        battery.soc_voltage_correction_mah);
                 cJSON_AddBoolToObject(root, "battery_soc_full_anchored",
-                                      battery_soc_full_anchored_.load());
+                                      battery.soc_full_anchored);
                 cJSON_AddBoolToObject(root, "battery_soc_bootstrap_voltage_rebased",
-                                      battery_soc_bootstrap_voltage_rebased_.load());
+                                      battery.soc_bootstrap_voltage_rebased);
                 cJSON_AddBoolToObject(root, "battery_soc_empty_anchored",
-                                      battery_soc_empty_anchored_.load());
-                cJSON_AddBoolToObject(root, "battery_conversion_ready",
-                                      battery_conversion_ready_.load());
-                cJSON_AddBoolToObject(root, "battery_math_overflow", battery_math_overflow_.load());
-                const float signed_current_ma = battery_signed_current_ma_.load();
-                const char* flow_state = !battery_valid_.load()       ? "unknown"
-                                         : signed_current_ma < -20.0f ? "charging"
-                                         : signed_current_ma > 20.0f  ? "discharging"
-                                                                      : "near_zero";
+                                      battery.soc_empty_anchored);
+                cJSON_AddBoolToObject(root, "battery_conversion_ready", battery.conversion_ready);
+                cJSON_AddBoolToObject(root, "battery_math_overflow", battery.math_overflow);
+                const char* flow_state = !battery.valid                         ? "unknown"
+                                         : battery.signed_current_ma < -20.0f   ? "charging"
+                                         : battery.signed_current_ma > 20.0f    ? "discharging"
+                                                                                : "near_zero";
                 cJSON_AddStringToObject(root, "battery_flow_state", flow_state);
                 cJSON_AddStringToObject(root, "external_power", "unknown");
-                cJSON_AddBoolToObject(root, "battery_charging", battery_charging_.load());
-                cJSON_AddBoolToObject(root, "battery_discharging", battery_discharging_.load());
+                cJSON_AddBoolToObject(root, "battery_charging", battery.charging);
+                cJSON_AddBoolToObject(root, "battery_discharging", battery.discharging);
                 cJSON_AddBoolToObject(root, "battery_capacity_test_active",
-                                      battery_capacity_test_active_.load());
+                                      battery.capacity_test_active);
                 cJSON_AddBoolToObject(root, "battery_capacity_test_measuring",
-                                      battery_capacity_test_measuring_.load());
+                                      battery.capacity_test_measuring);
                 cJSON_AddNumberToObject(root, "battery_capacity_test_mah",
-                                        battery_capacity_test_uah_.load() / 1000.0);
+                                        battery.capacity_test_uah / 1000.0);
                 cJSON_AddNumberToObject(root, "battery_capacity_test_seconds",
-                                        battery_capacity_test_seconds_.load());
+                                        battery.capacity_test_seconds);
 #endif
 #ifdef MPU6050_I2C_ADDRESS
                 cJSON_AddBoolToObject(root, "motion_sensor_available",
@@ -2955,41 +2579,41 @@ private:
                 if (result == nullptr) {
                     return std::unexpected("Out of memory");
                 }
-                cJSON_AddBoolToObject(result, "available", power_monitor_.IsAvailable());
-                cJSON_AddBoolToObject(result, "valid", battery_valid_.load());
-                if (battery_valid_.load()) {
-                    cJSON_AddNumberToObject(result, "percent", battery_percent_.load());
-                    cJSON_AddNumberToObject(result, "voltage_v", battery_voltage_v_.load());
-                    cJSON_AddNumberToObject(result, "current_ma", battery_current_ma_.load());
-                    cJSON_AddNumberToObject(result, "power_mw", battery_power_mw_.load());
+                const auto battery = battery_controller_.GetStatus();
+                cJSON_AddBoolToObject(result, "available", battery.available);
+                cJSON_AddBoolToObject(result, "valid", battery.valid);
+                if (battery.valid) {
+                    cJSON_AddNumberToObject(result, "percent", battery.percent);
+                    cJSON_AddNumberToObject(result, "voltage_v", battery.voltage_v);
+                    cJSON_AddNumberToObject(result, "current_ma", battery.current_ma);
+                    cJSON_AddNumberToObject(result, "power_mw", battery.power_mw);
                     cJSON_AddNumberToObject(result, "signed_current_ma",
-                                            battery_signed_current_ma_.load());
+                                            battery.signed_current_ma);
                     cJSON_AddNumberToObject(result, "shunt_voltage_mv",
-                                            battery_shunt_voltage_mv_.load());
-                    cJSON_AddNumberToObject(result, "bus_voltage_v", battery_bus_voltage_v_.load());
-                    cJSON_AddNumberToObject(result, "remaining_mah", battery_remaining_mah_.load());
+                                            battery.shunt_voltage_mv);
+                    cJSON_AddNumberToObject(result, "bus_voltage_v", battery.bus_voltage_v);
+                    cJSON_AddNumberToObject(result, "remaining_mah", battery.remaining_mah);
                     cJSON_AddNumberToObject(result, "capacity_mah",
                                             BATTERY_SOC_USABLE_CAPACITY_MAH);
                     cJSON_AddStringToObject(result, "soc_method", "coulomb_quasi_rest_anchors");
                     cJSON_AddBoolToObject(result, "soc_tracking_degraded",
-                                          battery_soc_tracking_degraded_.load());
+                                          battery.soc_tracking_degraded);
                     cJSON_AddBoolToObject(result, "soc_quasi_resting",
-                                          battery_soc_quasi_resting_.load());
+                                          battery.soc_quasi_resting);
                     cJSON_AddNumberToObject(result, "soc_voltage_reference_percent",
-                                            battery_soc_voltage_reference_percent_.load());
+                                            battery.soc_voltage_reference_percent);
                     cJSON_AddNumberToObject(result, "soc_voltage_correction_mah",
-                                            battery_soc_voltage_correction_mah_.load());
+                                            battery.soc_voltage_correction_mah);
                     cJSON_AddBoolToObject(result, "soc_full_anchored",
-                                          battery_soc_full_anchored_.load());
+                                          battery.soc_full_anchored);
                     cJSON_AddBoolToObject(result, "soc_bootstrap_voltage_rebased",
-                                          battery_soc_bootstrap_voltage_rebased_.load());
+                                          battery.soc_bootstrap_voltage_rebased);
                     cJSON_AddBoolToObject(result, "soc_empty_anchored",
-                                          battery_soc_empty_anchored_.load());
-                    cJSON_AddBoolToObject(result, "conversion_ready",
-                                          battery_conversion_ready_.load());
-                    cJSON_AddBoolToObject(result, "math_overflow", battery_math_overflow_.load());
-                    cJSON_AddBoolToObject(result, "charging", battery_charging_.load());
-                    cJSON_AddBoolToObject(result, "discharging", battery_discharging_.load());
+                                          battery.soc_empty_anchored);
+                    cJSON_AddBoolToObject(result, "conversion_ready", battery.conversion_ready);
+                    cJSON_AddBoolToObject(result, "math_overflow", battery.math_overflow);
+                    cJSON_AddBoolToObject(result, "charging", battery.charging);
+                    cJSON_AddBoolToObject(result, "discharging", battery.discharging);
                 }
                 return result;
             });
@@ -3054,12 +2678,13 @@ public:
 
     bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
 #ifdef INA219_I2C_ADDRESS
-        if (!battery_valid_.load()) {
+        const auto battery = battery_controller_.GetStatus();
+        if (!battery.valid) {
             return false;
         }
-        level = battery_percent_.load();
-        charging = battery_charging_.load();
-        discharging = battery_discharging_.load();
+        level = battery.percent;
+        charging = battery.charging;
+        discharging = battery.discharging;
         return true;
 #else
         return false;
