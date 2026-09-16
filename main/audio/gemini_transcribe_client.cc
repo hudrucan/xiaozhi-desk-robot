@@ -317,8 +317,12 @@ const char* GeminiTranscribeClient::StateName(State state) {
 void GeminiTranscribeClient::WorkerTask(void* argument) {
     auto* client = static_cast<GeminiTranscribeClient*>(argument);
     client->WorkerLoop();
+    auto on_stopped = client->callbacks_.on_stopped;
     client->worker_running_.store(false);
     xEventGroupSetBits(client->worker_events_, kWorkerStopped);
+    if (on_stopped) {
+        on_stopped();
+    }
     vTaskDelete(nullptr);
 }
 

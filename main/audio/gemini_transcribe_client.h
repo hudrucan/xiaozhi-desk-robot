@@ -43,6 +43,7 @@ public:
         std::function<void(const std::string&)> on_final_transcript;
         std::function<void()> on_final_timeout;
         std::function<void(const std::string&)> on_error;
+        std::function<void()> on_stopped;
     };
 
     GeminiTranscribeClient();

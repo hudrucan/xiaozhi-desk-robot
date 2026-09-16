@@ -1243,6 +1243,9 @@ void Application::HandleStateChangedEvent() {
     // Any state change invalidates a pending deferred listening start;
     // the Listening case below re-arms it when needed.
     pending_listening_start_ = false;
+    if (new_state != kDeviceStateSpeaking) {
+        gemini_asr_prewarm_retry_pending_ = false;
+    }
 
     if (new_state != kDeviceStateListening &&
         active_asr_provider_ == AsrProvider::kGemini) {
@@ -1422,22 +1425,33 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
 
 void Application::MaybeStartGeminiAsrPrewarm() {
     if (GetDeviceState() != kDeviceStateSpeaking || !protocol_ ||
-        !protocol_->IsAudioChannelOpened() || active_asr_provider_ == AsrProvider::kGemini ||
-        gemini_asr_client_.IsRunning()) {
+        !protocol_->IsAudioChannelOpened() || active_asr_provider_ == AsrProvider::kGemini) {
+        gemini_asr_prewarm_retry_pending_ = false;
         return;
     }
 
     const bool will_resume_listening =
         listening_mode_ != kListeningModeManualStop || text_chat_resume_listening_;
     if (!will_resume_listening) {
+        gemini_asr_prewarm_retry_pending_ = false;
         return;
     }
 
     const AsrConfig& config = GetAsrTurnConfig();
     if (config.provider != AsrProvider::kGemini || !config.IsGeminiConfigured()) {
+        gemini_asr_prewarm_retry_pending_ = false;
         return;
     }
 
+    if (gemini_asr_client_.IsRunning()) {
+        if (!gemini_asr_prewarm_retry_pending_) {
+            ESP_LOGI(TAG, "Gemini ASR prewarm deferred; previous worker is stopping");
+        }
+        gemini_asr_prewarm_retry_pending_ = true;
+        return;
+    }
+
+    gemini_asr_prewarm_retry_pending_ = false;
     ESP_LOGI(TAG,
              "Gemini ASR prewarm starting free_internal=%u min_internal=%u largest_internal=%u",
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
@@ -1498,6 +1512,9 @@ void Application::StartGeminiAsrClient(const AsrConfig& config, bool prewarming)
         Schedule([this, turn_id, error, failed_during_prewarm]() {
             HandleGeminiAsrError(turn_id, error, failed_during_prewarm);
         });
+    };
+    callbacks.on_stopped = [this]() {
+        Schedule([this]() { HandleGeminiAsrWorkerStopped(); });
     };
 
     if (!gemini_asr_client_.Start(config, std::move(callbacks))) {
@@ -1709,6 +1726,34 @@ void Application::HandleGeminiAsrError(uint32_t turn_id, std::string error,
     StopGeminiAsrTurn();
     last_error_message_ = error.empty() ? "Gemini ASR failed" : "Gemini ASR: " + error;
     xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+}
+
+void Application::HandleGeminiAsrWorkerStopped() {
+    if (gemini_asr_client_.IsRunning()) {
+        return;
+    }
+
+    if (gemini_asr_restart_pending_) {
+        if (GetDeviceState() == kDeviceStateListening && protocol_ &&
+            protocol_->IsAudioChannelOpened()) {
+            gemini_asr_restart_pending_ = false;
+            ESP_LOGI(TAG, "Gemini ASR worker stopped; resuming pending listening start");
+            StartListeningAudio();
+            return;
+        }
+        if (GetDeviceState() != kDeviceStateListening) {
+            gemini_asr_restart_pending_ = false;
+        }
+    }
+
+    if (!gemini_asr_prewarm_retry_pending_) {
+        return;
+    }
+    gemini_asr_prewarm_retry_pending_ = false;
+    if (GetDeviceState() == kDeviceStateSpeaking) {
+        ESP_LOGI(TAG, "Gemini ASR worker stopped; starting deferred prewarm");
+        MaybeStartGeminiAsrPrewarm();
+    }
 }
 
 void Application::StopGeminiAsrTurn() {
