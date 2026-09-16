@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 4 commits ahead of `origin/main`
+Remote state at handoff: `main` is 6 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -37,8 +37,9 @@ Commit each completed batch locally and do not push `origin`.
 | `d15a6642` | Add typed robot control and status boundary | User passed |
 | `51da4de` | Isolate robot-specific MCP bindings behind `RobotController` | Build/hardware not run |
 | `75ee843` | Route Web Control through the typed robot API | Build/hardware not run |
+| `c739c47` | Move Web Control UI to split embedded source | Build/browser/hardware not run |
 
-Commits `51da4de` through `75ee843` have not been pushed to `origin`.
+Commits `51da4de` through `c739c47` have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -80,6 +81,16 @@ The Web adapter depends only on `RobotController` plus the config/display types 
 the existing hardware guards and OLED JSON/action contracts. `DeskRobotBoard` only constructs
 the server with its typed controller boundary and the application-owned typed-chat callback.
 
+The editable Web UI source is now split by concern:
+
+- `main/robot/web/ui/index.html`
+- `main/robot/web/ui/style.css`
+- `main/robot/web/ui/app.js`
+
+CMake deterministically assembles these into a generated build-tree header using
+`main/robot/web/robot_web_control_page.h.in`. The firmware still serves one self-contained page
+from `/`; no asset route or frontend toolchain was added.
+
 `MotorController::Status` is the typed motor snapshot. Its existing JSON contract is retained
 through `MotorController::StatusJson`.
 
@@ -99,11 +110,12 @@ through `MotorController::StatusJson`.
 
 ## Latest unverified batch
 
-Commits `51da4de` and `75ee843` completed Phases 6A and 6B. Robot-specific MCP bindings and Web
-Control action/status adaptation are no longer owned by `DeskRobotBoard`. Both adapters depend
-on `RobotController`; neither accesses board-private fields or concrete robot subsystem
-instances. Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON
-keys, the nine HTTP routes and port 8080 are retained.
+Commits `51da4de`, `75ee843` and `c739c47` completed Phases 6A through 6C. Robot-specific MCP
+bindings and Web Control action/status adaptation are no longer owned by `DeskRobotBoard`, and
+the editable Web UI is no longer maintained in a 3,179-line C++ header. Source review confirmed
+all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the nine HTTP routes and port
+8080 are retained. The CMake-assembled HTML body matches the previous embedded body exactly
+(101,048 characters).
 
 Files changed:
 
@@ -115,6 +127,11 @@ Files changed:
 - `main/robot/robot_web_control_server.cc`
 - `main/robot/web/robot_web_adapter.h`
 - `main/robot/web/robot_web_adapter.cc`
+- `main/robot/web/robot_web_control_page.h.in`
+- `main/robot/web/ui/index.html`
+- `main/robot/web/ui/style.css`
+- `main/robot/web/ui/app.js`
+- removed `main/robot/robot_web_control_page.h`
 
 Minimum validation:
 
@@ -127,6 +144,8 @@ Minimum validation:
 6. Open Web Control and verify status, logs, camera snapshot, typed chat and ASR settings.
 7. Exercise movement, turn, dance, emotion, audio test, display/OLED, lighting, battery-test,
    cliff, motion, live-camera and Wi-Fi actions used by the Web UI.
+8. Confirm the Web page loads with styling and JavaScript behavior intact, including status
+   polling, logs, camera preview/snapshot and typed chat.
 
 Build: **NOT RUN**
 
@@ -134,19 +153,16 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-After the user validates Phases 6A and 6B, continue with Phase 6C:
+After the user validates Phases 6A through 6C, continue with Phase 7:
 
 ```text
-main/robot/web/ui/index.html
-main/robot/web/ui/app.js
-main/robot/web/ui/style.css
-main/robot/robot_web_control_page.h
-main/CMakeLists.txt
+main/robot/desk_robot_board.cc
 ```
 
-Move the editable Web UI out of the large embedded C++ header into focused HTML, JavaScript and
-CSS source files using a small deterministic ESP-IDF-compatible embedding path. Do not add a
-frontend framework or Node-based toolchain. Preserve every route and browser-visible behavior.
+Re-audit the remaining composition root by responsibility. Extract only ownership boundaries
+that are clearly cohesive and preserve shared-bus initialization, task scheduling, safety and
+telemetry timing. Stop if the remaining length is justified integration/lifecycle code; do not
+split solely to meet a line-count target.
 
 ## Useful review checks
 
