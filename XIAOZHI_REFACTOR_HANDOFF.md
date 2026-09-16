@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 6 commits ahead of `origin/main`
+Remote state at handoff: `main` is 8 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -38,8 +38,9 @@ Commit each completed batch locally and do not push `origin`.
 | `51da4de` | Isolate robot-specific MCP bindings behind `RobotController` | Build/hardware not run |
 | `75ee843` | Route Web Control through the typed robot API | Build/hardware not run |
 | `c739c47` | Move Web Control UI to split embedded source | Build/browser/hardware not run |
+| `b809343` | Document Phase 6 adapter and Web UI ownership | Documentation only |
 
-Commits `51da4de` through `c739c47` have not been pushed to `origin`.
+Commits `51da4de` through `b809343` have not been pushed to `origin`.
 
 ## Current architecture
 
