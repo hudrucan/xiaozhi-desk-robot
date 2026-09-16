@@ -390,6 +390,7 @@ void Application::Run() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
+            HandleGeminiTimers();
 
             if (text_chat_tts_stopped_.load()) {
                 CompleteTextChatAfterPlayback();
@@ -1246,6 +1247,10 @@ void Application::HandleStateChangedEvent() {
         active_asr_provider_ == AsrProvider::kGemini) {
         StopGeminiAsrTurn();
     }
+    if (new_state != kDeviceStateListening) {
+        gemini_asr_restart_pending_ = false;
+        gemini_listening_deadline_us_ = 0;
+    }
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
@@ -1376,7 +1381,10 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
     gemini_vad_turn_active_.store(false);
     gemini_vad_speech_started_.store(false);
     gemini_vad_end_pending_.store(false);
+    gemini_vad_speech_start_handled_ = false;
     gemini_audio_stream_end_requested_ = false;
+    gemini_asr_restart_pending_ = false;
+    gemini_listening_deadline_us_ = 0;
 
     active_asr_provider_ = AsrProvider::kGemini;
     uint32_t turn_id = ++gemini_asr_turn_id_;
@@ -1394,6 +1402,9 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
         Schedule([this, turn_id, transcript]() mutable {
             HandleGeminiAsrFinal(turn_id, std::move(transcript));
         });
+    };
+    callbacks.on_final_timeout = [this, turn_id]() {
+        Schedule([this, turn_id]() { HandleGeminiAsrFinalTimeout(turn_id); });
     };
     callbacks.on_error = [this, turn_id](const std::string& error) {
         Schedule([this, turn_id, error]() { HandleGeminiAsrError(turn_id, error); });
@@ -1422,15 +1433,27 @@ void Application::HandleGeminiAsrReady(uint32_t turn_id) {
     play_popup_on_listening_ = false;
     gemini_vad_speech_started_.store(false);
     gemini_vad_end_pending_.store(false);
+    gemini_vad_speech_start_handled_ = false;
     gemini_audio_stream_end_requested_ = false;
     gemini_vad_turn_active_.store(true);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, &gemini_asr_client_);
     audio_service_.EnableVoiceProcessing(true);
     ConfigureWakeWordForListening();
+    gemini_listening_deadline_us_ =
+        esp_timer_get_time() +
+        static_cast<int64_t>(Protocol::kChannelInactivityTimeoutSeconds) * 1000 * 1000;
     ESP_LOGI(TAG, "Gemini ASR ready; voice processing enabled");
 }
 
 void Application::HandleGeminiVadChange() {
+    if (gemini_vad_turn_active_.load() && gemini_vad_speech_started_.load() &&
+        !gemini_vad_speech_start_handled_) {
+        gemini_vad_speech_start_handled_ = true;
+        gemini_listening_deadline_us_ = 0;
+        ESP_LOGI(TAG, "Gemini ASR speech started turn=%lu",
+                 static_cast<unsigned long>(gemini_asr_turn_id_));
+    }
+
     if (!gemini_vad_end_pending_.exchange(false) ||
         !gemini_vad_turn_active_.exchange(false) ||
         active_asr_provider_ != AsrProvider::kGemini ||
@@ -1441,7 +1464,8 @@ void Application::HandleGeminiVadChange() {
 
     // Stop the realtime producer before asking the worker to flush its bounded
     // PCM queue. The WebSocket send remains entirely on the Gemini worker task.
-    ESP_LOGI(TAG, "Gemini ASR VAD speech end");
+    ESP_LOGI(TAG, "Gemini ASR VAD end turn=%lu",
+             static_cast<unsigned long>(gemini_asr_turn_id_));
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     gemini_audio_stream_end_requested_ = true;
@@ -1454,12 +1478,20 @@ void Application::HandleGeminiVadChange() {
             ESP_LOGW(TAG, "Gemini ASR audioStreamEnd request ignored in state=%s",
                      GeminiTranscribeClient::StateName(state));
         }
+    } else {
+        ESP_LOGI(TAG, "Gemini ASR audioStreamEnd requested turn=%lu",
+                 static_cast<unsigned long>(gemini_asr_turn_id_));
     }
 }
 
 void Application::HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript) {
     if (turn_id != gemini_asr_turn_id_ ||
         active_asr_provider_ != AsrProvider::kGemini) {
+        return;
+    }
+
+    if (transcript.empty()) {
+        RecoverGeminiAsrTurn(turn_id, "empty finalized transcript");
         return;
     }
 
@@ -1476,6 +1508,60 @@ void Application::HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript)
         }
         last_error_message_ = "Gemini ASR: " + message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+    }
+}
+
+void Application::HandleGeminiAsrFinalTimeout(uint32_t turn_id) {
+    RecoverGeminiAsrTurn(turn_id, "final transcript timeout");
+}
+
+void Application::RecoverGeminiAsrTurn(uint32_t turn_id, const char* reason) {
+    if (turn_id != gemini_asr_turn_id_ ||
+        active_asr_provider_ != AsrProvider::kGemini) {
+        return;
+    }
+
+    ESP_LOGW(TAG, "Gemini ASR utterance discarded turn=%lu reason=%s",
+             static_cast<unsigned long>(turn_id), reason);
+    StopGeminiAsrTurn();
+    ResetAsrTurnConfig();
+    if (GetDeviceState() == kDeviceStateListening && protocol_ &&
+        protocol_->IsAudioChannelOpened()) {
+        gemini_asr_restart_pending_ = true;
+    }
+}
+
+void Application::HandleGeminiTimers() {
+    if (gemini_asr_restart_pending_) {
+        if (GetDeviceState() != kDeviceStateListening || !protocol_ ||
+            !protocol_->IsAudioChannelOpened()) {
+            gemini_asr_restart_pending_ = false;
+        } else if (!gemini_asr_client_.IsRunning()) {
+            gemini_asr_restart_pending_ = false;
+            StartListeningAudio();
+        }
+    }
+
+    if (gemini_listening_deadline_us_ <= 0 ||
+        esp_timer_get_time() < gemini_listening_deadline_us_) {
+        return;
+    }
+    gemini_listening_deadline_us_ = 0;
+    if (GetDeviceState() != kDeviceStateListening ||
+        active_asr_provider_ != AsrProvider::kGemini ||
+        gemini_vad_speech_started_.load()) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Gemini ASR listening inactivity timeout=%ds; ending conversation",
+             Protocol::kChannelInactivityTimeoutSeconds);
+    StopGeminiAsrTurn();
+    ResetAsrTurnConfig();
+    if (protocol_) {
+        protocol_->CloseAudioChannel();
+    }
+    if (GetDeviceState() == kDeviceStateListening) {
+        SetDeviceState(kDeviceStateIdle);
     }
 }
 
@@ -1500,7 +1586,10 @@ void Application::StopGeminiAsrTurn() {
     gemini_vad_turn_active_.store(false);
     gemini_vad_speech_started_.store(false);
     gemini_vad_end_pending_.store(false);
+    gemini_vad_speech_start_handled_ = false;
     gemini_audio_stream_end_requested_ = false;
+    gemini_asr_restart_pending_ = false;
+    gemini_listening_deadline_us_ = 0;
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     active_asr_provider_ = AsrProvider::kXiaozhi;

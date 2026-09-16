@@ -391,6 +391,7 @@ void GeminiTranscribeClient::WorkerLoop() {
     }
 
     int64_t setup_deadline_us = 0;
+    int64_t final_wait_started_us = 0;
     int64_t final_deadline_us = 0;
     if (!failed && !IsCancelRequested()) {
         std::string setup_error;
@@ -449,7 +450,7 @@ void GeminiTranscribeClient::WorkerLoop() {
                 failed = true;
             } else if (state_.load() == State::kEnding && final_deadline_us > 0 &&
                        esp_timer_get_time() >= final_deadline_us) {
-                Fail("Gemini final transcript timed out");
+                FailFinalTranscriptTimeout(esp_timer_get_time() - final_wait_started_us);
                 failed = true;
             }
             continue;
@@ -472,7 +473,7 @@ void GeminiTranscribeClient::WorkerLoop() {
         }
         if (state_.load() == State::kEnding && final_deadline_us > 0 &&
             esp_timer_get_time() >= final_deadline_us) {
-            Fail("Gemini final transcript timed out");
+            FailFinalTranscriptTimeout(esp_timer_get_time() - final_wait_started_us);
             failed = true;
             continue;
         }
@@ -507,9 +508,12 @@ void GeminiTranscribeClient::WorkerLoop() {
                 std::lock_guard<std::mutex> lock(mutex_);
                 audio_stream_end_requested_ = false;
             }
-            final_deadline_us = esp_timer_get_time() + kFinalTranscriptTimeoutUs;
+            final_wait_started_us = esp_timer_get_time();
+            final_deadline_us = final_wait_started_us + kFinalTranscriptTimeoutUs;
             SetState(State::kEnding);
             ESP_LOGI(TAG, "Gemini ASR audioStreamEnd sent");
+            ESP_LOGI(TAG, "Gemini ASR awaiting final timeout_ms=%lld",
+                     static_cast<long long>(kFinalTranscriptTimeoutUs / 1000));
         }
     }
 
@@ -573,6 +577,20 @@ void GeminiTranscribeClient::Fail(const std::string& error) {
     SetState(State::kError);
     if (callbacks_.on_error) {
         callbacks_.on_error(safe_error);
+    }
+}
+
+void GeminiTranscribeClient::FailFinalTranscriptTimeout(int64_t elapsed_us) {
+    constexpr char kError[] = "Gemini final transcript timed out";
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_error_ = kError;
+    }
+    ESP_LOGE(TAG, "Gemini final deadline exceeded elapsed_ms=%lld",
+             static_cast<long long>(elapsed_us / 1000));
+    SetState(State::kError);
+    if (callbacks_.on_final_timeout) {
+        callbacks_.on_final_timeout();
     }
 }
 
@@ -666,16 +684,15 @@ GeminiTranscribeClient::ServerMessageResult GeminiTranscribeClient::HandleServer
             const cJSON* text = cJSON_GetObjectItemCaseSensitive(final, "text");
             const std::string transcript =
                 cJSON_IsString(text) ? TrimTranscript(text->valuestring) : std::string();
-            if (!transcript.empty()) {
-                final_callback_sent_ = true;
-                SetState(State::kFinalized);
-                ESP_LOGI(TAG, "Gemini ASR final transcript received");
-                if (callbacks_.on_final_transcript) {
-                    callbacks_.on_final_transcript(transcript);
-                }
-                cJSON_Delete(root);
-                return ServerMessageResult::kFinalReceived;
+            final_callback_sent_ = true;
+            SetState(State::kFinalized);
+            ESP_LOGI(TAG, "Gemini ASR inputTranscription received bytes=%u",
+                     static_cast<unsigned>(transcript.size()));
+            if (callbacks_.on_final_transcript) {
+                callbacks_.on_final_transcript(transcript);
             }
+            cJSON_Delete(root);
+            return ServerMessageResult::kFinalReceived;
         }
     }
 

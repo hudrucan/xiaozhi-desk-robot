@@ -120,10 +120,9 @@ void Protocol::SendMcpMessage(const std::string& payload) {
 }
 
 bool Protocol::IsTimeout() const {
-    const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_incoming_time_);
-    bool timeout = duration.count() > kTimeoutSeconds;
+    bool timeout = duration.count() > kChannelInactivityTimeoutSeconds;
     if (timeout) {
         ESP_LOGE(TAG, "Channel timeout %ld seconds", (long)duration.count());
     }

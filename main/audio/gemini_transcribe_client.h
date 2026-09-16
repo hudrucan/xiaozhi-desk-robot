@@ -41,6 +41,7 @@ public:
         std::function<void(State)> on_state;
         std::function<void(const std::string&)> on_interim_transcript;
         std::function<void(const std::string&)> on_final_transcript;
+        std::function<void()> on_final_timeout;
         std::function<void(const std::string&)> on_error;
     };
 
@@ -118,6 +119,7 @@ private:
     void QueueNetworkError(const std::string& error);
     void SetState(State state);
     void Fail(const std::string& error);
+    void FailFinalTranscriptTimeout(int64_t elapsed_us);
     bool IsCancelRequested() const;
     bool SendPcmChunk(const int16_t* samples, size_t sample_count);
     ServerMessageResult HandleServerMessage(const ServerMessage& message);

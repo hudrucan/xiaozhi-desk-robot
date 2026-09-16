@@ -178,7 +178,10 @@ private:
     std::atomic_bool gemini_vad_turn_active_{false};
     std::atomic_bool gemini_vad_speech_started_{false};
     std::atomic_bool gemini_vad_end_pending_{false};
+    bool gemini_vad_speech_start_handled_ = false;
     bool gemini_audio_stream_end_requested_ = false;
+    bool gemini_asr_restart_pending_ = false;
+    int64_t gemini_listening_deadline_us_ = 0;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -207,7 +210,10 @@ private:
     void HandleGeminiAsrReady(uint32_t turn_id);
     void HandleGeminiVadChange();
     void HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript);
+    void HandleGeminiAsrFinalTimeout(uint32_t turn_id);
     void HandleGeminiAsrError(uint32_t turn_id, std::string error);
+    void RecoverGeminiAsrTurn(uint32_t turn_id, const char* reason);
+    void HandleGeminiTimers();
     void StopGeminiAsrTurn();
     const AsrConfig& GetAsrTurnConfig();
     void ResetAsrTurnConfig();

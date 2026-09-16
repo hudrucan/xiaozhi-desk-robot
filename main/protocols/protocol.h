@@ -42,6 +42,8 @@ enum ListeningMode {
 
 class Protocol {
 public:
+    static constexpr int kChannelInactivityTimeoutSeconds = 120;
+
     virtual ~Protocol() = default;
 
     inline int server_sample_rate() const { return server_sample_rate_; }
