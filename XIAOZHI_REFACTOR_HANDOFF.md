@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 9 commits ahead of `origin/main`
+Remote state at handoff: `main` is 2 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -34,9 +34,10 @@ Commit each completed batch locally and do not push `origin`.
 | `dd6acb76` | Extract secondary-display orchestration | User passed |
 | `111a7c17` | Remove outdated documentation | Existing repository cleanup commit |
 | `0e72f602` | Extract cliff safety, gyro turns, motion reactions and robot settings | User build/hardware check passed |
-| `d15a6642` | Add typed robot control and status boundary | Awaiting user build/flash result |
+| `d15a6642` | Add typed robot control and status boundary | User passed |
+| `51da4de` | Isolate robot-specific MCP bindings behind `RobotController` | Build/hardware not run |
 
-No refactor commit above has been pushed to `origin`.
+Commit `51da4de` has not been pushed to `origin`.
 
 ## Current architecture
 
@@ -59,9 +60,14 @@ responsibilities have been split into these owners:
 - `main/robot/sensors/mpu6050_motion_sensor.*`: raw/filtered motion acquisition.
 - `main/robot/power/battery_controller.*`: battery sampling, SoC, persistence and capacity test.
 
-Web Control actions/status/snapshots and current robot MCP callbacks now call the typed
-`RobotController` boundary. They are still registered inside `DeskRobotBoard`; moving those
-adapter bindings into their own modules is the next phase.
+Web Control actions/status/snapshots and robot MCP callbacks call the typed `RobotController`
+boundary. Robot-specific MCP registration and serialization now live in:
+
+- `main/robot/mcp/robot_mcp_tools.h`
+- `main/robot/mcp/robot_mcp_tools.cc`
+
+`DeskRobotBoard` now performs one `RobotMcpTools::Register(*this)` composition call and no
+longer owns MCP schemas or response serialization.
 
 `MotorController::Status` is the typed motor snapshot. Its existing JSON contract is retained
 through `MotorController::StatusJson`.
@@ -82,17 +88,26 @@ through `MotorController::StatusJson`.
 
 ## Latest unverified batch
 
-Commit `d15a6642` introduced the Phase 5 typed boundary. It has not yet received a user
-PASS/FAIL result.
+Commit `51da4de` completed Phase 6A by moving all 15 robot-specific MCP tool bindings out of
+`DeskRobotBoard`. The new adapter depends on `RobotController`; it does not access board-private
+fields or concrete robot subsystem instances. Tool names, schemas, defaults/ranges, feature
+guards, response fields and error messages were preserved.
+
+Files changed:
+
+- `main/CMakeLists.txt`
+- `main/robot/desk_robot_board.cc`
+- `main/robot/mcp/robot_mcp_tools.h`
+- `main/robot/mcp/robot_mcp_tools.cc`
 
 Minimum validation:
 
 1. Build with `python scripts/build.py --language vi-VN`.
 2. Flash and confirm normal boot.
-3. Open Web Control and verify status JSON still populates.
-4. Exercise move, stop, dance, relative turn, light, camera flip and camera snapshot actions.
-5. Exercise robot, motion, distance and battery MCP tools.
-6. Confirm secondary OLED configuration and saved robot settings still survive reboot.
+3. Exercise MCP drive, stop, status, dance and relative turn.
+4. Exercise MCP motion orientation/emotion control, distance and battery status.
+5. Exercise MCP face emotion/look, secondary-display text, status light, camera flip and
+   microphone gain.
 
 Build: **NOT RUN**
 
@@ -100,30 +115,17 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-Continue with Phase 6A from `XIAOZHI_REPO_REFACTOR_PLAN.md`:
+After the user validates Phase 6A, continue with Phase 6B:
 
 ```text
-main/robot/mcp/robot_mcp_tools.h
-main/robot/mcp/robot_mcp_tools.cc
+main/robot/robot_web_control_server.h
+main/robot/robot_web_control_server.cc
+main/robot/desk_robot_board.cc
 ```
 
-Move only robot-specific MCP registration and serialization out of `DeskRobotBoard`.
-The adapter must depend on `RobotController`; it must not regain direct access to board fields
-or subsystem instances.
-
-Preserve exactly:
-
-- all current robot MCP tool names;
-- property names, types, defaults and ranges;
-- descriptions unless correcting a verified error;
-- success/error response formats;
-- camera behavior;
-- the generic `McpServer` framework;
-- typed Web Chat and `self.web_chat.consume_pending` in their existing non-robot ownership.
-
-After Phase 6A passes, Phase 6B should move Web Control action parsing and status serialization
-behind `RobotWebControlServer`/a dedicated adapter while keeping port 8080 and every HTTP/JSON
-contract stable.
+Move Web Control action parsing and status serialization behind `RobotWebControlServer` or a
+dedicated Web adapter using `RobotController`. Keep port 8080, every route/action/request field,
+all status JSON fields, typed chat, ASR settings, snapshots and logs behavior unchanged.
 
 Do not combine Phase 6C Web UI source extraction with 6A or 6B; it has a separate generated-asset
 and browser-regression surface.
