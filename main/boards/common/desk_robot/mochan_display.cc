@@ -32,6 +32,9 @@ constexpr int kEmotionLayoutTransitionMs = 200;
 constexpr int kResponseBoxFadeMs = 200;
 constexpr int kResponseFadeInStartFaceProgress = 144;
 constexpr int kFaceReturnStartResponseProgress = 96;
+constexpr int kTypingGlyphsPerSecond = 31;
+constexpr int64_t kTypingCreditScale = 1000000;
+constexpr int64_t kTypingMaxElapsedUs = 100000;
 constexpr int64_t kPerformanceLogIntervalUs = 5000000;
 constexpr int kIdleStartDelayMs = 15000;
 constexpr int kIdleEarlyStageMs = 45000;
@@ -59,6 +62,16 @@ constexpr int kMouthMotionSettleMs = 300;
 constexpr int kMouthMotionClosedAmount = -144;
 constexpr int kMouthIdleGapOffsetY = 8;
 constexpr char kTag[] = "MochanDisplay";
+
+size_t CountUtf8GlyphsFrom(const std::string& text, size_t offset) {
+    size_t count = 0;
+    for (size_t i = offset; i < text.size(); ++i) {
+        if ((static_cast<uint8_t>(text[i]) & 0xc0) != 0x80) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 constexpr std::array<const char*, 34> kSupportedEmotions = {
     "neutral",    "happy",       "laughing",  "funny",     "sad",        "angry",   "crying",
@@ -838,16 +851,10 @@ void MochanDisplay::AdvanceEyeAnimation() {
     }
     UpdateEyes(blink_amount, idle_eligible);
     UpdateMouth(blink_amount, emotion);
-    // Keep typewriter work on the face frame clock. A separate 42 ms LVGL
-    // timer used to drift against this 33 ms callback and periodically force
-    // two expensive label/layout updates into the same display frame.
+    // Keep typewriter work on the face frame clock. Time-based glyph credit
+    // preserves a steady reveal when an occasional display frame arrives late.
     if (typing_active_) {
-        if (typing_frame_countdown_ == 0) {
-            UpdateTyping();
-            typing_frame_countdown_ = typing_active_ && !typing_finishing_ ? 1 : 0;
-        } else {
-            --typing_frame_countdown_;
-        }
+        UpdateTyping(callback_started_us);
     }
     RecordAnimationTiming(callback_started_us, frame_interval_us);
 }
@@ -1548,6 +1555,8 @@ void MochanDisplay::StartTyping(const char* content) {
         return;
     }
 
+    const bool was_typing = typing_active_;
+
     if (typing_text_.empty()) {
         typing_text_ = incoming;
         typing_position_ = 0;
@@ -1573,44 +1582,67 @@ void MochanDisplay::StartTyping(const char* content) {
     typing_cursor_visible_ = true;
     typing_active_ = true;
     typing_finishing_ = false;
-    typing_frame_countdown_ = 0;
+    if (!was_typing) {
+        typing_last_update_us_ = esp_timer_get_time();
+        typing_glyph_credit_ = kTypingCreditScale;
+    }
     RenderTypingText();
 }
 
-void MochanDisplay::UpdateTyping() {
+void MochanDisplay::UpdateTyping(int64_t now_us) {
     if (typing_text_.empty()) {
         ResetTyping();
         return;
     }
 
+    if (typing_last_update_us_ == 0) {
+        typing_last_update_us_ = now_us;
+    }
+    const int64_t elapsed_us =
+        std::clamp(now_us - typing_last_update_us_, int64_t{0}, kTypingMaxElapsedUs);
+    typing_last_update_us_ = now_us;
+
+    const size_t remaining_glyphs = CountUtf8GlyphsFrom(typing_text_, typing_position_);
+    const int max_glyphs_per_frame =
+        typing_finishing_ ? 6 : (remaining_glyphs > 72 ? 3 : (remaining_glyphs > 32 ? 2 : 1));
+    typing_glyph_credit_ +=
+        elapsed_us * kTypingGlyphsPerSecond * max_glyphs_per_frame;
+    int glyphs_to_reveal = static_cast<int>(typing_glyph_credit_ / kTypingCreditScale);
+    glyphs_to_reveal = std::min(glyphs_to_reveal, max_glyphs_per_frame);
+    typing_glyph_credit_ -= static_cast<int64_t>(glyphs_to_reveal) * kTypingCreditScale;
+
+    bool visual_changed = false;
     if (typing_position_ < typing_text_.size()) {
         // Advance one complete UTF-8 code point so Vietnamese glyphs never
-        // appear as temporarily corrupted byte sequences. Catch up faster when
-        // multiple TTS sentences arrive before the display has finished.
-        const size_t remaining = typing_text_.size() - typing_position_;
-        const int glyphs_per_tick =
-            typing_finishing_ ? 6 : (remaining > 72 ? 4 : (remaining > 32 ? 3 : 2));
-        for (int glyph = 0; glyph < glyphs_per_tick && typing_position_ < typing_text_.size();
+        // appear as temporarily corrupted byte sequences. A larger backlog
+        // earns more glyph credit so multi-sentence TTS can catch up smoothly.
+        for (int glyph = 0;
+             glyph < glyphs_to_reveal && typing_position_ < typing_text_.size();
              ++glyph) {
             ++typing_position_;
             while (typing_position_ < typing_text_.size() &&
                    (static_cast<uint8_t>(typing_text_[typing_position_]) & 0xc0) == 0x80) {
                 ++typing_position_;
             }
+            visual_changed = true;
         }
-    } else {
+    }
+    if (typing_position_ >= typing_text_.size()) {
         typing_active_ = false;
         typing_finishing_ = false;
-        typing_cursor_visible_ = false;
     }
 
+    const bool previous_cursor_visible = typing_cursor_visible_;
     if (typing_active_) {
-        typing_cursor_phase_ = static_cast<uint8_t>((typing_cursor_phase_ + 1) % 8);
-        typing_cursor_visible_ = typing_cursor_phase_ < 4;
+        typing_cursor_phase_ = static_cast<uint8_t>((typing_cursor_phase_ + 1) % 16);
+        typing_cursor_visible_ = typing_cursor_phase_ < 8;
     } else {
         typing_cursor_visible_ = false;
     }
-    RenderTypingText();
+    visual_changed = visual_changed || typing_cursor_visible_ != previous_cursor_visible;
+    if (visual_changed) {
+        RenderTypingText();
+    }
 }
 
 void MochanDisplay::FinishTyping() {
@@ -1621,7 +1653,8 @@ void MochanDisplay::FinishTyping() {
         typing_finishing_ = true;
         typing_active_ = true;
         typing_cursor_visible_ = true;
-        typing_frame_countdown_ = 0;
+        typing_last_update_us_ = esp_timer_get_time();
+        typing_glyph_credit_ = kTypingCreditScale;
     } else {
         typing_finishing_ = false;
         typing_cursor_visible_ = false;
@@ -1633,11 +1666,12 @@ void MochanDisplay::FinishTyping() {
 void MochanDisplay::ResetTyping() {
     typing_text_.clear();
     typing_position_ = 0;
+    typing_last_update_us_ = 0;
+    typing_glyph_credit_ = 0;
     typing_cursor_phase_ = 0;
     typing_cursor_visible_ = false;
     typing_active_ = false;
     typing_finishing_ = false;
-    typing_frame_countdown_ = 0;
     response_scroll_target_ = 0;
     if (response_box_ != nullptr) {
         lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);

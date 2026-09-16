@@ -142,7 +142,7 @@ private:
     void HidePreview();
     void HideNotification();
     void StartTyping(const char* content);
-    void UpdateTyping();
+    void UpdateTyping(int64_t now_us);
     void FinishTyping();
     void ResetTyping();
     void RenderTypingText();
@@ -169,8 +169,9 @@ private:
     std::string typing_text_;
     size_t typing_position_ = 0;
     int32_t response_scroll_target_ = 0;
+    int64_t typing_last_update_us_ = 0;
+    int64_t typing_glyph_credit_ = 0;
     uint8_t typing_cursor_phase_ = 0;
-    uint8_t typing_frame_countdown_ = 0;
     bool typing_cursor_visible_ = false;
     bool typing_active_ = false;
     bool typing_finishing_ = false;
