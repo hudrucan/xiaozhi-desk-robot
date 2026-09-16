@@ -354,11 +354,11 @@ void TextChatController::Run(const std::string& text) {
     resume_mode_ = application_.listening_mode_;
     if (resume_listening_) {
         application_.pending_listening_start_ = false;
-        if (application_.active_asr_provider_ == AsrProvider::kGemini) {
-            application_.StopGeminiAsrTurn();
-            application_.ResetAsrTurnConfig();
+        if (application_.gemini_asr_controller_.IsGeminiActive()) {
+            application_.gemini_asr_controller_.Stop();
+            application_.gemini_asr_controller_.ResetTurnConfig();
         }
-        application_.asr_ready_.store(false);
+        application_.gemini_asr_controller_.SetNotReady();
         application_.audio_service_.EnableVoiceProcessing(false);
     }
 

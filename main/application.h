@@ -18,7 +18,7 @@
 #include "protocol.h"
 #include "ota.h"
 #include "audio_service.h"
-#include "gemini_transcribe_client.h"
+#include "gemini_asr_turn_controller.h"
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "notify/notify_player.h"
@@ -73,8 +73,8 @@ public:
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
-    bool IsAsrReady() const { return asr_ready_.load(); }
-    bool IsGeminiAsrPreparing() const { return gemini_asr_preparing_.load(); }
+    bool IsAsrReady() const { return gemini_asr_controller_.IsReady(); }
+    bool IsGeminiAsrPreparing() const { return gemini_asr_controller_.IsPreparing(); }
 
     /**
      * Request state transition
@@ -135,6 +135,7 @@ public:
 
 private:
     friend class TextChatController;
+    friend class GeminiAsrTurnController;
 
     Application();
     ~Application();
@@ -148,9 +149,9 @@ private:
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
-    // Declared before AudioService so it outlives every audio callback that may
-    // read the non-owning Gemini route pointer.
-    GeminiTranscribeClient gemini_asr_client_;
+    // Declared before AudioService so its client outlives every audio callback
+    // that may read the non-owning Gemini route pointer.
+    GeminiAsrTurnController gemini_asr_controller_;
     AudioService audio_service_;
     TextChatController text_chat_controller_;
     NotifyPlayer notify_player_;
@@ -164,22 +165,6 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
-    AsrConfig asr_turn_config_;
-    bool asr_turn_config_valid_ = false;
-    AsrProvider active_asr_provider_ = AsrProvider::kXiaozhi;
-    uint32_t gemini_asr_turn_id_ = 0;
-    std::atomic_bool gemini_vad_turn_active_{false};
-    std::atomic_bool gemini_vad_speech_started_{false};
-    std::atomic_bool gemini_vad_end_pending_{false};
-    bool gemini_vad_speech_start_handled_ = false;
-    bool gemini_audio_stream_end_requested_ = false;
-    bool gemini_asr_restart_pending_ = false;
-    bool gemini_asr_prewarm_retry_pending_ = false;
-    std::atomic_bool gemini_asr_prewarming_{false};
-    int64_t gemini_asr_prewarm_started_us_ = 0;
-    int64_t gemini_listening_deadline_us_ = 0;
-    std::atomic_bool asr_ready_{false};
-    std::atomic_bool gemini_asr_preparing_{false};
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -194,24 +179,9 @@ private:
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
     void ContinueOpenAudioChannel(ListeningMode mode);
-    bool PrimeAudioChannelForGemini();
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
     void StartListeningAudio();
-    void MaybeStartGeminiAsrPrewarm();
-    void StartGeminiAsrTurn(const AsrConfig& config);
-    void StartGeminiAsrClient(const AsrConfig& config, bool prewarming);
-    void HandleGeminiAsrReady(uint32_t turn_id);
-    void HandleGeminiVadChange();
-    void HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript);
-    void HandleGeminiAsrFinalTimeout(uint32_t turn_id);
-    void HandleGeminiAsrError(uint32_t turn_id, std::string error, bool failed_during_prewarm);
-    void HandleGeminiAsrWorkerStopped();
-    void RecoverGeminiAsrTurn(uint32_t turn_id, const char* reason);
-    void HandleGeminiTimers();
-    void StopGeminiAsrTurn();
-    const AsrConfig& GetAsrTurnConfig();
-    void ResetAsrTurnConfig();
     void ConfigureWakeWordForListening();
     void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
     void StopNotification();
