@@ -4,7 +4,7 @@ Updated: 2026-09-17
 
 Branch: `main`
 
-Remote state at handoff: `main` is 2 commits ahead of `origin/main`
+Remote state at handoff: `main` is 4 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -43,8 +43,10 @@ Commit each completed batch locally and do not push `origin`.
 | `98e8f44` | Extract Typed Web Chat state and orchestration from `Application` | Build/hardware not run |
 | `d8558d2` | Extract Gemini ASR turn lifecycle from `Application` | Build/hardware not run |
 | `4a01f11` | Split Mochan face rendering and overlay implementation | Build/hardware not run |
+| `1cc3fef` | Extract streamed-notification lifecycle from `Application` | Build/hardware not run |
 
-Commit `4a01f11` and its accompanying documentation commit have not been pushed to `origin`.
+Commits `4a01f11`, `d80ddcf`, `1cc3fef` and the accompanying Phase 8C documentation
+commit have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -119,6 +121,15 @@ audio-route switching now live in:
 `GeminiTranscribeClient` remains the worker/transport layer. Its callbacks are still scheduled
 back onto the application task before controller or application state is mutated.
 
+Streamed notification lifecycle now lives in:
+
+- `main/notify/notification_controller.h`
+- `main/notify/notification_controller.cc`
+
+`NotificationController` owns the `NotifyPlayer`, playback ID, subtitle scheduling and
+audio/display/power cleanup. `NotifyPlayer` remains the HTTP/Ogg worker, while protocol JSON
+parsing and cross-feature interruption decisions remain in `Application`.
+
 The main face retains one `MochanDisplay` class/API, with implementation grouped into:
 
 - `main/robot/display/mochan_display.cc`: UI setup, face/idle animation and lifecycle.
@@ -149,12 +160,15 @@ remain in `MochanDisplay`.
   inactivity/final-transcript timeout recovery and Typed Web Chat handoff.
 - Mochan emotion mapping, eye/mouth geometry, animation timing, LVGL object ownership, panel
   mirroring and public display API are unchanged.
+- Notification JSON validation, busy-state rejection, subtitle timing, playback completion,
+  interruption behavior and `kDeviceStateNotifying` transitions are unchanged.
 - No board/release matrix or CI build workflow has been reintroduced.
 
 ## Latest unverified batch
 
-Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84`, `98e8f44`, `d8558d2` and
-`4a01f11` completed Phases 6A through 8B plus the optional Mochan display cleanup.
+Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84`, `98e8f44`, `d8558d2`,
+`4a01f11` and `1cc3fef` completed Phases 6A through 8C plus the optional Mochan display
+cleanup.
 Robot-specific MCP bindings and Web Control action/status adaptation are no longer owned by
 `DeskRobotBoard`, and the editable Web UI is no longer maintained in a 3,179-line C++ header.
 Phase 7 moved pure randomized emotion/dance/gyro-look policy into
@@ -168,6 +182,13 @@ changing the public `Application` entry points or protocol contracts. Phase 8B m
 turn orchestration into `GeminiAsrTurnController` while leaving the existing transport client
 and application state machine intact. `application.cc` is now 1,400 lines, down from 2,277
 immediately before Phase 8A.
+
+Phase 8C moved streamed-notification ownership into `NotificationController`; `application.cc`
+is now 1,333 lines. The remaining event loop, state transitions, network/protocol lifecycle,
+generic audio routing, wake-word/listening flow and activation/bootstrap flow are cohesive
+application integration. Activation/bootstrap was deliberately not extracted because it directly
+coordinates network readiness, assets, OTA bootstrap config, protocol creation and application
+state; further decomposition would add high-risk cross-controller callbacks.
 
 The optional Mochan cleanup split the previous 2,101-line implementation into focused files of
 approximately 756, 708 and 694 lines. Source comparison confirmed the seven raster/rendering
@@ -204,6 +225,8 @@ Files changed:
 - `main/chat/text_chat_controller.cc`
 - `main/audio/gemini_asr_turn_controller.h`
 - `main/audio/gemini_asr_turn_controller.cc`
+- `main/notify/notification_controller.h`
+- `main/notify/notification_controller.cc`
 - `main/robot/display/mochan_face_renderer.cc`
 - `main/robot/display/mochan_display_overlay.cc`
 
@@ -233,6 +256,8 @@ Minimum validation:
 15. Verify Gemini prewarm after speaking and recovery after empty/final-timeout/error paths.
 16. Confirm the Mochan face identity, every used emotion/look direction, blink/idle/yawn/mouth
     animation, response typing, notification, camera preview and boot splash render as before.
+17. Send a streamed notification with subtitles; confirm busy-state rejection, subtitle timing,
+    normal completion and interruption by chat, listening, wake word and network disconnect.
 
 Build: **NOT RUN**
 
@@ -240,17 +265,19 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-Continue with Phase 8C: re-audit only the responsibilities remaining in `Application`.
+Continue with Phase 9: re-audit the secondary OLED implementation for a natural rendering split.
 
 ```text
-main/application.h
-main/application.cc
+main/robot/display/secondary_oled.h
+main/robot/display/secondary_oled.cc
+main/robot/display/secondary_oled_layout.h
+main/robot/display/secondary_oled_layout.cc
 ```
 
-Keep the main event loop, device-state transitions, network/protocol lifecycle, generic audio
-event routing, wake-word/listening state, activation completion and scheduling in `Application`.
-Only extract notification or activation/bootstrap ownership if inspection finds a substantial,
-coherent lifecycle boundary; otherwise stop decomposition. Do not reopen Phases 8A or 8B.
+Preserve OLED UX, layout behavior, persisted layout/settings, telemetry content and device
+lifecycle. Extract only a coherent renderer/helper boundary; if the existing layout split already
+makes the remaining implementation cohesive, document that finding and stop rather than forcing
+another class.
 
 ## Useful review checks
 

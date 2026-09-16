@@ -83,6 +83,7 @@ main/
 ├── device_state_machine.*         Runtime state transitions
 ├── protocols/                     MQTT+UDP and WebSocket
 ├── audio/                         Capture, playback, Opus, wake word and ASR turn control
+├── notify/                        Streamed notification playback and lifecycle control
 ├── display/                       Reusable display infrastructure
 ├── mcp_server.*                   Device-side MCP framework
 ├── platform/                      Board, Wi-Fi and hardware adapters
@@ -97,6 +98,8 @@ battery monitor/SoC, MPU6050 integration and other desk-robot behavior.
 lifecycle and its MCP bridge are isolated in `main/chat/text_chat_controller.*`.
 Gemini provider selection, prewarm, VAD, recovery and audio-route switching are isolated in
 `main/audio/gemini_asr_turn_controller.*`; `GeminiTranscribeClient` remains the transport client.
+Streamed notification playback, subtitle progress and application-state cleanup are isolated in
+`main/notify/notification_controller.*`; `NotifyPlayer` remains the HTTP/Ogg playback worker.
 
 The Mochan face keeps one public `MochanDisplay` API while its implementation is split into
 core animation/lifecycle, eye-and-mouth raster rendering, and overlay/status presentation.
