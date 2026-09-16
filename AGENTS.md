@@ -34,7 +34,8 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/mcp/robot_mcp_tools.*` — robot-specific MCP registration and serialization
   through the typed controller boundary.
 - `main/robot/display/` — secondary OLED rendering, telemetry orchestration and persisted layout.
-- `main/robot/motion/` — gyro-turn lifecycle and motion-reaction policy.
+- `main/robot/motion/` — gyro-turn lifecycle, expressive movement planning and
+  motion-reaction policy.
 - `main/robot/sensors/auxiliary_i2c.*` — deferred shared auxiliary-bus ownership and lifecycle.
 - `main/robot/sensors/cliff_sensor.*` — downward VL53L0X floor sensing and cliff state.
 - `main/robot/power/` — INA219 telemetry, SoC estimation, persistence and capacity tests.

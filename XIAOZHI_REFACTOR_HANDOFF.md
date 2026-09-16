@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 8 commits ahead of `origin/main`
+Remote state at handoff: `main` is 10 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -39,8 +39,9 @@ Commit each completed batch locally and do not push `origin`.
 | `75ee843` | Route Web Control through the typed robot API | Build/hardware not run |
 | `c739c47` | Move Web Control UI to split embedded source | Build/browser/hardware not run |
 | `b809343` | Document Phase 6 adapter and Web UI ownership | Documentation only |
+| `5cd1d84` | Isolate expressive motion planning from the composition root | Build/hardware not run |
 
-Commits `51da4de` through `b809343` have not been pushed to `origin`.
+Commits `51da4de` through `5cd1d84` have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -57,6 +58,8 @@ responsibilities have been split into these owners:
   update orchestration.
 - `main/robot/motion/motor_controller.*`: motor actuation, queue, PWM and safety guard.
 - `main/robot/motion/gyro_turn_controller.*`: yaw calibration and relative-turn lifecycle.
+- `main/robot/motion/expressive_motion_planner.*`: randomized emotion, dance and gyro-look
+  movement policy without hardware/task ownership.
 - `main/robot/motion/motion_reactions.*`: gesture debounce/cooldown and reaction policy.
 - `main/robot/sensors/auxiliary_i2c.*`: deferred shared auxiliary-I2C initialization.
 - `main/robot/sensors/cliff_sensor.*`: downward VL53L0X floor/cliff state.
@@ -111,12 +114,19 @@ through `MotorController::StatusJson`.
 
 ## Latest unverified batch
 
-Commits `51da4de`, `75ee843` and `c739c47` completed Phases 6A through 6C. Robot-specific MCP
-bindings and Web Control action/status adaptation are no longer owned by `DeskRobotBoard`, and
-the editable Web UI is no longer maintained in a 3,179-line C++ header. Source review confirmed
-all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the nine HTTP routes and port
-8080 are retained. The CMake-assembled HTML body matches the previous embedded body exactly
-(101,048 characters).
+Commits `51da4de`, `75ee843`, `c739c47` and `5cd1d84` completed Phases 6A through 7.
+Robot-specific MCP bindings and Web Control action/status adaptation are no longer owned by
+`DeskRobotBoard`, and the editable Web UI is no longer maintained in a 3,179-line C++ header.
+Phase 7 moved pure randomized emotion/dance/gyro-look policy into
+`ExpressiveMotionPlanner`; safety checks, application scheduling and hardware actuation remain
+in the composition root. `desk_robot_board.cc` is now 1,448 lines. The remaining auxiliary
+sensor loop, cliff response, OLED telemetry, live-camera task and status aggregation were kept
+together because they are cross-subsystem lifecycle/integration glue.
+
+Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the
+nine HTTP routes and port 8080 are retained. The CMake-assembled HTML body matches the previous
+embedded body exactly (101,048 characters). Whitespace-insensitive comparison confirmed the
+moved emotion, dance and gyro-look policy is unchanged.
 
 Files changed:
 
@@ -133,6 +143,10 @@ Files changed:
 - `main/robot/web/ui/style.css`
 - `main/robot/web/ui/app.js`
 - removed `main/robot/robot_web_control_page.h`
+- `main/robot/motion/expressive_motion_planner.h`
+- `main/robot/motion/expressive_motion_planner.cc`
+- `main/robot/motion/motion_reactions.h`
+- `main/robot/motion/motion_reactions.cc`
 
 Minimum validation:
 
@@ -147,6 +161,8 @@ Minimum validation:
    cliff, motion, live-camera and Wi-Fi actions used by the Web UI.
 8. Confirm the Web page loads with styling and JavaScript behavior intact, including status
    polling, logs, camera preview/snapshot and typed chat.
+9. Confirm emotion movement, randomized dance, MPU reactions and gyro-assisted emotion turns
+   behave as before.
 
 Build: **NOT RUN**
 
@@ -154,16 +170,19 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-After the user validates Phases 6A through 6C, continue with Phase 7:
+After the user validates Phases 6A through 7, continue with Phase 8A:
 
 ```text
-main/robot/desk_robot_board.cc
+main/application.h
+main/application.cc
+main/chat/text_chat_controller.h
+main/chat/text_chat_controller.cc
 ```
 
-Re-audit the remaining composition root by responsibility. Extract only ownership boundaries
-that are clearly cohesive and preserve shared-bus initialization, task scheduling, safety and
-telemetry timing. Stop if the remaining length is justified integration/lifecycle code; do not
-split solely to meet a line-count target.
+Extract Typed Web Chat state and orchestration behind a focused controller while preserving the
+12-codepoint native/MCP threshold, `self.web_chat.consume_pending`, the existing session,
+MQTT-UDP silence-frame priming, timeout/completion behavior and listening recovery. Do not start
+Gemini ASR extraction in the same batch.
 
 ## Useful review checks
 
