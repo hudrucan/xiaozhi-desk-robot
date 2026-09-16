@@ -1621,9 +1621,9 @@ inline constexpr char kRobotWebControlPage[] = R"CONTROL(
               </label>
             </div>
             <div class="asr-actions">
-              <button id="saveAsr" class="log-button">Save API key</button>
+              <button id="saveAsr" class="log-button">Save Gemini key</button>
               <button id="clearGeminiKey" class="log-button">
-                Clear API key
+                Clear Gemini key
               </button>
             </div>
             <p class="asr-note">
