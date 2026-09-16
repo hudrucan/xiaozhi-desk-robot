@@ -1,10 +1,10 @@
 # Xiaozhi repository refactor handoff
 
-Updated: 2026-09-16
+Updated: 2026-09-17
 
 Branch: `main`
 
-Remote state at handoff: `main` is 14 commits ahead of `origin/main`
+Remote state at handoff: `main` is 2 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -42,8 +42,9 @@ Commit each completed batch locally and do not push `origin`.
 | `5cd1d84` | Isolate expressive motion planning from the composition root | Build/hardware not run |
 | `98e8f44` | Extract Typed Web Chat state and orchestration from `Application` | Build/hardware not run |
 | `d8558d2` | Extract Gemini ASR turn lifecycle from `Application` | Build/hardware not run |
+| `4a01f11` | Split Mochan face rendering and overlay implementation | Build/hardware not run |
 
-Commits `51da4de` through `d8558d2` have not been pushed to `origin`.
+Commit `4a01f11` and its accompanying documentation commit have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -118,6 +119,16 @@ audio-route switching now live in:
 `GeminiTranscribeClient` remains the worker/transport layer. Its callbacks are still scheduled
 back onto the application task before controller or application state is mutated.
 
+The main face retains one `MochanDisplay` class/API, with implementation grouped into:
+
+- `main/robot/display/mochan_display.cc`: UI setup, face/idle animation and lifecycle.
+- `main/robot/display/mochan_face_renderer.cc`: emotion geometry plus eye/mouth raster rendering.
+- `main/robot/display/mochan_display_overlay.cc`: status, typing, theme, notification, preview and
+  boot-splash presentation.
+
+The split is translation-unit-only: object ownership, animation timer cadence and LVGL state
+remain in `MochanDisplay`.
+
 ## Preserved contracts and invariants
 
 - Existing GPIO assignments and shared-bus wiring are unchanged.
@@ -136,12 +147,14 @@ back onto the application task before controller or application state is mutated
   never microphone audio, and normal listening resumes after the typed turn.
 - Gemini ASR still preserves provider fallback, prewarm/cold-start promotion, VAD end-of-stream,
   inactivity/final-transcript timeout recovery and Typed Web Chat handoff.
+- Mochan emotion mapping, eye/mouth geometry, animation timing, LVGL object ownership, panel
+  mirroring and public display API are unchanged.
 - No board/release matrix or CI build workflow has been reintroduced.
 
 ## Latest unverified batch
 
-Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84`, `98e8f44` and `d8558d2`
-completed Phases 6A through 8B.
+Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84`, `98e8f44`, `d8558d2` and
+`4a01f11` completed Phases 6A through 8B plus the optional Mochan display cleanup.
 Robot-specific MCP bindings and Web Control action/status adaptation are no longer owned by
 `DeskRobotBoard`, and the editable Web UI is no longer maintained in a 3,179-line C++ header.
 Phase 7 moved pure randomized emotion/dance/gyro-look policy into
@@ -155,6 +168,11 @@ changing the public `Application` entry points or protocol contracts. Phase 8B m
 turn orchestration into `GeminiAsrTurnController` while leaving the existing transport client
 and application state machine intact. `application.cc` is now 1,400 lines, down from 2,277
 immediately before Phase 8A.
+
+The optional Mochan cleanup split the previous 2,101-line implementation into focused files of
+approximately 756, 708 and 694 lines. Source comparison confirmed the seven raster/rendering
+methods and all overlay/public-display methods were moved verbatim; only two narrow mouth-
+geometry query helpers were added for the remaining layout orchestration.
 
 Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the
 nine HTTP routes and port 8080 are retained. The CMake-assembled HTML body matches the previous
@@ -186,6 +204,8 @@ Files changed:
 - `main/chat/text_chat_controller.cc`
 - `main/audio/gemini_asr_turn_controller.h`
 - `main/audio/gemini_asr_turn_controller.cc`
+- `main/robot/display/mochan_face_renderer.cc`
+- `main/robot/display/mochan_display_overlay.cc`
 
 Minimum validation:
 
@@ -211,6 +231,8 @@ Minimum validation:
 14. Select configured Gemini ASR and verify cold start, speech VAD, final transcript, normal
     MCP/LLM/TTS response and the next listening turn.
 15. Verify Gemini prewarm after speaking and recovery after empty/final-timeout/error paths.
+16. Confirm the Mochan face identity, every used emotion/look direction, blink/idle/yawn/mouth
+    animation, response typing, notification, camera preview and boot splash render as before.
 
 Build: **NOT RUN**
 

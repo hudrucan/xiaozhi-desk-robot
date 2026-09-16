@@ -98,6 +98,9 @@ lifecycle and its MCP bridge are isolated in `main/chat/text_chat_controller.*`.
 Gemini provider selection, prewarm, VAD, recovery and audio-route switching are isolated in
 `main/audio/gemini_asr_turn_controller.*`; `GeminiTranscribeClient` remains the transport client.
 
+The Mochan face keeps one public `MochanDisplay` API while its implementation is split into
+core animation/lifecycle, eye-and-mouth raster rendering, and overlay/status presentation.
+
 ## Typed Web Chat
 
 The local Web Control page can submit text directly into the **existing Xiaozhi

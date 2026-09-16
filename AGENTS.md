@@ -43,7 +43,9 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/power/` — INA219 telemetry, SoC estimation, persistence and capacity tests.
 - `main/robot/desk_robot_board.cc` — desk-robot integration.
 - `main/robot/motion/motor_controller.*` — drive control.
-- `main/robot/display/mochan_display.*` — main robot-face display.
+- `main/robot/display/mochan_display.*` — main robot-face lifecycle and animation orchestration.
+- `main/robot/display/mochan_face_renderer.cc` — Mochan eye/mouth geometry and raster rendering.
+- `main/robot/display/mochan_display_overlay.cc` — Mochan status, chat, notification, preview and splash UI.
 - `main/robot/sensors/mpu6050_motion_sensor.*` — motion sensing.
 - `main/robot/robot_web_control_server.*` — local HTTP routes, logs, chat/ASR and
   snapshot transport.
