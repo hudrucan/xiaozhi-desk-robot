@@ -23,6 +23,19 @@ public:
         uint8_t intensity_percent = 100;
     };
 
+    struct Status {
+        bool available = false;
+        bool faulted = false;
+        bool moving = false;
+        Direction direction = Direction::kForward;
+        uint8_t intensity_percent = 0;
+        size_t queued = 0;
+        uint32_t remaining_ms = 0;
+        bool sequence_active = false;
+        size_t sequence_total = 0;
+        size_t sequence_completed = 0;
+    };
+
     MotorController(gpio_num_t left_in1, gpio_num_t left_in2, gpio_num_t right_in1,
                     gpio_num_t right_in2);
     ~MotorController();
@@ -38,7 +51,11 @@ public:
     void SetMotionGuard(std::function<bool(Direction)> guard);
     void SetMovementStateCallback(std::function<void(bool)> callback);
     bool IsMoving(Direction direction) const;
+    Status GetStatus() const;
     std::string StatusJson() const;
+    static std::string StatusJson(const Status& status);
+
+    static const char* DirectionName(Direction direction);
 
 private:
     enum class Phase { kIdle, kDeadTime, kDriving };

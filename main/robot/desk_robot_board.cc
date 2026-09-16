@@ -7,6 +7,7 @@
 #include "codecs/no_audio_codec.h"
 #include "config/hardware_config.h"
 #include "config/tuning.h"
+#include "control/robot_controller.h"
 #include "control/robot_settings.h"
 #include "display/lcd_display.h"
 #include "display/mochan_display.h"
@@ -87,7 +88,7 @@
 #define MPU6050_PRESS_THRESHOLD_G 1.35f
 #endif
 
-class DeskRobotBoard : public WifiBoard {
+class DeskRobotBoard : public WifiBoard, public RobotController {
 private:
     enum class EmotionSource : uint8_t { kAssistant, kPreview, kMpuReaction };
 
@@ -218,10 +219,12 @@ private:
                 if (result == nullptr) {
                     return std::unexpected("Out of memory");
                 }
-                cJSON_AddBoolToObject(result, "available", motion_sensor_.IsAvailable());
-                cJSON_AddBoolToObject(result, "valid", motion_sensor_valid_.load());
-                cJSON_AddBoolToObject(result, "emotion_control", motion_emotions_enabled_.load());
-                const auto gyro = gyro_turn_controller_.GetStatus();
+                const RobotStatus status = static_cast<RobotController&>(*this).GetStatus();
+                cJSON_AddBoolToObject(result, "available", status.motion_sensor_available);
+                cJSON_AddBoolToObject(result, "valid", status.motion_sensor_valid);
+                cJSON_AddBoolToObject(result, "emotion_control",
+                                      status.motion_emotions_enabled);
+                const auto& gyro = status.gyro;
                 cJSON_AddBoolToObject(result, "gyro_bias_valid", gyro.bias_valid);
                 const int64_t gyro_sample_us = gyro.sample_timestamp_us;
                 cJSON_AddNumberToObject(
@@ -236,15 +239,14 @@ private:
                                         GyroTurnController::StopReasonName(gyro.stop_reason));
                 cJSON_AddNumberToObject(result, "yaw_rate_dps", gyro.yaw_rate_dps);
                 cJSON_AddNumberToObject(result, "yaw_bias_dps", gyro.yaw_bias_dps);
-                if (motion_sensor_valid_.load()) {
-                    cJSON_AddNumberToObject(result, "roll_deg", motion_roll_deg_.load());
-                    cJSON_AddNumberToObject(result, "pitch_deg", motion_pitch_deg_.load());
+                if (status.motion_sensor_valid) {
+                    cJSON_AddNumberToObject(result, "roll_deg", status.motion_roll_deg);
+                    cJSON_AddNumberToObject(result, "pitch_deg", status.motion_pitch_deg);
                     cJSON_AddNumberToObject(result, "acceleration_g",
-                                            motion_acceleration_g_.load());
-                    cJSON_AddNumberToObject(result, "rotation_dps", motion_rotation_dps_.load());
-                    cJSON_AddStringToObject(result, "gesture",
-                                            MotionReactions::GestureName(
-                                                motion_reactions_.GetGesture()));
+                                            status.motion_acceleration_g);
+                    cJSON_AddNumberToObject(result, "rotation_dps",
+                                            status.motion_rotation_dps);
+                    cJSON_AddStringToObject(result, "gesture", status.motion_gesture.c_str());
                 }
                 return result;
             });
@@ -252,11 +254,8 @@ private:
                            "Enable or disable automatic face reactions from MPU6050 movement.",
                            PropertyList({Property("enabled", kPropertyTypeBoolean, true)}),
                            [this](const PropertyList& properties) -> ReturnValue {
-                               const bool enabled = properties["enabled"].value<bool>();
-                               motion_emotions_enabled_.store(enabled);
-                               Application::GetInstance().Schedule([this, enabled]() {
-                                   robot_settings_.SetMotionEmotionsEnabled(enabled);
-                               });
+                               static_cast<RobotController&>(*this).SetMotionEmotionsEnabled(
+                                   properties["enabled"].value<bool>());
                                return true;
                            });
         mcp_server.AddTool(
@@ -268,8 +267,8 @@ private:
             PropertyList({Property("degrees", kPropertyTypeInteger, 90, -180, 180)}),
             [this](const PropertyList& properties) -> ToolResult {
                 std::string message;
-                if (!gyro_turn_controller_.RequestTurn(properties["degrees"].value<int>(),
-                                                       message)) {
+                if (!static_cast<RobotController&>(*this).TurnRelative(
+                        properties["degrees"].value<int>(), message)) {
                     return std::unexpected(message);
                 }
                 return true;
@@ -772,7 +771,7 @@ private:
         return flipped;
     }
 
-    bool ToggleStatusLight() {
+    bool ToggleStatusLight() override {
         const int current = status_light_brightness_.load();
         if (current > 0) {
             status_light_saved_brightness_.store(current);
@@ -1350,7 +1349,7 @@ private:
         }
     }
 
-    bool ToggleLiveCamera() {
+    bool ToggleLiveCamera() override {
         if (live_camera_task_ == nullptr) {
             return false;
         }
@@ -1360,56 +1359,249 @@ private:
         return enabled;
     }
 
+    bool Move(MotorController::Direction direction, int duration_ms, MovePolicy policy) override {
+        const int safe_duration = std::clamp(duration_ms, 50, 2000);
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        if (IsDirectionBlockedByCliff(direction)) {
+            return false;
+        }
+#endif
+        Application::GetInstance().Schedule([this, direction, safe_duration, policy]() {
+            if (policy == MovePolicy::kReplaceCurrent ||
+                emotion_movement_active_.load(std::memory_order_relaxed)) {
+                motors_.Stop();
+            }
+            motors_.Drive(direction, static_cast<uint32_t>(safe_duration));
+        });
+        return true;
+    }
+
+    void Stop() override {
+        Application::GetInstance().Schedule([this]() { motors_.Stop(); });
+    }
+
+    bool Dance() override { return QueueDance(); }
+
+    bool TurnRelative(int degrees, std::string& message) override {
+#ifdef MPU6050_I2C_ADDRESS
+        return gyro_turn_controller_.RequestTurn(degrees, message);
+#else
+        message = "Gyro turn unavailable: MPU6050 is not configured";
+        return false;
+#endif
+    }
+
+    bool ShowEmotion(const std::string& emotion, int duration_ms) override {
+        return QueueTemporaryEmotion(emotion, duration_ms);
+    }
+
+    bool ShowSecondaryText(const std::string& text, int duration_ms) override {
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+        return QueueTemporaryOledText(text, duration_ms);
+#else
+        return false;
+#endif
+    }
+
+    bool SetStatusLightEffect(const std::string& effect, int duration_ms) override {
+        return QueueStatusLightEffect(effect, duration_ms);
+    }
+
+    bool ToggleCameraFlip() override { return QueueCameraFlip(); }
+    bool ToggleDisplayFlip() override { return QueueDisplayFlip(); }
+
+    bool SendSnapshot(const SnapshotSender& sender) override {
+        return Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
+               camera_ != nullptr && camera_->SendSnapshot(sender);
+    }
+
+    SecondaryOled::Config GetSecondaryDisplayConfig() const override {
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+        return secondary_display_.GetConfig();
+#else
+        return {};
+#endif
+    }
+
+    void SetSecondaryDisplayConfig(const SecondaryOled::Config& config) override {
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+        secondary_display_.QueueConfig(config);
+#else
+        (void)config;
+#endif
+    }
+
+    void SetSpeakerVolume(int volume) override { QueueSpeakerVolume(volume); }
+    void SetMicrophoneGain(int gain) override { QueueMicrophoneGain(gain); }
+    void SetScreenBrightness(int brightness) override { QueueScreenBrightness(brightness); }
+    void SetMotorSpeed(int speed) override { QueueMotorSpeed(speed); }
+    void SetDriveDuration(int duration_ms) override { QueueDriveDuration(duration_ms); }
+    void SetEmotionMovementEnabled(bool enabled) override {
+        QueueEmotionMovementEnabled(enabled);
+    }
+    void SetStatusLightBrightness(int brightness) override {
+        QueueStatusLightBrightness(brightness);
+    }
+    void SetCliffThreshold(int edge_mm) override {
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        QueueCliffThreshold(edge_mm);
+#else
+        (void)edge_mm;
+#endif
+    }
+    void SetMotionEmotionsEnabled(bool enabled) override {
+#ifdef MPU6050_I2C_ADDRESS
+        motion_emotions_enabled_.store(enabled);
+        Application::GetInstance().Schedule(
+            [this, enabled]() { robot_settings_.SetMotionEmotionsEnabled(enabled); });
+#else
+        (void)enabled;
+#endif
+    }
+
+    bool StartBatteryCapacityTest() override {
+#ifdef INA219_I2C_ADDRESS
+        return battery_controller_.StartCapacityTest();
+#else
+        return false;
+#endif
+    }
+    void StopBatteryCapacityTest() override {
+#ifdef INA219_I2C_ADDRESS
+        battery_controller_.StopCapacityTest();
+#endif
+    }
+    void ResetBatteryCapacityTest() override {
+#ifdef INA219_I2C_ADDRESS
+        battery_controller_.ResetCapacityTest();
+#endif
+    }
+
+    void ToggleWake() override { Application::GetInstance().ToggleChatState(); }
+
+    bool PlayAudioTest() override {
+        if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+            return false;
+        }
+        Application::GetInstance().Schedule(
+            []() { Application::GetInstance().PlaySound(Lang::Sounds::OGG_POPUP); });
+        return true;
+    }
+
+    void ReturnToIdleState() override { ReturnToIdle(); }
+    bool Reboot() override { return QueueReboot(); }
+    void EnterWifiSetup() override { EnterWifiConfigMode(); }
+
+    RobotStatus GetStatus() override {
+        RobotStatus status;
+        auto& app = Application::GetInstance();
+        const char* state = DeviceStateMachine::GetStateName(app.GetDeviceState());
+        status.state = state != nullptr ? state : "unknown";
+        status.asr_ready = app.IsAsrReady();
+        status.asr_preparing = app.IsGeminiAsrPreparing();
+        status.camera_available = camera_ != nullptr && camera_->IsAvailable();
+        status.camera_flipped = camera_flipped_.load();
+        status.display_flipped = display_flipped_.load();
+        status.emotion = display_->GetCurrentEmotion();
+        status.speaker_volume = speaker_volume_.load();
+        status.microphone_gain = microphone_gain_.load();
+        auto& audio_service = app.GetAudioService();
+        status.microphone_level = audio_service.GetInputLevel();
+        status.microphone_clipping = audio_service.IsInputClipping();
+        status.screen_brightness = GetBacklight() != nullptr ? GetBacklight()->brightness() : 0;
+        status.status_light_brightness = status_light_brightness_.load();
+        status.live_camera_available = live_camera_task_ != nullptr;
+        status.live_camera = live_camera_enabled_.load();
+        status.motor_speed = motors_.GetSpeedPercent();
+        status.drive_duration_ms = drive_duration_ms_.load(std::memory_order_relaxed);
+        status.emotion_movement_enabled =
+            emotion_movement_enabled_.load(std::memory_order_relaxed);
+        status.emotion_movement_active = emotion_movement_active_.load(std::memory_order_relaxed);
+        status.motors = motors_.GetStatus();
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        status.cliff = cliff_sensor_.GetStatus();
+#endif
+#ifdef INA219_I2C_ADDRESS
+        status.battery = battery_controller_.GetStatus();
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+        status.motion_sensor_available = motion_sensor_.IsAvailable();
+        status.motion_sensor_valid = motion_sensor_valid_.load();
+        status.motion_emotions_enabled = motion_emotions_enabled_.load();
+        status.motion_roll_deg = motion_roll_deg_.load();
+        status.motion_pitch_deg = motion_pitch_deg_.load();
+        status.motion_acceleration_g = motion_acceleration_g_.load();
+        status.motion_rotation_dps = motion_rotation_dps_.load();
+        status.motion_gesture = MotionReactions::GestureName(motion_reactions_.GetGesture());
+        status.gyro = gyro_turn_controller_.GetStatus();
+#endif
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+        status.oled_available = secondary_display_.IsAvailable();
+        status.oled_config = secondary_display_.GetConfig();
+        status.oled_page_count = secondary_display_.GetPageCount();
+#endif
+        const esp_app_desc_t* app_desc = esp_app_get_description();
+        status.version = app_desc != nullptr ? app_desc->version : "unknown";
+        status.ip = WifiManager::GetInstance().GetIpAddress();
+        wifi_ap_record_t access_point = {};
+        if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+            const size_t ssid_length =
+                strnlen(reinterpret_cast<const char*>(access_point.ssid), sizeof(access_point.ssid));
+            status.ssid.assign(reinterpret_cast<const char*>(access_point.ssid), ssid_length);
+            status.rssi = access_point.rssi;
+        }
+        status.uptime_sec = esp_timer_get_time() / 1000000;
+        status.free_internal_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        status.free_psram_bytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        return status;
+    }
+
     bool HandleWebAction(const std::string& action, int duration_ms, const std::string& text,
                          std::string& message) {
+        RobotController& controller = *this;
         MotorController::Direction direction;
         if (ParseDirection(action, direction)) {
             const int safe_duration = std::clamp(duration_ms, 50, 2000);
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-            if (IsDirectionBlockedByCliff(direction)) {
+            if (!controller.Move(direction, safe_duration, MovePolicy::kReplaceCurrent)) {
                 message = "Movement blocked: table edge detected; reverse remains available";
                 return false;
             }
-#endif
-            Application::GetInstance().Schedule([this, direction, safe_duration]() {
-                motors_.Stop();
-                motors_.Drive(direction, static_cast<uint32_t>(safe_duration));
-            });
             message = "Moving " + action;
             return true;
         }
         if (action == "stop") {
-            Application::GetInstance().Schedule([this]() { motors_.Stop(); });
+            controller.Stop();
             message = "Motors stopped";
             return true;
         }
 #ifdef MPU6050_I2C_ADDRESS
         if (action == "turn_relative") {
-            return gyro_turn_controller_.RequestTurn(duration_ms, message);
+            return controller.TurnRelative(duration_ms, message);
         }
 #endif
         if (action == "dance") {
-            const bool started = QueueDance();
+            const bool started = controller.Dance();
             message = started ? "Random dance started" : "Dance blocked: table edge detected";
             return started;
         }
         if (action == "wake") {
-            Application::GetInstance().ToggleChatState();
+            controller.ToggleWake();
             message = "Wake toggled";
             return true;
         }
         if (action == "camera_flip") {
-            message = QueueCameraFlip() ? "Camera flipped" : "Camera restored";
+            message = controller.ToggleCameraFlip() ? "Camera flipped" : "Camera restored";
             return true;
         }
         if (action == "display_flip") {
-            message = QueueDisplayFlip() ? "Main display flipped" : "Main display restored";
+            message = controller.ToggleDisplayFlip() ? "Main display flipped"
+                                                     : "Main display restored";
             return true;
         }
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         if (action == "oled_flip" || action == "oled_contrast" || action == "oled_brand" ||
             action == "oled_prefix") {
-            SecondaryOled::Config config = secondary_display_.GetConfig();
+            SecondaryOled::Config config = controller.GetSecondaryDisplayConfig();
             if (action == "oled_flip") {
                 config.flip_180 = !config.flip_180;
             } else if (action == "oled_contrast") {
@@ -1421,7 +1613,7 @@ private:
                 config.distance_prefix =
                     SecondaryDisplayController::NormalizeConfigText(text, "Dist");
             }
-            secondary_display_.QueueConfig(config);
+            controller.SetSecondaryDisplayConfig(config);
             message = "OLED settings updated";
             return true;
         }
@@ -1437,7 +1629,7 @@ private:
             SecondaryDisplayController::WidgetActionIndex(action, "oled_widget_down_");
         if (enabled_index >= 0 || size_index >= 0 || mode_index >= 0 || up_index >= 0 ||
             down_index >= 0) {
-            SecondaryOled::Config config = secondary_display_.GetConfig();
+            SecondaryOled::Config config = controller.GetSecondaryDisplayConfig();
             if (enabled_index >= 0) {
                 config.widgets[enabled_index].enabled = duration_ms != 0;
             } else if (size_index >= 0) {
@@ -1455,13 +1647,14 @@ private:
                 message = "Widget is already at that edge";
                 return false;
             }
-            secondary_display_.QueueConfig(config);
+            controller.SetSecondaryDisplayConfig(config);
             message = "OLED widget layout updated";
             return true;
         }
 #endif
         if (action == "lights_toggle") {
-            message = ToggleStatusLight() ? "Status lights enabled" : "Status lights disabled";
+            message = controller.ToggleStatusLight() ? "Status lights enabled"
+                                                     : "Status lights disabled";
             return true;
         }
         if (action == "emotion") {
@@ -1469,7 +1662,8 @@ private:
                 message = "Manual emotions are available only while Idle";
                 return false;
             }
-            const bool accepted = QueueTemporaryEmotion(text, duration_ms > 0 ? duration_ms : 5000);
+            const bool accepted =
+                controller.ShowEmotion(text, duration_ms > 0 ? duration_ms : 5000);
             message = accepted ? "Emotion: " + text : "Unsupported emotion";
             return accepted;
         }
@@ -1478,67 +1672,66 @@ private:
                 message = "Audio test is available only while Idle";
                 return false;
             }
-            Application::GetInstance().Schedule(
-                []() { Application::GetInstance().PlaySound(Lang::Sounds::OGG_POPUP); });
+            controller.PlayAudioTest();
             message = "Playing speaker test";
             return true;
         }
         if (action == "return_idle") {
-            ReturnToIdle();
+            controller.ReturnToIdleState();
             message = "Returning robot to idle";
             return true;
         }
         if (action == "reboot") {
-            const bool queued = QueueReboot();
+            const bool queued = controller.Reboot();
             message = queued ? "Robot is rebooting" : "Could not schedule reboot";
             return queued;
         }
         if (action == "speaker_volume") {
             const int safe_volume = std::clamp(duration_ms, 0, 100);
-            QueueSpeakerVolume(safe_volume);
+            controller.SetSpeakerVolume(safe_volume);
             message = "Speaker volume " + std::to_string(safe_volume) + "%";
             return true;
         }
         if (action == "microphone_gain") {
             const int safe_gain = std::clamp(duration_ms, 1, 3);
-            QueueMicrophoneGain(safe_gain);
+            controller.SetMicrophoneGain(safe_gain);
             message = "Microphone gain " + std::to_string(safe_gain) + "x";
             return true;
         }
         if (action == "screen_brightness") {
             const int safe_brightness = std::clamp(duration_ms, 10, 100);
-            QueueScreenBrightness(safe_brightness);
+            controller.SetScreenBrightness(safe_brightness);
             message = "Screen brightness " + std::to_string(safe_brightness) + "%";
             return true;
         }
         if (action == "motor_speed") {
             const int safe_speed = std::clamp(duration_ms, MotorController::kMinSpeedPercent,
                                               MotorController::kMaxSpeedPercent);
-            QueueMotorSpeed(safe_speed);
+            controller.SetMotorSpeed(safe_speed);
             message = "Motor speed " + std::to_string(safe_speed) + "%";
             return true;
         }
         if (action == "drive_duration") {
             const int safe_duration = std::clamp(duration_ms, 50, 2000);
-            QueueDriveDuration(safe_duration);
+            controller.SetDriveDuration(safe_duration);
             message = "Drive time " + std::to_string(safe_duration) + " ms";
             return true;
         }
         if (action == "emotion_movement") {
             const bool enabled = duration_ms != 0;
-            QueueEmotionMovementEnabled(enabled);
+            controller.SetEmotionMovementEnabled(enabled);
             message = enabled ? "Emotion movement enabled" : "Emotion movement disabled";
             return true;
         }
         if (action == "status_light_brightness") {
             const int safe_brightness = std::clamp(duration_ms, 0, 100);
-            QueueStatusLightBrightness(safe_brightness);
+            controller.SetStatusLightBrightness(safe_brightness);
             message = "Status light brightness " + std::to_string(safe_brightness) + "%";
             return true;
         }
 #ifdef INA219_I2C_ADDRESS
         if (action == "battery_capacity_start") {
-            if (!battery_controller_.StartCapacityTest()) {
+            if (!controller.StartBatteryCapacityTest()) {
                 message = "INA219 is unavailable";
                 return false;
             }
@@ -1546,12 +1739,12 @@ private:
             return true;
         }
         if (action == "battery_capacity_stop") {
-            battery_controller_.StopCapacityTest();
+            controller.StopBatteryCapacityTest();
             message = "Battery capacity measurement stopped";
             return true;
         }
         if (action == "battery_capacity_reset") {
-            battery_controller_.ResetCapacityTest();
+            controller.ResetBatteryCapacityTest();
             message = "Battery capacity measurement reset";
             return true;
         }
@@ -1559,7 +1752,7 @@ private:
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         if (action == "cliff_threshold") {
             const int safe_edge_mm = std::clamp(duration_ms, 50, 500);
-            QueueCliffThreshold(safe_edge_mm);
+            controller.SetCliffThreshold(safe_edge_mm);
             message = "Cliff threshold " + std::to_string(safe_edge_mm) + " mm";
             return true;
         }
@@ -1567,21 +1760,18 @@ private:
 #ifdef MPU6050_I2C_ADDRESS
         if (action == "motion_emotions") {
             const bool enabled = duration_ms != 0;
-            motion_emotions_enabled_.store(enabled);
-            Application::GetInstance().Schedule([this, enabled]() {
-                robot_settings_.SetMotionEmotionsEnabled(enabled);
-            });
+            controller.SetMotionEmotionsEnabled(enabled);
             message = enabled ? "Motion emotions enabled" : "Motion emotions disabled";
             return true;
         }
 #endif
         if (action == "live_camera") {
-            const bool enabled = ToggleLiveCamera();
+            const bool enabled = controller.ToggleLiveCamera();
             message = enabled ? "Live preview enabled" : "Live preview disabled";
-            return live_camera_task_ != nullptr;
+            return controller.GetStatus().live_camera_available;
         }
         if (action == "wifi_config") {
-            EnterWifiConfigMode();
+            controller.EnterWifiSetup();
             message = "Entering Wi-Fi setup";
             return true;
         }
@@ -1592,8 +1782,7 @@ private:
     void InitializeWebControl() {
         RobotWebControlServer::SnapshotHandler snapshot_handler;
         snapshot_handler = [this](const RobotWebControlServer::SnapshotSender& sender) {
-            return Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
-                   camera_ != nullptr && camera_->SendSnapshot(sender);
+            return static_cast<RobotController&>(*this).SendSnapshot(sender);
         };
         web_control_server_ = std::make_unique<RobotWebControlServer>(
             [this](const std::string& action, int duration_ms, const std::string& text,
@@ -1601,50 +1790,62 @@ private:
                 return HandleWebAction(action, duration_ms, text, message);
             },
             [this]() {
-                auto& app = Application::GetInstance();
-                const char* state = DeviceStateMachine::GetStateName(app.GetDeviceState());
+                const RobotStatus status = static_cast<RobotController&>(*this).GetStatus();
                 cJSON* root = cJSON_CreateObject();
                 if (root == nullptr) {
                     return std::string(R"({"state":"unknown","error":"out of memory"})");
                 }
-                cJSON_AddStringToObject(root, "state", state != nullptr ? state : "unknown");
-                cJSON_AddBoolToObject(root, "asr_ready", app.IsAsrReady());
-                cJSON_AddBoolToObject(root, "asr_preparing", app.IsGeminiAsrPreparing());
-                cJSON_AddBoolToObject(root, "camera_available",
-                                      camera_ != nullptr && camera_->IsAvailable());
-                cJSON_AddBoolToObject(root, "camera_flipped", camera_flipped_.load());
-                cJSON_AddBoolToObject(root, "display_flipped", display_flipped_.load());
-                cJSON_AddStringToObject(root, "emotion", display_->GetCurrentEmotion().c_str());
-                cJSON_AddNumberToObject(root, "speaker_volume", speaker_volume_.load());
-                cJSON_AddNumberToObject(root, "microphone_gain", microphone_gain_.load());
-                auto& audio_service = Application::GetInstance().GetAudioService();
-                cJSON_AddNumberToObject(root, "microphone_level", audio_service.GetInputLevel());
-                cJSON_AddBoolToObject(root, "microphone_clipping", audio_service.IsInputClipping());
-                cJSON_AddNumberToObject(
-                    root, "screen_brightness",
-                    GetBacklight() != nullptr ? GetBacklight()->brightness() : 0);
+                cJSON_AddStringToObject(root, "state", status.state.c_str());
+                cJSON_AddBoolToObject(root, "asr_ready", status.asr_ready);
+                cJSON_AddBoolToObject(root, "asr_preparing", status.asr_preparing);
+                cJSON_AddBoolToObject(root, "camera_available", status.camera_available);
+                cJSON_AddBoolToObject(root, "camera_flipped", status.camera_flipped);
+                cJSON_AddBoolToObject(root, "display_flipped", status.display_flipped);
+                cJSON_AddStringToObject(root, "emotion", status.emotion.c_str());
+                cJSON_AddNumberToObject(root, "speaker_volume", status.speaker_volume);
+                cJSON_AddNumberToObject(root, "microphone_gain", status.microphone_gain);
+                cJSON_AddNumberToObject(root, "microphone_level", status.microphone_level);
+                cJSON_AddBoolToObject(root, "microphone_clipping", status.microphone_clipping);
+                cJSON_AddNumberToObject(root, "screen_brightness", status.screen_brightness);
                 cJSON_AddNumberToObject(root, "status_light_brightness",
-                                        status_light_brightness_.load());
-                cJSON_AddBoolToObject(root, "live_camera", live_camera_enabled_.load());
-                cJSON_AddNumberToObject(root, "motor_speed", motors_.GetSpeedPercent());
-                cJSON_AddNumberToObject(root, "drive_duration_ms",
-                                        drive_duration_ms_.load(std::memory_order_relaxed));
+                                        status.status_light_brightness);
+                cJSON_AddBoolToObject(root, "live_camera", status.live_camera);
+                cJSON_AddNumberToObject(root, "motor_speed", status.motor_speed);
+                cJSON_AddNumberToObject(root, "drive_duration_ms", status.drive_duration_ms);
                 cJSON_AddBoolToObject(root, "emotion_movement_enabled",
-                                      emotion_movement_enabled_.load(std::memory_order_relaxed));
+                                      status.emotion_movement_enabled);
                 cJSON_AddBoolToObject(root, "emotion_movement_active",
-                                      emotion_movement_active_.load(std::memory_order_relaxed));
-                cJSON* motor_status = cJSON_Parse(motors_.StatusJson().c_str());
-                cJSON_AddItemToObject(
-                    root, "motors", motor_status != nullptr ? motor_status : cJSON_CreateObject());
+                                      status.emotion_movement_active);
+                cJSON* motor_status = cJSON_CreateObject();
+                if (motor_status != nullptr) {
+                    cJSON_AddBoolToObject(motor_status, "available", status.motors.available);
+                    cJSON_AddBoolToObject(motor_status, "faulted", status.motors.faulted);
+                    cJSON_AddBoolToObject(motor_status, "moving", status.motors.moving);
+                    cJSON_AddStringToObject(motor_status, "direction",
+                                            MotorController::DirectionName(
+                                                status.motors.direction));
+                    cJSON_AddNumberToObject(motor_status, "intensity_percent",
+                                            status.motors.intensity_percent);
+                    cJSON_AddNumberToObject(motor_status, "queued", status.motors.queued);
+                    cJSON_AddNumberToObject(motor_status, "remaining_ms",
+                                            status.motors.remaining_ms);
+                    cJSON_AddBoolToObject(motor_status, "sequence_active",
+                                          status.motors.sequence_active);
+                    cJSON_AddNumberToObject(motor_status, "sequence_total",
+                                            status.motors.sequence_total);
+                    cJSON_AddNumberToObject(motor_status, "sequence_completed",
+                                            status.motors.sequence_completed);
+                    cJSON_AddItemToObject(root, "motors", motor_status);
+                }
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
-                const auto cliff = cliff_sensor_.GetStatus();
+                const auto& cliff = status.cliff;
                 cJSON_AddNumberToObject(root, "distance_mm", cliff.distance_mm);
                 cJSON_AddBoolToObject(root, "distance_valid", cliff.valid);
                 cJSON_AddBoolToObject(root, "cliff_detected", cliff.cliff_detected);
                 cJSON_AddNumberToObject(root, "cliff_edge_mm", cliff.edge_mm);
 #endif
 #ifdef INA219_I2C_ADDRESS
-                const auto battery = battery_controller_.GetStatus();
+                const auto& battery = status.battery;
                 cJSON_AddBoolToObject(root, "battery_available", battery.available);
                 cJSON_AddBoolToObject(root, "battery_valid", battery.valid);
                 cJSON_AddNumberToObject(root, "battery_percent", battery.percent);
@@ -1694,17 +1895,18 @@ private:
                                         battery.capacity_test_seconds);
 #endif
 #ifdef MPU6050_I2C_ADDRESS
-                const auto gyro = gyro_turn_controller_.GetStatus();
+                const auto& gyro = status.gyro;
                 cJSON_AddBoolToObject(root, "motion_sensor_available",
-                                      motion_sensor_.IsAvailable());
-                cJSON_AddBoolToObject(root, "motion_sensor_valid", motion_sensor_valid_.load());
+                                      status.motion_sensor_available);
+                cJSON_AddBoolToObject(root, "motion_sensor_valid", status.motion_sensor_valid);
                 cJSON_AddBoolToObject(root, "motion_emotions_enabled",
-                                      motion_emotions_enabled_.load());
-                cJSON_AddNumberToObject(root, "motion_roll_deg", motion_roll_deg_.load());
-                cJSON_AddNumberToObject(root, "motion_pitch_deg", motion_pitch_deg_.load());
+                                      status.motion_emotions_enabled);
+                cJSON_AddNumberToObject(root, "motion_roll_deg", status.motion_roll_deg);
+                cJSON_AddNumberToObject(root, "motion_pitch_deg", status.motion_pitch_deg);
                 cJSON_AddNumberToObject(root, "motion_acceleration_g",
-                                        motion_acceleration_g_.load());
-                cJSON_AddNumberToObject(root, "motion_rotation_dps", motion_rotation_dps_.load());
+                                        status.motion_acceleration_g);
+                cJSON_AddNumberToObject(root, "motion_rotation_dps",
+                                        status.motion_rotation_dps);
                 cJSON_AddNumberToObject(root, "motion_yaw_rate_dps", gyro.yaw_rate_dps);
                 cJSON_AddNumberToObject(root, "motion_yaw_bias_dps", gyro.yaw_bias_dps);
                 cJSON_AddBoolToObject(root, "gyro_bias_valid", gyro.bias_valid);
@@ -1719,17 +1921,14 @@ private:
                 cJSON_AddNumberToObject(root, "gyro_turn_progress_deg", gyro.progress_deg);
                 cJSON_AddStringToObject(root, "gyro_turn_stop_reason",
                                         GyroTurnController::StopReasonName(gyro.stop_reason));
-                cJSON_AddStringToObject(root, "motion_gesture",
-                                        MotionReactions::GestureName(
-                                            motion_reactions_.GetGesture()));
+                cJSON_AddStringToObject(root, "motion_gesture", status.motion_gesture.c_str());
 #endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                cJSON_AddBoolToObject(root, "oled_available", secondary_display_.IsAvailable());
-                const SecondaryOled::Config oled_config = secondary_display_.GetConfig();
+                cJSON_AddBoolToObject(root, "oled_available", status.oled_available);
+                const auto& oled_config = status.oled_config;
                 cJSON_AddBoolToObject(root, "oled_flipped", oled_config.flip_180);
                 cJSON_AddNumberToObject(root, "oled_contrast", oled_config.contrast);
-                cJSON_AddNumberToObject(root, "oled_page_count",
-                                        secondary_display_.GetPageCount());
+                cJSON_AddNumberToObject(root, "oled_page_count", status.oled_page_count);
                 cJSON_AddStringToObject(root, "oled_brand", oled_config.brand.c_str());
                 cJSON_AddStringToObject(root, "oled_distance_prefix",
                                         oled_config.distance_prefix.c_str());
@@ -1749,29 +1948,13 @@ private:
                     }
                 }
 #endif
-                const esp_app_desc_t* app_desc = esp_app_get_description();
-                cJSON_AddStringToObject(root, "version", app_desc != nullptr ? app_desc->version : "unknown");
-                cJSON_AddStringToObject(root, "ip",
-                                        WifiManager::GetInstance().GetIpAddress().c_str());
-                wifi_ap_record_t access_point = {};
-                if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
-                    const size_t ssid_length =
-                        strnlen(reinterpret_cast<const char*>(access_point.ssid),
-                                sizeof(access_point.ssid));
-                    cJSON_AddStringToObject(
-                        root, "ssid",
-                        std::string(reinterpret_cast<const char*>(access_point.ssid), ssid_length)
-                            .c_str());
-                    cJSON_AddNumberToObject(root, "rssi", access_point.rssi);
-                } else {
-                    cJSON_AddStringToObject(root, "ssid", "—");
-                    cJSON_AddNumberToObject(root, "rssi", 0);
-                }
-                cJSON_AddNumberToObject(root, "uptime_sec", esp_timer_get_time() / 1000000);
-                cJSON_AddNumberToObject(root, "free_internal_bytes",
-                                        heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-                cJSON_AddNumberToObject(root, "free_psram_bytes",
-                                        heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                cJSON_AddStringToObject(root, "version", status.version.c_str());
+                cJSON_AddStringToObject(root, "ip", status.ip.c_str());
+                cJSON_AddStringToObject(root, "ssid", status.ssid.c_str());
+                cJSON_AddNumberToObject(root, "rssi", status.rssi);
+                cJSON_AddNumberToObject(root, "uptime_sec", status.uptime_sec);
+                cJSON_AddNumberToObject(root, "free_internal_bytes", status.free_internal_bytes);
+                cJSON_AddNumberToObject(root, "free_psram_bytes", status.free_psram_bytes);
                 if (web_control_server_ != nullptr) {
                     web_control_server_->AppendConversationStatus(root);
                     web_control_server_->AppendAsrStatus(root);
@@ -1824,32 +2007,30 @@ private:
                 if (!ParseDirection(direction, command)) {
                     return std::string("direction must be forward, backward, left, or right");
                 }
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-                if (IsDirectionBlockedByCliff(command)) {
+                const int duration_ms = properties["duration_ms"].value<int>();
+                if (!static_cast<RobotController&>(*this).Move(
+                        command, duration_ms, RobotController::MovePolicy::kPreserveQueued)) {
                     return std::string(
                         "Movement blocked: table edge detected; reverse remains available");
                 }
-#endif
-                const int duration_ms = properties["duration_ms"].value<int>();
-                Application::GetInstance().Schedule([this, command, duration_ms]() {
-                    if (emotion_movement_active_.load(std::memory_order_relaxed)) {
-                        motors_.Stop();
-                    }
-                    motors_.Drive(command, static_cast<uint32_t>(duration_ms));
-                });
                 return true;
             });
         mcp_server.AddTool("self.robot.stop", "Stop both drive motors immediately.", PropertyList(),
                            [this](const PropertyList&) -> ReturnValue {
-                               Application::GetInstance().Schedule([this]() { motors_.Stop(); });
+                               static_cast<RobotController&>(*this).Stop();
                                return true;
                            });
         mcp_server.AddTool(
             "self.robot.get_status", "Get the drive motor state.", PropertyList(),
-            [this](const PropertyList&) -> ReturnValue { return motors_.StatusJson(); });
+            [this](const PropertyList&) -> ReturnValue {
+                const auto status = static_cast<RobotController&>(*this).GetStatus();
+                return MotorController::StatusJson(status.motors);
+            });
         mcp_server.AddTool("self.robot.dance", "Run a bounded randomized dance movement.",
                            PropertyList(),
-                           [this](const PropertyList&) -> ReturnValue { return QueueDance(); });
+                           [this](const PropertyList&) -> ReturnValue {
+                               return static_cast<RobotController&>(*this).Dance();
+                           });
         mcp_server.AddTool(
             "self.face.set_emotion",
             "Temporarily show a face emotion, then return to the current assistant state. "
@@ -1863,7 +2044,8 @@ private:
             }),
             [this](const PropertyList& properties) -> ToolResult {
                 const std::string emotion = properties["emotion"].value<std::string>();
-                if (!QueueTemporaryEmotion(emotion, properties["duration_ms"].value<int>())) {
+                if (!static_cast<RobotController&>(*this).ShowEmotion(
+                        emotion, properties["duration_ms"].value<int>())) {
                     return std::string("Unsupported face emotion");
                 }
                 return true;
@@ -1881,7 +2063,8 @@ private:
                 if (direction == "center") {
                     direction = "neutral";
                 }
-                if (!QueueTemporaryEmotion(direction, properties["duration_ms"].value<int>())) {
+                if (!static_cast<RobotController&>(*this).ShowEmotion(
+                        direction, properties["duration_ms"].value<int>())) {
                     return std::string("Unsupported look direction");
                 }
                 return true;
@@ -1896,8 +2079,9 @@ private:
                 Property("duration_ms", kPropertyTypeInteger, 5000, 500, 60000),
             }),
             [this](const PropertyList& properties) -> ToolResult {
-                if (!QueueTemporaryOledText(properties["text"].value<std::string>(),
-                                            properties["duration_ms"].value<int>())) {
+                if (!static_cast<RobotController&>(*this).ShowSecondaryText(
+                        properties["text"].value<std::string>(),
+                        properties["duration_ms"].value<int>())) {
                     return std::string("OLED is unavailable or text is empty");
                 }
                 return true;
@@ -1914,8 +2098,9 @@ private:
                 Property("duration_ms", kPropertyTypeInteger, 5000, 250, 30000),
             }),
             [this](const PropertyList& properties) -> ToolResult {
-                if (!QueueStatusLightEffect(properties["effect"].value<std::string>(),
-                                            properties["duration_ms"].value<int>())) {
+                if (!static_cast<RobotController&>(*this).SetStatusLightEffect(
+                        properties["effect"].value<std::string>(),
+                        properties["duration_ms"].value<int>())) {
                     return std::string("Unsupported status-light effect");
                 }
                 return true;
@@ -1923,7 +2108,7 @@ private:
         mcp_server.AddTool("self.camera.set_camera_flipped",
                            "Rotate the camera image by 180 degrees.", PropertyList(),
                            [this](const PropertyList&) -> ReturnValue {
-                               QueueCameraFlip();
+                               static_cast<RobotController&>(*this).ToggleCameraFlip();
                                return true;
                            });
         mcp_server.AddTool("self.audio_microphone.set_gain",
@@ -1931,7 +2116,8 @@ private:
                            "or 3 for maximum.",
                            PropertyList({Property("gain", kPropertyTypeInteger, 1, 1, 3)}),
                            [this](const PropertyList& properties) -> ReturnValue {
-                               QueueMicrophoneGain(properties["gain"].value<int>());
+                               static_cast<RobotController&>(*this).SetMicrophoneGain(
+                                   properties["gain"].value<int>());
                                return true;
                            });
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -1939,7 +2125,7 @@ private:
             "self.distance.get",
             "Get the downward VL53L0X floor distance and cliff-detection state.", PropertyList(),
             [this](const PropertyList&) -> ReturnValue {
-                const auto cliff = cliff_sensor_.GetStatus();
+                const auto cliff = static_cast<RobotController&>(*this).GetStatus().cliff;
                 if (!cliff.available) {
                     return std::string(R"({"available":false})");
                 }
@@ -1959,7 +2145,7 @@ private:
                 if (result == nullptr) {
                     return std::unexpected("Out of memory");
                 }
-                const auto battery = battery_controller_.GetStatus();
+                const auto battery = static_cast<RobotController&>(*this).GetStatus().battery;
                 cJSON_AddBoolToObject(result, "available", battery.available);
                 cJSON_AddBoolToObject(result, "valid", battery.valid);
                 if (battery.valid) {

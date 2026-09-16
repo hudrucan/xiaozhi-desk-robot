@@ -30,6 +30,7 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/` — robot-specific hardware and behavior.
 - `main/robot/camera/desk_robot_camera.*` — camera capture ownership and concurrency policy.
 - `main/robot/control/robot_settings.*` — typed access to persistent robot and audio preferences.
+- `main/robot/control/robot_controller.*` and `main/robot/control/robot_status.h` — typed robot control/status boundary.
 - `main/robot/display/` — secondary OLED rendering, telemetry orchestration and persisted layout.
 - `main/robot/motion/` — gyro-turn lifecycle and motion-reaction policy.
 - `main/robot/sensors/auxiliary_i2c.*` — deferred shared auxiliary-bus ownership and lifecycle.

@@ -497,33 +497,54 @@ bool MotorController::IsMoving(Direction direction) const {
            direction_.load(std::memory_order_relaxed) == direction;
 }
 
-std::string MotorController::StatusJson() const {
+const char* MotorController::DirectionName(Direction direction) {
     static constexpr const char* kDirectionNames[] = {
         "forward",
         "backward",
         "left",
         "right",
     };
+    return kDirectionNames[static_cast<int>(direction)];
+}
+
+MotorController::Status MotorController::GetStatus() const {
     const auto direction = direction_.load(std::memory_order_relaxed);
     const int64_t active_remaining_us =
         active_until_us_.load(std::memory_order_relaxed) - esp_timer_get_time();
     const uint32_t remaining_ms =
         queued_runtime_ms_.load(std::memory_order_relaxed) +
         (active_remaining_us > 0 ? static_cast<uint32_t>(active_remaining_us / 1000) : 0);
+    return Status{
+        .available = available_,
+        .faulted = faulted_.load(std::memory_order_relaxed),
+        .moving = moving_.load(std::memory_order_relaxed),
+        .direction = direction,
+        .intensity_percent = active_intensity_percent_.load(std::memory_order_relaxed),
+        .queued = queued_count_.load(std::memory_order_relaxed),
+        .remaining_ms = remaining_ms,
+        .sequence_active = sequence_active_.load(std::memory_order_relaxed),
+        .sequence_total = sequence_total_.load(std::memory_order_relaxed),
+        .sequence_completed = sequence_completed_.load(std::memory_order_relaxed),
+    };
+}
+
+std::string MotorController::StatusJson() const {
+    return StatusJson(GetStatus());
+}
+
+std::string MotorController::StatusJson(const Status& status) {
     char result[320];
     snprintf(
         result, sizeof(result),
         "{\"available\":%s,\"faulted\":%s,\"moving\":%s,\"direction\":\"%s\","
         "\"intensity_percent\":%u,\"queued\":%zu,\"remaining_ms\":%lu,\"sequence_active\":%s,"
         "\"sequence_total\":%zu,\"sequence_completed\":%zu}",
-        available_ ? "true" : "false", faulted_.load(std::memory_order_relaxed) ? "true" : "false",
-        moving_.load(std::memory_order_relaxed) ? "true" : "false",
-        kDirectionNames[static_cast<int>(direction)],
-        static_cast<unsigned>(active_intensity_percent_.load(std::memory_order_relaxed)),
-        queued_count_.load(std::memory_order_relaxed), static_cast<unsigned long>(remaining_ms),
-        sequence_active_.load(std::memory_order_relaxed) ? "true" : "false",
-        sequence_total_.load(std::memory_order_relaxed),
-        sequence_completed_.load(std::memory_order_relaxed));
+        status.available ? "true" : "false", status.faulted ? "true" : "false",
+        status.moving ? "true" : "false", DirectionName(status.direction),
+        static_cast<unsigned>(status.intensity_percent), status.queued,
+        static_cast<unsigned long>(status.remaining_ms),
+        status.sequence_active ? "true" : "false", status.sequence_total,
+        status.sequence_completed);
     return result;
 }
 
