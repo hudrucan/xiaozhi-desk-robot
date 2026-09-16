@@ -82,7 +82,7 @@ main/
 ├── application.*                  High-level application/session lifecycle
 ├── device_state_machine.*         Runtime state transitions
 ├── protocols/                     MQTT+UDP and WebSocket
-├── audio/                         Capture, playback, Opus, wake word
+├── audio/                         Capture, playback, Opus, wake word and ASR turn control
 ├── display/                       Reusable display infrastructure
 ├── mcp_server.*                   Device-side MCP framework
 ├── platform/                      Board, Wi-Fi and hardware adapters
@@ -95,6 +95,8 @@ battery monitor/SoC, MPU6050 integration and other desk-robot behavior.
 
 `main/application.*` remains the central event/session integrator. The stateful Typed Web Chat
 lifecycle and its MCP bridge are isolated in `main/chat/text_chat_controller.*`.
+Gemini provider selection, prewarm, VAD, recovery and audio-route switching are isolated in
+`main/audio/gemini_asr_turn_controller.*`; `GeminiTranscribeClient` remains the transport client.
 
 ## Typed Web Chat
 

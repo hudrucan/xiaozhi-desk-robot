@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 12 commits ahead of `origin/main`
+Remote state at handoff: `main` is 14 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -41,8 +41,9 @@ Commit each completed batch locally and do not push `origin`.
 | `b809343` | Document Phase 6 adapter and Web UI ownership | Documentation only |
 | `5cd1d84` | Isolate expressive motion planning from the composition root | Build/hardware not run |
 | `98e8f44` | Extract Typed Web Chat state and orchestration from `Application` | Build/hardware not run |
+| `d8558d2` | Extract Gemini ASR turn lifecycle from `Application` | Build/hardware not run |
 
-Commits `51da4de` through `98e8f44` have not been pushed to `origin`.
+Commits `51da4de` through `d8558d2` have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -108,6 +109,15 @@ recovery now live in:
 `Application` remains the session/event-loop integrator and exposes the existing typed-chat
 entry points. Its protocol callbacks now forward chat lifecycle events to the controller.
 
+Gemini ASR provider/config snapshots, prewarm promotion, VAD, turn IDs, timers, recovery and
+audio-route switching now live in:
+
+- `main/audio/gemini_asr_turn_controller.h`
+- `main/audio/gemini_asr_turn_controller.cc`
+
+`GeminiTranscribeClient` remains the worker/transport layer. Its callbacks are still scheduled
+back onto the application task before controller or application state is mutated.
+
 ## Preserved contracts and invariants
 
 - Existing GPIO assignments and shared-bus wiring are unchanged.
@@ -124,12 +134,14 @@ entry points. Its protocol callbacks now forward chat lifecycle events to the co
   `self.web_chat.consume_pending` for longer input.
 - Idle-origin typed chat still primes the MQTT+UDP return path with deterministic Opus silence,
   never microphone audio, and normal listening resumes after the typed turn.
+- Gemini ASR still preserves provider fallback, prewarm/cold-start promotion, VAD end-of-stream,
+  inactivity/final-transcript timeout recovery and Typed Web Chat handoff.
 - No board/release matrix or CI build workflow has been reintroduced.
 
 ## Latest unverified batch
 
-Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84` and `98e8f44` completed Phases 6A
-through 8A.
+Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84`, `98e8f44` and `d8558d2`
+completed Phases 6A through 8B.
 Robot-specific MCP bindings and Web Control action/status adaptation are no longer owned by
 `DeskRobotBoard`, and the editable Web UI is no longer maintained in a 3,179-line C++ header.
 Phase 7 moved pure randomized emotion/dance/gyro-look policy into
@@ -139,9 +151,10 @@ sensor loop, cliff response, OLED telemetry, live-camera task and status aggrega
 together because they are cross-subsystem lifecycle/integration glue.
 
 Phase 8A moved the Typed Web Chat lifecycle and MCP bridge into `TextChatController` without
-changing the public `Application` entry points or protocol contracts. `application.cc` is now
-1,885 lines (down from 2,277 immediately before Phase 8A). Gemini ASR turn orchestration remains
-in `Application` for the separate Phase 8B batch.
+changing the public `Application` entry points or protocol contracts. Phase 8B moved Gemini ASR
+turn orchestration into `GeminiAsrTurnController` while leaving the existing transport client
+and application state machine intact. `application.cc` is now 1,400 lines, down from 2,277
+immediately before Phase 8A.
 
 Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the
 nine HTTP routes and port 8080 are retained. The CMake-assembled HTML body matches the previous
@@ -171,6 +184,8 @@ Files changed:
 - `main/application.cc`
 - `main/chat/text_chat_controller.h`
 - `main/chat/text_chat_controller.cc`
+- `main/audio/gemini_asr_turn_controller.h`
+- `main/audio/gemini_asr_turn_controller.cc`
 
 Minimum validation:
 
@@ -192,6 +207,10 @@ Minimum validation:
 11. Submit typed chat while Listening; confirm microphone capture is suppressed for the typed
     turn and listening resumes afterward.
 12. Confirm timeout/channel-close failures restore Idle or the prior Listening mode as before.
+13. Select Xiaozhi ASR and confirm the existing listen/start and microphone path still works.
+14. Select configured Gemini ASR and verify cold start, speech VAD, final transcript, normal
+    MCP/LLM/TTS response and the next listening turn.
+15. Verify Gemini prewarm after speaking and recovery after empty/final-timeout/error paths.
 
 Build: **NOT RUN**
 
@@ -199,21 +218,17 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-After the user validates Phase 8A, continue with Phase 8B:
+Continue with Phase 8C: re-audit only the responsibilities remaining in `Application`.
 
 ```text
 main/application.h
 main/application.cc
-main/audio/gemini_transcribe_client.h
-main/audio/gemini_transcribe_client.cc
-main/chat/gemini_asr_turn_controller.h
-main/chat/gemini_asr_turn_controller.cc
 ```
 
-Extract only the Gemini ASR turn lifecycle behind a focused controller. Preserve the existing
-provider selection, prewarm/cold-start behavior, VAD lifecycle, final-transcript handoff to
-Typed Web Chat, retry/timeout recovery and normal Xiaozhi ASR fallback. Do not retune ASR or
-reopen Phase 8A.
+Keep the main event loop, device-state transitions, network/protocol lifecycle, generic audio
+event routing, wake-word/listening state, activation completion and scheduling in `Application`.
+Only extract notification or activation/bootstrap ownership if inspection finds a substantial,
+coherent lifecycle boundary; otherwise stop decomposition. Do not reopen Phases 8A or 8B.
 
 ## Useful review checks
 

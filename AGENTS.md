@@ -24,6 +24,7 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/device_state_machine.*` — legal runtime state transitions.
 - `main/protocols/` — shared protocol API, MQTT+UDP and WebSocket.
 - `main/audio/` — capture/playback, Opus, wake word and audio tasks.
+- `main/audio/gemini_asr_turn_controller.*` — Gemini provider selection, prewarm, VAD and turn lifecycle.
 - `main/mcp_server.*` — generic device-side MCP framework.
 - `main/platform/` — board, Wi-Fi and reusable hardware adapters.
 - `main/robot/config/hardware_config.h` — authoritative wiring, buses and electrical configuration.
