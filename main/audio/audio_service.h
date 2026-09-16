@@ -20,13 +20,17 @@
 
 #include "audio_codec.h"
 #include "audio_engine.h"
+#include "asr_settings.h"
 #include "fixed_queue.h"
 #include "ogg_demuxer.h"
 #include "protocol.h"
 
+class GeminiTranscribeClient;
+
 /*
  * There are two types of audio data flow:
  * 1. (MIC) -> [Audio Engine] -> {Encode Queue} -> [Opus Encoder] -> {Send Queue} -> (Server)
+ *                         \-> {Gemini PCM Queue}
  * 2. (Server) -> {Decode Queue} -> [Opus Decoder] -> {Playback Queue} -> (Speaker)
  *
  * We use dedicated tasks for input, output, and Opus encoding/decoding.
@@ -140,6 +144,11 @@ public:
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
+    // Configure between listening turns while voice processing is disabled.
+    // Gemini frames never fall back to Xiaozhi when the client is null or not ready.
+    // Any non-null Gemini client must outlive this route configuration.
+    void SetAsrProvider(AsrProvider provider, GeminiTranscribeClient* gemini_client);
+
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
@@ -153,6 +162,8 @@ private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
     std::unique_ptr<AudioEngine> audio_engine_;
+    std::atomic<AsrProvider> asr_provider_{AsrProvider::kXiaozhi};
+    std::atomic<GeminiTranscribeClient*> gemini_client_{nullptr};
     void* opus_encoder_ = nullptr;
     void* opus_decoder_ = nullptr;
     std::mutex decoder_mutex_;

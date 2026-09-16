@@ -207,7 +207,11 @@ bool GeminiTranscribeClient::PushPcm(std::vector<int16_t>&& pcm) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        pcm_drop_count_.fetch_add(1);
+        return false;
+    }
     if (cancel_requested_ || audio_stream_end_requested_) {
         return false;
     }

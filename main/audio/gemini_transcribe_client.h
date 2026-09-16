@@ -53,7 +53,8 @@ public:
     bool Start(const AsrConfig& config, Callbacks callbacks);
 
     // Non-blocking and accepted only after setupComplete (kReady/kStreaming).
-    // When full, the oldest queued realtime frame is discarded.
+    // When full, the oldest queued realtime frame is discarded; lock contention
+    // drops the incoming frame instead of waiting on the audio task.
     bool PushPcm(std::vector<int16_t>&& pcm);
     bool SendAudioStreamEnd();
 

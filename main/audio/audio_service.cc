@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "gemini_transcribe_client.h"
+
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
     (esp_ae_rate_cvt_cfg_t) {                                                                \
         .src_rate = (uint32_t)(_src_rate), .dest_rate = (uint32_t)(_dest_rate),              \
@@ -79,6 +81,17 @@ void AudioService::Initialize(AudioCodec* codec) {
 
     audio_engine_ = std::make_unique<AfeAudioEngine>();
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+        if (asr_provider_.load(std::memory_order_acquire) == AsrProvider::kGemini) {
+            auto* client = gemini_client_.load(std::memory_order_acquire);
+            if (client != nullptr) {
+                const auto state = client->state();
+                if (state == GeminiTranscribeClient::State::kReady ||
+                    state == GeminiTranscribeClient::State::kStreaming) {
+                    client->PushPcm(std::move(data));
+                }
+            }
+            return;
+        }
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
     audio_engine_->OnVadStateChange([this](bool speaking) {
@@ -755,6 +768,21 @@ void AudioService::EnableDeviceAec(bool enable) {
     } else {
         ESP_LOGI(TAG, "Deferring AEC change until the audio engine is initialized");
     }
+}
+
+void AudioService::SetAsrProvider(AsrProvider provider,
+                                  GeminiTranscribeClient* gemini_client) {
+    if (provider == AsrProvider::kGemini) {
+        // Publish the client before selecting Gemini so the audio task never
+        // observes a Gemini route with a stale client from the previous turn.
+        gemini_client_.store(gemini_client, std::memory_order_release);
+        asr_provider_.store(AsrProvider::kGemini, std::memory_order_release);
+        return;
+    }
+
+    // Stop new audio-task reads of the client before clearing the pointer.
+    asr_provider_.store(AsrProvider::kXiaozhi, std::memory_order_release);
+    gemini_client_.store(nullptr, std::memory_order_release);
 }
 
 void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) { callbacks_ = callbacks; }
