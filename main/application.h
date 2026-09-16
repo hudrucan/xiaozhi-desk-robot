@@ -22,6 +22,7 @@
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "notify/notify_player.h"
+#include "chat/text_chat_controller.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
@@ -133,6 +134,8 @@ public:
     void ResetProtocol();
 
 private:
+    friend class TextChatController;
+
     Application();
     ~Application();
 
@@ -149,24 +152,12 @@ private:
     // read the non-owning Gemini route pointer.
     GeminiTranscribeClient gemini_asr_client_;
     AudioService audio_service_;
+    TextChatController text_chat_controller_;
     NotifyPlayer notify_player_;
     uint32_t notification_playback_id_ = 0;
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
-
-    // Web text-chat request lifecycle.
-    std::atomic_bool text_chat_pending_{false};
-    std::atomic<int64_t> text_chat_deadline_us_{0};
-    std::atomic_bool text_chat_tts_active_{false};
-    std::atomic_bool text_chat_tts_stopped_{false};
-    std::atomic_bool text_chat_assistant_started_{false};
-    std::atomic<uint32_t> text_chat_audio_packets_{0};
-    std::atomic<int64_t> text_chat_last_audio_us_{0};
-    std::atomic<int64_t> text_chat_tts_stop_us_{0};
-    std::function<void(const std::string&, const std::string&)> text_chat_callback_;
-    bool text_chat_resume_listening_ = false;
-    ListeningMode text_chat_resume_mode_ = kListeningModeAutoStop;
 
     bool has_server_time_ = false;
     bool aborted_ = false;
@@ -206,12 +197,6 @@ private:
     bool PrimeAudioChannelForGemini();
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
-    bool QueueTextChat(std::string text, bool require_active_conversation,
-                       std::string& message);
-    void RunTextChat(const std::string& text);
-    void EmitTextChatEvent(const std::string& event, const std::string& text = "");
-    void CompleteTextChatAfterPlayback();
-    void ResumeListeningAfterTextChat();
     void StartListeningAudio();
     void MaybeStartGeminiAsrPrewarm();
     void StartGeminiAsrTurn(const AsrConfig& config);
