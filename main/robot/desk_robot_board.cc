@@ -3,11 +3,11 @@
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
+#include "camera/desk_robot_camera.h"
 #include "codecs/no_audio_codec.h"
 #include "config/hardware_config.h"
 #include "config/tuning.h"
 #include "display/lcd_display.h"
-#include "esp32_camera.h"
 #ifdef INA219_I2C_ADDRESS
 #include "battery_soc_estimator.h"
 #include "ina219_power_monitor.h"
@@ -48,7 +48,6 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -94,75 +93,6 @@ extern "C" {
 #ifndef MPU6050_YAW_SIGN
 #define MPU6050_YAW_SIGN 1.0f
 #endif
-
-using DeskRobotCameraBase = Esp32Camera;
-using DeskRobotCameraConfig = camera_config_t;
-
-class DeskRobotCamera : public DeskRobotCameraBase {
-public:
-    explicit DeskRobotCamera(const DeskRobotCameraConfig& config) : DeskRobotCameraBase(config) {}
-
-    bool Capture() override {
-        std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
-        if (!lock.try_lock_for(std::chrono::seconds(7))) {
-            ESP_LOGE(TAG, "MCP camera capture timed out waiting for live preview");
-            return false;
-        }
-        if (mcp_frame_reserved_) {
-            ESP_LOGW(TAG, "MCP camera capture rejected: previous frame is still reserved");
-            return false;
-        }
-        ESP_LOGI(TAG, "MCP camera capture begin");
-        const bool captured = DeskRobotCameraBase::Capture();
-        ESP_LOGI(TAG, "MCP camera capture %s", captured ? "done" : "failed");
-        mcp_frame_reserved_ = captured;
-        return captured;
-    }
-
-    bool CapturePreview() {
-        std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::try_to_lock);
-        if (!lock.owns_lock() || mcp_frame_reserved_) {
-            return false;
-        }
-        return DeskRobotCameraBase::Capture();
-    }
-
-    bool SendWebSnapshot(const RobotWebControlServer::SnapshotSender& sender) {
-        std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
-        if (!lock.try_lock_for(std::chrono::seconds(7)) || mcp_frame_reserved_) {
-            return false;
-        }
-        if (!DeskRobotCameraBase::CaptureForWeb()) {
-            return false;
-        }
-        const uint8_t* data = nullptr;
-        size_t length = 0;
-        return DeskRobotCameraBase::GetCurrentJpeg(data, length) && sender(data, length);
-    }
-
-    bool IsAvailable() const { return DeskRobotCameraBase::IsAvailable(); }
-
-    std::expected<std::string, std::string> Explain(const std::string& question) override {
-        std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
-        if (!lock.try_lock_for(std::chrono::seconds(7))) {
-            mcp_frame_reserved_ = false;
-            return std::unexpected("Timed out waiting for camera frame");
-        }
-        ESP_LOGI(TAG, "MCP camera explain begin");
-        auto result = DeskRobotCameraBase::Explain(question);
-        mcp_frame_reserved_ = false;
-        if (result) {
-            ESP_LOGI(TAG, "MCP camera explain done");
-        } else {
-            ESP_LOGE(TAG, "MCP camera explain failed");
-        }
-        return result;
-    }
-
-private:
-    std::timed_mutex capture_mutex_;
-    std::atomic_bool mcp_frame_reserved_{false};
-};
 
 class DeskRobotBoard : public WifiBoard {
 private:
@@ -2706,7 +2636,7 @@ private:
         RobotWebControlServer::SnapshotHandler snapshot_handler;
         snapshot_handler = [this](const RobotWebControlServer::SnapshotSender& sender) {
             return Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
-                   camera_ != nullptr && camera_->SendWebSnapshot(sender);
+                   camera_ != nullptr && camera_->SendSnapshot(sender);
         };
         web_control_server_ = std::make_unique<RobotWebControlServer>(
             [this](const std::string& action, int duration_ms, const std::string& text,
