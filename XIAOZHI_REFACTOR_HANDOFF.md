@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 2 commits ahead of `origin/main`
+Remote state at handoff: `main` is 4 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -36,8 +36,9 @@ Commit each completed batch locally and do not push `origin`.
 | `0e72f602` | Extract cliff safety, gyro turns, motion reactions and robot settings | User build/hardware check passed |
 | `d15a6642` | Add typed robot control and status boundary | User passed |
 | `51da4de` | Isolate robot-specific MCP bindings behind `RobotController` | Build/hardware not run |
+| `75ee843` | Route Web Control through the typed robot API | Build/hardware not run |
 
-Commit `51da4de` has not been pushed to `origin`.
+Commits `51da4de` through `75ee843` have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -69,6 +70,16 @@ boundary. Robot-specific MCP registration and serialization now live in:
 `DeskRobotBoard` now performs one `RobotMcpTools::Register(*this)` composition call and no
 longer owns MCP schemas or response serialization.
 
+Web Control HTTP routing, chat/ASR/log handling and status response completion remain in
+`RobotWebControlServer`. Robot action mapping and the robot-status JSON payload now live in:
+
+- `main/robot/web/robot_web_adapter.h`
+- `main/robot/web/robot_web_adapter.cc`
+
+The Web adapter depends only on `RobotController` plus the config/display types needed to retain
+the existing hardware guards and OLED JSON/action contracts. `DeskRobotBoard` only constructs
+the server with its typed controller boundary and the application-owned typed-chat callback.
+
 `MotorController::Status` is the typed motor snapshot. Its existing JSON contract is retained
 through `MotorController::StatusJson`.
 
@@ -88,10 +99,11 @@ through `MotorController::StatusJson`.
 
 ## Latest unverified batch
 
-Commit `51da4de` completed Phase 6A by moving all 15 robot-specific MCP tool bindings out of
-`DeskRobotBoard`. The new adapter depends on `RobotController`; it does not access board-private
-fields or concrete robot subsystem instances. Tool names, schemas, defaults/ranges, feature
-guards, response fields and error messages were preserved.
+Commits `51da4de` and `75ee843` completed Phases 6A and 6B. Robot-specific MCP bindings and Web
+Control action/status adaptation are no longer owned by `DeskRobotBoard`. Both adapters depend
+on `RobotController`; neither accesses board-private fields or concrete robot subsystem
+instances. Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON
+keys, the nine HTTP routes and port 8080 are retained.
 
 Files changed:
 
@@ -99,6 +111,10 @@ Files changed:
 - `main/robot/desk_robot_board.cc`
 - `main/robot/mcp/robot_mcp_tools.h`
 - `main/robot/mcp/robot_mcp_tools.cc`
+- `main/robot/robot_web_control_server.h`
+- `main/robot/robot_web_control_server.cc`
+- `main/robot/web/robot_web_adapter.h`
+- `main/robot/web/robot_web_adapter.cc`
 
 Minimum validation:
 
@@ -108,6 +124,9 @@ Minimum validation:
 4. Exercise MCP motion orientation/emotion control, distance and battery status.
 5. Exercise MCP face emotion/look, secondary-display text, status light, camera flip and
    microphone gain.
+6. Open Web Control and verify status, logs, camera snapshot, typed chat and ASR settings.
+7. Exercise movement, turn, dance, emotion, audio test, display/OLED, lighting, battery-test,
+   cliff, motion, live-camera and Wi-Fi actions used by the Web UI.
 
 Build: **NOT RUN**
 
@@ -115,20 +134,19 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-After the user validates Phase 6A, continue with Phase 6B:
+After the user validates Phases 6A and 6B, continue with Phase 6C:
 
 ```text
-main/robot/robot_web_control_server.h
-main/robot/robot_web_control_server.cc
-main/robot/desk_robot_board.cc
+main/robot/web/ui/index.html
+main/robot/web/ui/app.js
+main/robot/web/ui/style.css
+main/robot/robot_web_control_page.h
+main/CMakeLists.txt
 ```
 
-Move Web Control action parsing and status serialization behind `RobotWebControlServer` or a
-dedicated Web adapter using `RobotController`. Keep port 8080, every route/action/request field,
-all status JSON fields, typed chat, ASR settings, snapshots and logs behavior unchanged.
-
-Do not combine Phase 6C Web UI source extraction with 6A or 6B; it has a separate generated-asset
-and browser-regression surface.
+Move the editable Web UI out of the large embedded C++ header into focused HTML, JavaScript and
+CSS source files using a small deterministic ESP-IDF-compatible embedding path. Do not add a
+frontend framework or Node-based toolchain. Preserve every route and browser-visible behavior.
 
 ## Useful review checks
 
