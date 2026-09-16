@@ -83,6 +83,7 @@ list(APPEND SOURCES
     "robot/sensors/cliff_sensor.cc"
     "robot/sensors/mpu6050_motion_sensor.cc"
     "robot/robot_web_control_server.cc"
+    "robot/web/robot_web_adapter.cc"
     "audio/engines/afe_audio_engine.cc"
     "audio/wake_words/custom_wake_word.cc"
     "audio/wake_words/wake_word_audio_cache.cc"

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "web/robot_web_adapter.h"
+
 #include <esp_http_server.h>
 
 #include <functional>
@@ -9,26 +11,19 @@
 
 #include <cJSON.h>
 
+class RobotController;
+
 class RobotWebControlServer {
 public:
-    using ActionHandler =
-        std::function<bool(const std::string&, int, const std::string&, std::string&)>;
-    using StatusHandler = std::function<std::string()>;
-    using SnapshotSender = std::function<bool(const uint8_t*, size_t)>;
-    using SnapshotHandler = std::function<bool(const SnapshotSender&)>;
     using ChatProbeHandler = std::function<bool(const std::string&, std::string&)>;
 
-    RobotWebControlServer(ActionHandler action_handler, StatusHandler status_handler,
-                          SnapshotHandler snapshot_handler = {},
-                          ChatProbeHandler chat_probe_handler = {});
+    RobotWebControlServer(RobotController& controller, ChatProbeHandler chat_probe_handler = {});
     ~RobotWebControlServer();
 
     // Start buffering logs before Wi-Fi and the HTTP server are available.
     // Calling this more than once is safe.
     static void BeginLogCapture();
 
-    void AppendConversationStatus(cJSON* root);
-    void AppendAsrStatus(cJSON* root);
     void OnChatProbeEvent(const std::string& event, const std::string& text);
 
     bool Start(int port = 8080);
@@ -45,11 +40,13 @@ private:
     static esp_err_t HandleSaveAsrConfig(httpd_req_t* request);
     static esp_err_t HandleClearGeminiApiKey(httpd_req_t* request);
     static esp_err_t SendJson(httpd_req_t* request, const char* status, const std::string& body);
+    std::string BuildStatus();
+    void AppendConversationStatus(cJSON* root);
+    void AppendAsrStatus(cJSON* root);
 
     httpd_handle_t server_ = nullptr;
-    ActionHandler action_handler_;
-    StatusHandler status_handler_;
-    SnapshotHandler snapshot_handler_;
+    RobotController& controller_;
+    RobotWebAdapter robot_adapter_;
     ChatProbeHandler chat_probe_handler_;
 
     struct ConversationMessage {

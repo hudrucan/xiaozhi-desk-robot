@@ -1,6 +1,7 @@
 #include "robot_web_control_server.h"
 #include "robot_web_control_page.h"
 #include "asr_settings.h"
+#include "control/robot_controller.h"
 
 #include <esp_log.h>
 #include <esp_log_write.h>
@@ -238,13 +239,10 @@ std::string EncodeAsrConfigResponse(bool ok, const char* message, const AsrConfi
 
 }  // namespace
 
-RobotWebControlServer::RobotWebControlServer(ActionHandler action_handler,
-                                             StatusHandler status_handler,
-                                             SnapshotHandler snapshot_handler,
+RobotWebControlServer::RobotWebControlServer(RobotController& controller,
                                              ChatProbeHandler chat_probe_handler)
-    : action_handler_(std::move(action_handler)),
-      status_handler_(std::move(status_handler)),
-      snapshot_handler_(std::move(snapshot_handler)),
+    : controller_(controller),
+      robot_adapter_(controller),
       chat_probe_handler_(std::move(chat_probe_handler)) {
     BeginLogCapture();
 }
@@ -356,6 +354,21 @@ void RobotWebControlServer::Stop() {
     }
 }
 
+std::string RobotWebControlServer::BuildStatus() {
+    cJSON* root = robot_adapter_.CreateStatus();
+    if (root == nullptr) {
+        return R"({"state":"unknown","error":"out of memory"})";
+    }
+    AppendConversationStatus(root);
+    AppendAsrStatus(root);
+
+    char* encoded = cJSON_PrintUnformatted(root);
+    const std::string result = encoded != nullptr ? encoded : R"({"state":"unknown"})";
+    cJSON_free(encoded);
+    cJSON_Delete(root);
+    return result;
+}
+
 void RobotWebControlServer::AppendConversationStatus(cJSON* root) {
     std::lock_guard<std::mutex> lock(conversation_mutex_);
     cJSON* conversation = cJSON_AddObjectToObject(root, "conversation");
@@ -450,7 +463,7 @@ esp_err_t RobotWebControlServer::HandleRoot(httpd_req_t* request) {
 
 esp_err_t RobotWebControlServer::HandleStatus(httpd_req_t* request) {
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
-    return SendJson(request, "200 OK", self->status_handler_());
+    return SendJson(request, "200 OK", self->BuildStatus());
 }
 
 esp_err_t RobotWebControlServer::HandleLogs(httpd_req_t* request) {
@@ -517,8 +530,8 @@ esp_err_t RobotWebControlServer::HandleAction(httpd_req_t* request) {
     const std::string control_text =
         cJSON_IsString(text) && text->valuestring != nullptr ? text->valuestring : "";
     std::string message;
-    const bool accepted =
-        self->action_handler_(action->valuestring, control_value, control_text, message);
+    const bool accepted = self->robot_adapter_.ExecuteAction(
+        action->valuestring, control_value, control_text, message);
     cJSON_Delete(root);
 
     cJSON* response = cJSON_CreateObject();
@@ -723,13 +736,8 @@ esp_err_t RobotWebControlServer::HandleClearGeminiApiKey(httpd_req_t* request) {
 
 esp_err_t RobotWebControlServer::HandleSnapshot(httpd_req_t* request) {
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
-    if (!self->snapshot_handler_) {
-        return SendJson(request, "503 Service Unavailable",
-                        R"({"ok":false,"message":"Camera unavailable"})");
-    }
-
     bool response_started = false;
-    const bool captured = self->snapshot_handler_([&](const uint8_t* data, size_t length) {
+    const bool captured = self->controller_.SendSnapshot([&](const uint8_t* data, size_t length) {
         response_started = true;
         httpd_resp_set_type(request, "image/jpeg");
         httpd_resp_set_hdr(request, "Cache-Control", "no-store");
