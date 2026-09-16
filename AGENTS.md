@@ -29,12 +29,12 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/config/tuning.h` — robot behavior thresholds, timing and calibration.
 - `main/robot/` — robot-specific hardware and behavior.
 - `main/robot/camera/desk_robot_camera.*` — camera capture ownership and concurrency policy.
+- `main/robot/display/` — secondary OLED rendering, telemetry orchestration and persisted layout.
 - `main/robot/sensors/auxiliary_i2c.*` — deferred shared auxiliary-bus ownership and lifecycle.
 - `main/robot/power/` — INA219 telemetry, SoC estimation, persistence and capacity tests.
 - `main/robot/desk_robot_board.cc` — desk-robot integration.
 - `main/robot/motor_controller.*` — drive control.
 - `main/robot/mochan_display.*` — main robot-face display.
-- `main/robot/secondary_oled.*` — 128×32 SSD1306.
 - `main/robot/mpu6050_motion_sensor.*` — motion sensing.
 - `main/robot/robot_web_control_server.*` — local HTTP/API server.
 - `main/robot/robot_web_control_page.h` — embedded Web Control UI.

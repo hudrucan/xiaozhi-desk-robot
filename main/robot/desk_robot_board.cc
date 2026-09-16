@@ -8,6 +8,9 @@
 #include "config/hardware_config.h"
 #include "config/tuning.h"
 #include "display/lcd_display.h"
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+#include "display/secondary_display_controller.h"
+#endif
 #ifdef INA219_I2C_ADDRESS
 #include "power/battery_controller.h"
 #endif
@@ -20,7 +23,6 @@
 #endif
 #include "robot_web_control_server.h"
 #include "sensors/auxiliary_i2c.h"
-#include "secondary_oled.h"
 #include "settings.h"
 
 #include <driver/i2c_master.h>
@@ -129,7 +131,6 @@ private:
     std::array<uint8_t, 8> last_emotion_variants_{};
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
-    esp_timer_handle_t oled_text_reset_timer_ = nullptr;
     esp_timer_handle_t light_effect_reset_timer_ = nullptr;
     std::mutex temporary_emotion_mutex_;
     std::string temporary_emotion_;
@@ -204,10 +205,7 @@ private:
     std::atomic_int cliff_edge_mm_{CLIFF_EDGE_DISTANCE_MM};
 #endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-    SecondaryOled secondary_oled_;
-    std::atomic<SecondaryOled::NetworkState> secondary_oled_network_state_{
-        SecondaryOled::NetworkState::kConnecting};
-    TaskHandle_t secondary_oled_task_ = nullptr;
+    SecondaryDisplayController secondary_display_;
 #endif
 
 #ifdef AUXILIARY_I2C_SDA_PIN
@@ -820,32 +818,28 @@ private:
         switch (event) {
             case NetworkEvent::Scanning:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                secondary_oled_network_state_.store(SecondaryOled::NetworkState::kScanning,
-                                                    std::memory_order_relaxed);
+                secondary_display_.SetNetworkState(SecondaryOled::NetworkState::kScanning);
 #endif
                 display_->SetWifiConnected(false);
                 display_->ShowBootSplash();
                 break;
             case NetworkEvent::Connecting:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                secondary_oled_network_state_.store(SecondaryOled::NetworkState::kConnecting,
-                                                    std::memory_order_relaxed);
+                secondary_display_.SetNetworkState(SecondaryOled::NetworkState::kConnecting);
 #endif
                 display_->SetWifiConnected(false);
                 display_->ShowBootSplash();
                 break;
             case NetworkEvent::Disconnected:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                secondary_oled_network_state_.store(SecondaryOled::NetworkState::kDisconnected,
-                                                    std::memory_order_relaxed);
+                secondary_display_.SetNetworkState(SecondaryOled::NetworkState::kDisconnected);
 #endif
                 display_->SetWifiConnected(false);
                 display_->ShowBootSplash();
                 break;
             case NetworkEvent::Connected:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                secondary_oled_network_state_.store(SecondaryOled::NetworkState::kConnected,
-                                                    std::memory_order_relaxed);
+                secondary_display_.SetNetworkState(SecondaryOled::NetworkState::kConnected);
 #endif
                 display_->SetWifiConnected(true);
                 display_->HideBootSplash();
@@ -858,16 +852,14 @@ private:
                 break;
             case NetworkEvent::WifiConfigModeEnter:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                secondary_oled_network_state_.store(SecondaryOled::NetworkState::kConfigMode,
-                                                    std::memory_order_relaxed);
+                secondary_display_.SetNetworkState(SecondaryOled::NetworkState::kConfigMode);
 #endif
                 display_->SetWifiConnected(false);
                 display_->HideBootSplash();
                 break;
             case NetworkEvent::WifiConfigModeExit:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                secondary_oled_network_state_.store(SecondaryOled::NetworkState::kConnecting,
-                                                    std::memory_order_relaxed);
+                secondary_display_.SetNetworkState(SecondaryOled::NetworkState::kConnecting);
 #endif
                 break;
             default:
@@ -1118,140 +1110,55 @@ private:
 #endif
 
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-    static std::string SecondaryOledWidgetKey(size_t index, const char* field) {
-        return "ow" + std::to_string(index) + "_" + field;
-    }
-
-    static int SecondaryOledWidgetActionIndex(const std::string& action,
-                                              const std::string& prefix) {
-        if (action.size() != prefix.size() + 1 || action.compare(0, prefix.size(), prefix) != 0) {
-            return -1;
-        }
-        const char digit = action.back();
-        if (digit < '0' || static_cast<size_t>(digit - '0') >= secondary_oled_layout::kMaxWidgets) {
-            return -1;
-        }
-        return digit - '0';
-    }
-
-    static const char* SecondaryOledWidgetTypeName(SecondaryOled::WidgetType type) {
-        switch (type) {
-            case SecondaryOled::WidgetType::kBranding:
-                return "branding";
-            case SecondaryOled::WidgetType::kDistance:
-                return "distance";
-            case SecondaryOled::WidgetType::kPower:
-                return "power";
-            case SecondaryOled::WidgetType::kMotion:
-                return "motion";
-            case SecondaryOled::WidgetType::kCapacity:
-                return "capacity";
-        }
-        return "branding";
-    }
-
-    static void LoadSecondaryOledWidgets(Settings& settings, SecondaryOled::Config& config) {
-        if (settings.GetInt("oled_w_ver", 0) != 1) {
-            return;
-        }
-        auto widgets = config.widgets;
-        std::array<bool, secondary_oled_layout::kMaxWidgets> seen = {};
-        for (size_t index = 0; index < widgets.size(); ++index) {
-            const int type = settings.GetInt(SecondaryOledWidgetKey(index, "type"), -1);
-            if (type < 0 || type >= static_cast<int>(secondary_oled_layout::kMaxWidgets) ||
-                seen[type]) {
-                ESP_LOGW(TAG, "Ignoring invalid persisted secondary OLED widget order");
-                return;
-            }
-            seen[type] = true;
-            widgets[index].type = static_cast<SecondaryOled::WidgetType>(type);
-            widgets[index].size = static_cast<SecondaryOled::WidgetSize>(std::clamp(
-                static_cast<int>(settings.GetInt(SecondaryOledWidgetKey(index, "size"), 0)), 0, 2));
-            widgets[index].enabled = settings.GetBool(SecondaryOledWidgetKey(index, "on"), true);
-            widgets[index].mode = static_cast<uint8_t>(std::clamp(
-                static_cast<int>(settings.GetInt(SecondaryOledWidgetKey(index, "mode"), 0)), 0, 2));
-        }
-        config.widgets = widgets;
-    }
-
-    static void SecondaryOledTask(void* arg) {
+    static void CollectSecondaryOledTelemetry(void* arg, SecondaryOled::Telemetry& telemetry) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
-        // Let the board constructor and application singleton finish before reading runtime state.
-        vTaskDelay(pdMS_TO_TICKS(500));
-        ESP_LOGI(TAG, "Secondary OLED dashboard task started");
-        TickType_t last_wake_time = xTaskGetTickCount();
-        while (true) {
-            SecondaryOled::Telemetry telemetry;
-            telemetry.network_state =
-                self->secondary_oled_network_state_.load(std::memory_order_relaxed);
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
-            telemetry.distance_mm = self->distance_mm_.load(std::memory_order_relaxed);
-            telemetry.distance_valid = self->distance_valid_.load(std::memory_order_relaxed);
-            telemetry.cliff_detected = self->IsCliffDetected();
+        telemetry.distance_mm = self->distance_mm_.load(std::memory_order_relaxed);
+        telemetry.distance_valid = self->distance_valid_.load(std::memory_order_relaxed);
+        telemetry.cliff_detected = self->IsCliffDetected();
 #endif
 #ifdef INA219_I2C_ADDRESS
-            const auto battery = self->battery_controller_.GetStatus();
-            telemetry.power_valid = battery.valid;
-            telemetry.current_ma = static_cast<int>(std::lround(battery.current_ma));
-            telemetry.power_mw = static_cast<int>(std::lround(battery.power_mw));
-            telemetry.capacity_active = battery.capacity_test_active;
-            telemetry.capacity_measuring = battery.capacity_test_measuring;
-            telemetry.capacity_uah = battery.capacity_test_uah;
-            telemetry.capacity_seconds = battery.capacity_test_seconds;
-            telemetry.battery_percent = battery.percent;
-            telemetry.battery_voltage_mv =
-                static_cast<int>(std::lround(battery.voltage_v * 1000.0f));
-            telemetry.low_battery = telemetry.power_valid && !battery.charging &&
-                                    telemetry.battery_percent >= 0 &&
-                                    telemetry.battery_percent < 20;
+        const auto battery = self->battery_controller_.GetStatus();
+        telemetry.power_valid = battery.valid;
+        telemetry.current_ma = static_cast<int>(std::lround(battery.current_ma));
+        telemetry.power_mw = static_cast<int>(std::lround(battery.power_mw));
+        telemetry.capacity_active = battery.capacity_test_active;
+        telemetry.capacity_measuring = battery.capacity_test_measuring;
+        telemetry.capacity_uah = battery.capacity_test_uah;
+        telemetry.capacity_seconds = battery.capacity_test_seconds;
+        telemetry.battery_percent = battery.percent;
+        telemetry.battery_voltage_mv =
+            static_cast<int>(std::lround(battery.voltage_v * 1000.0f));
+        telemetry.low_battery = telemetry.power_valid && !battery.charging &&
+                                telemetry.battery_percent >= 0 &&
+                                telemetry.battery_percent < 20;
 #endif
 #ifdef MPU6050_I2C_ADDRESS
-            telemetry.motion_valid = self->motion_sensor_valid_.load(std::memory_order_relaxed);
-            telemetry.motion_state =
-                MotionGestureName(self->motion_gesture_.load(std::memory_order_relaxed));
-            telemetry.roll_deg = static_cast<int>(
-                std::lround(self->motion_roll_deg_.load(std::memory_order_relaxed)));
-            telemetry.pitch_deg = static_cast<int>(
-                std::lround(self->motion_pitch_deg_.load(std::memory_order_relaxed)));
-            telemetry.motion_calibrating =
-                self->motion_sensor_.IsAvailable() &&
-                (!telemetry.motion_valid ||
-                 !self->motion_gyro_bias_valid_.load(std::memory_order_acquire));
-            telemetry.gyro_turn_pending = self->gyro_turn_pending_.load(std::memory_order_relaxed);
-            telemetry.gyro_turn_active = self->gyro_turn_active_.load(std::memory_order_relaxed);
-            telemetry.gyro_turn_target_deg = static_cast<int>(
-                std::lround(self->gyro_turn_target_deg_.load(std::memory_order_relaxed)));
-            telemetry.gyro_turn_progress_deg = static_cast<int>(
-                std::lround(self->gyro_turn_progress_deg_.load(std::memory_order_relaxed)));
-            telemetry.gyro_turn_intensity_percent =
-                self->gyro_turn_intensity_percent_.load(std::memory_order_relaxed);
+        telemetry.motion_valid = self->motion_sensor_valid_.load(std::memory_order_relaxed);
+        telemetry.motion_state =
+            MotionGestureName(self->motion_gesture_.load(std::memory_order_relaxed));
+        telemetry.roll_deg =
+            static_cast<int>(std::lround(self->motion_roll_deg_.load(std::memory_order_relaxed)));
+        telemetry.pitch_deg =
+            static_cast<int>(std::lround(self->motion_pitch_deg_.load(std::memory_order_relaxed)));
+        telemetry.motion_calibrating =
+            self->motion_sensor_.IsAvailable() &&
+            (!telemetry.motion_valid ||
+             !self->motion_gyro_bias_valid_.load(std::memory_order_acquire));
+        telemetry.gyro_turn_pending = self->gyro_turn_pending_.load(std::memory_order_relaxed);
+        telemetry.gyro_turn_active = self->gyro_turn_active_.load(std::memory_order_relaxed);
+        telemetry.gyro_turn_target_deg = static_cast<int>(
+            std::lround(self->gyro_turn_target_deg_.load(std::memory_order_relaxed)));
+        telemetry.gyro_turn_progress_deg = static_cast<int>(
+            std::lround(self->gyro_turn_progress_deg_.load(std::memory_order_relaxed)));
+        telemetry.gyro_turn_intensity_percent =
+            self->gyro_turn_intensity_percent_.load(std::memory_order_relaxed);
 #endif
-            self->secondary_oled_.UpdateTelemetry(telemetry);
-            self->secondary_oled_.Tick();
-            vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(100));
-        }
     }
 
     void InitializeSecondaryOled() {
-        Settings settings("desk_robot", false);
-        SecondaryOled::Config oled_config;
-        oled_config.flip_180 = settings.GetBool("oled_flip", SECONDARY_OLED_FLIP_180);
-        oled_config.contrast = static_cast<uint8_t>(
-            std::clamp(static_cast<int>(settings.GetInt("oled_contrast", 128)), 0, 255));
-        oled_config.brand = settings.GetString("oled_brand", "Desk Robot");
-        oled_config.distance_prefix = settings.GetString("oled_prefix", "Dist");
-        LoadSecondaryOledWidgets(settings, oled_config);
-        if (!secondary_oled_.Initialize(auxiliary_i2c_.handle(), auxiliary_i2c_.mutex(),
-                                        SECONDARY_OLED_I2C_ADDRESS, SECONDARY_OLED_WIDTH,
-                                        SECONDARY_OLED_HEIGHT, oled_config.flip_180)) {
-            return;
-        }
-        secondary_oled_.Configure(oled_config);
-        if (xTaskCreate(SecondaryOledTask, "status_oled", 8192, this, 2, &secondary_oled_task_) !=
-            pdPASS) {
-            secondary_oled_task_ = nullptr;
-            ESP_LOGE(TAG, "Failed to create secondary OLED task");
-        }
+        secondary_display_.Initialize(auxiliary_i2c_.handle(), auxiliary_i2c_.mutex(), this,
+                                      &DeskRobotBoard::CollectSecondaryOledTelemetry);
     }
 #endif
 
@@ -1308,58 +1215,6 @@ private:
         Application::GetInstance().Schedule([this, flipped]() { ApplyDisplayFlip(flipped); });
         return flipped;
     }
-
-#ifdef SECONDARY_OLED_I2C_ADDRESS
-    static std::string NormalizeOledText(const std::string& text, const char* fallback) {
-        std::string normalized;
-        normalized.reserve(std::min<size_t>(text.size(), 20));
-        bool previous_space = true;
-        for (unsigned char character : text) {
-            if (normalized.size() >= 20) {
-                break;
-            }
-            if (std::isalnum(character) || character == '-') {
-                normalized.push_back(static_cast<char>(character));
-                previous_space = false;
-            } else if (std::isspace(character) && !previous_space) {
-                normalized.push_back(' ');
-                previous_space = true;
-            }
-        }
-        while (!normalized.empty() && normalized.back() == ' ') {
-            normalized.pop_back();
-        }
-        return normalized.empty() ? fallback : normalized;
-    }
-
-    void QueueSecondaryOledConfig(SecondaryOled::Config config) {
-        config.brand = NormalizeOledText(config.brand, "Desk Robot");
-        config.distance_prefix = NormalizeOledText(config.distance_prefix, "Dist");
-        if (config.distance_prefix.size() > 10) {
-            config.distance_prefix.resize(10);
-        }
-        Application::GetInstance().Schedule([this, config = std::move(config)]() {
-            if (!secondary_oled_.Configure(config)) {
-                return;
-            }
-            Settings settings("desk_robot", true);
-            settings.SetBool("oled_flip", config.flip_180);
-            settings.SetInt("oled_contrast", config.contrast);
-            settings.SetString("oled_brand", config.brand);
-            settings.SetString("oled_prefix", config.distance_prefix);
-            settings.SetInt("oled_w_ver", 1);
-            for (size_t index = 0; index < config.widgets.size(); ++index) {
-                const auto& widget = config.widgets[index];
-                settings.SetInt(SecondaryOledWidgetKey(index, "type"),
-                                static_cast<int>(widget.type));
-                settings.SetInt(SecondaryOledWidgetKey(index, "size"),
-                                static_cast<int>(widget.size));
-                settings.SetBool(SecondaryOledWidgetKey(index, "on"), widget.enabled);
-                settings.SetInt(SecondaryOledWidgetKey(index, "mode"), widget.mode);
-            }
-        });
-    }
-#endif
 
     bool ToggleStatusLight() {
         const int current = status_light_brightness_.load();
@@ -1616,17 +1471,10 @@ private:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     bool QueueTemporaryOledText(const std::string& text, int duration_ms) {
         const std::string normalized = NormalizeTemporaryText(text, 48);
-        if (normalized.empty() || !secondary_oled_.IsAvailable()) {
+        if (normalized.empty()) {
             return false;
         }
-        const int safe_duration = std::clamp(duration_ms, 500, 60000);
-        Application::GetInstance().Schedule(
-            [this, normalized]() { secondary_oled_.ShowTemporaryText(normalized); });
-        if (oled_text_reset_timer_ != nullptr) {
-            esp_timer_stop(oled_text_reset_timer_);
-            ESP_ERROR_CHECK(esp_timer_start_once(oled_text_reset_timer_, safe_duration * 1000ULL));
-        }
-        return true;
+        return secondary_display_.QueueTemporaryText(normalized, duration_ms);
     }
 #endif
 
@@ -1664,21 +1512,6 @@ private:
             .skip_unhandled_events = true,
         };
         ESP_ERROR_CHECK(esp_timer_create(&face_args, &face_reset_timer_));
-#ifdef SECONDARY_OLED_I2C_ADDRESS
-        esp_timer_create_args_t oled_args = {
-            .callback =
-                [](void* arg) {
-                    auto* self = static_cast<DeskRobotBoard*>(arg);
-                    Application::GetInstance().Schedule(
-                        [self]() { self->secondary_oled_.ClearTemporaryText(); });
-                },
-            .arg = this,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "oled_text_reset",
-            .skip_unhandled_events = true,
-        };
-        ESP_ERROR_CHECK(esp_timer_create(&oled_args, &oled_text_reset_timer_));
-#endif
         esp_timer_create_args_t light_args = {
             .callback =
                 [](void* arg) {
@@ -2038,28 +1871,35 @@ private:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         if (action == "oled_flip" || action == "oled_contrast" || action == "oled_brand" ||
             action == "oled_prefix") {
-            SecondaryOled::Config config = secondary_oled_.GetConfig();
+            SecondaryOled::Config config = secondary_display_.GetConfig();
             if (action == "oled_flip") {
                 config.flip_180 = !config.flip_180;
             } else if (action == "oled_contrast") {
                 config.contrast = static_cast<uint8_t>(std::clamp(duration_ms, 0, 255));
             } else if (action == "oled_brand") {
-                config.brand = NormalizeOledText(text, "Desk Robot");
+                config.brand =
+                    SecondaryDisplayController::NormalizeConfigText(text, "Desk Robot");
             } else {
-                config.distance_prefix = NormalizeOledText(text, "Dist");
+                config.distance_prefix =
+                    SecondaryDisplayController::NormalizeConfigText(text, "Dist");
             }
-            QueueSecondaryOledConfig(config);
+            secondary_display_.QueueConfig(config);
             message = "OLED settings updated";
             return true;
         }
-        const int enabled_index = SecondaryOledWidgetActionIndex(action, "oled_widget_on_");
-        const int size_index = SecondaryOledWidgetActionIndex(action, "oled_widget_size_");
-        const int mode_index = SecondaryOledWidgetActionIndex(action, "oled_widget_mode_");
-        const int up_index = SecondaryOledWidgetActionIndex(action, "oled_widget_up_");
-        const int down_index = SecondaryOledWidgetActionIndex(action, "oled_widget_down_");
+        const int enabled_index =
+            SecondaryDisplayController::WidgetActionIndex(action, "oled_widget_on_");
+        const int size_index =
+            SecondaryDisplayController::WidgetActionIndex(action, "oled_widget_size_");
+        const int mode_index =
+            SecondaryDisplayController::WidgetActionIndex(action, "oled_widget_mode_");
+        const int up_index =
+            SecondaryDisplayController::WidgetActionIndex(action, "oled_widget_up_");
+        const int down_index =
+            SecondaryDisplayController::WidgetActionIndex(action, "oled_widget_down_");
         if (enabled_index >= 0 || size_index >= 0 || mode_index >= 0 || up_index >= 0 ||
             down_index >= 0) {
-            SecondaryOled::Config config = secondary_oled_.GetConfig();
+            SecondaryOled::Config config = secondary_display_.GetConfig();
             if (enabled_index >= 0) {
                 config.widgets[enabled_index].enabled = duration_ms != 0;
             } else if (size_index >= 0) {
@@ -2077,7 +1917,7 @@ private:
                 message = "Widget is already at that edge";
                 return false;
             }
-            QueueSecondaryOledConfig(config);
+            secondary_display_.QueueConfig(config);
             message = "OLED widget layout updated";
             return true;
         }
@@ -2346,11 +2186,12 @@ private:
                                         MotionGestureName(motion_gesture_.load()));
 #endif
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-                cJSON_AddBoolToObject(root, "oled_available", secondary_oled_.IsAvailable());
-                const SecondaryOled::Config oled_config = secondary_oled_.GetConfig();
+                cJSON_AddBoolToObject(root, "oled_available", secondary_display_.IsAvailable());
+                const SecondaryOled::Config oled_config = secondary_display_.GetConfig();
                 cJSON_AddBoolToObject(root, "oled_flipped", oled_config.flip_180);
                 cJSON_AddNumberToObject(root, "oled_contrast", oled_config.contrast);
-                cJSON_AddNumberToObject(root, "oled_page_count", secondary_oled_.GetPageCount());
+                cJSON_AddNumberToObject(root, "oled_page_count",
+                                        secondary_display_.GetPageCount());
                 cJSON_AddStringToObject(root, "oled_brand", oled_config.brand.c_str());
                 cJSON_AddStringToObject(root, "oled_distance_prefix",
                                         oled_config.distance_prefix.c_str());
@@ -2361,8 +2202,8 @@ private:
                         if (item == nullptr) {
                             break;
                         }
-                        cJSON_AddStringToObject(item, "type",
-                                                SecondaryOledWidgetTypeName(widget.type));
+                        cJSON_AddStringToObject(
+                            item, "type", SecondaryDisplayController::WidgetTypeName(widget.type));
                         cJSON_AddBoolToObject(item, "enabled", widget.enabled);
                         cJSON_AddNumberToObject(item, "size", static_cast<int>(widget.size));
                         cJSON_AddNumberToObject(item, "mode", widget.mode);

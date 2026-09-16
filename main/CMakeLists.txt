@@ -67,6 +67,8 @@ set(BUILTIN_ICON_FONT font_material_symbols_20_4)
 list(APPEND SOURCES
     "robot/desk_robot_board.cc"
     "robot/camera/desk_robot_camera.cc"
+    "robot/display/secondary_display_controller.cc"
+    "robot/display/secondary_oled.cc"
     "robot/power/battery_controller.cc"
     "robot/power/battery_soc_estimator.cc"
     "robot/power/ina219_power_monitor.cc"
@@ -74,7 +76,6 @@ list(APPEND SOURCES
     "robot/mochan_display.cc"
     "robot/motor_controller.cc"
     "robot/robot_web_control_server.cc"
-    "robot/secondary_oled.cc"
     "robot/mpu6050_motion_sensor.cc"
     "audio/engines/afe_audio_engine.cc"
     "audio/wake_words/custom_wake_word.cc"
