@@ -2,8 +2,6 @@
 
 #include "config/tuning.h"
 
-#include <esp_random.h>
-
 #include <cmath>
 
 MotionReactions::Gesture MotionReactions::Classify(const Mpu6050MotionSensor::Sample& sample,
@@ -75,26 +73,6 @@ void MotionReactions::CompleteDecision(bool accepted, int64_t now_us) {
     }
     candidate_gesture_ = Gesture::kCalibrating;
     candidate_samples_ = 0;
-}
-
-bool MotionReactions::GetEmotionTurn(const std::string& emotion, float& target_deg,
-                                     uint8_t& intensity_percent) const {
-    if (emotion == "thinking" || emotion == "suspicious") {
-        target_deg = 8.0f + static_cast<float>(esp_random() % 5);
-        intensity_percent = 68;
-    } else if (emotion == "confused") {
-        target_deg = 10.0f + static_cast<float>(esp_random() % 5);
-        intensity_percent = 72;
-    } else if (emotion == "surprised" || emotion == "shocked") {
-        target_deg = 7.0f + static_cast<float>(esp_random() % 4);
-        intensity_percent = 85;
-    } else {
-        return false;
-    }
-    if ((esp_random() & 1U) == 0) {
-        target_deg = -target_deg;
-    }
-    return true;
 }
 
 const char* MotionReactions::GestureName(Gesture gesture) {

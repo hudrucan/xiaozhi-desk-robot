@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <string>
 
 class MotionReactions {
 public:
@@ -37,9 +36,6 @@ public:
                       bool can_animate, bool face_busy, int64_t now_us);
     void CompleteDecision(bool accepted, int64_t now_us);
     Gesture GetGesture() const { return gesture_.load(); }
-    bool GetEmotionTurn(const std::string& emotion, float& target_deg,
-                        uint8_t& intensity_percent) const;
-
     static const char* GestureName(Gesture gesture);
 
 private:

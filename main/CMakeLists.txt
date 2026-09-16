@@ -73,6 +73,7 @@ list(APPEND SOURCES
     "robot/display/secondary_display_controller.cc"
     "robot/display/secondary_oled.cc"
     "robot/mcp/robot_mcp_tools.cc"
+    "robot/motion/expressive_motion_planner.cc"
     "robot/motion/gyro_turn_controller.cc"
     "robot/motion/motor_controller.cc"
     "robot/motion/motion_reactions.cc"
