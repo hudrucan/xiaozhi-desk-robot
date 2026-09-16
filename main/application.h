@@ -175,6 +175,10 @@ private:
     bool asr_turn_config_valid_ = false;
     AsrProvider active_asr_provider_ = AsrProvider::kXiaozhi;
     uint32_t gemini_asr_turn_id_ = 0;
+    std::atomic_bool gemini_vad_turn_active_{false};
+    std::atomic_bool gemini_vad_speech_started_{false};
+    std::atomic_bool gemini_vad_end_pending_{false};
+    bool gemini_audio_stream_end_requested_ = false;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -189,8 +193,11 @@ private:
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
     void ContinueOpenAudioChannel(ListeningMode mode);
+    bool PrimeAudioChannelForGemini();
     void BeginWakeWordInvoke(const std::string& wake_word);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+    bool QueueTextChat(std::string text, bool require_active_conversation,
+                       std::string& message);
     void RunTextChat(const std::string& text);
     void EmitTextChatEvent(const std::string& event, const std::string& text = "");
     void CompleteTextChatAfterPlayback();
@@ -198,6 +205,7 @@ private:
     void StartListeningAudio();
     void StartGeminiAsrTurn(const AsrConfig& config);
     void HandleGeminiAsrReady(uint32_t turn_id);
+    void HandleGeminiVadChange();
     void HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript);
     void HandleGeminiAsrError(uint32_t turn_id, std::string error);
     void StopGeminiAsrTurn();

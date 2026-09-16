@@ -26,7 +26,6 @@ constexpr char kWebSocketEndpoint[] =
     "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=";
 constexpr char kAudioMimeType[] = "audio/pcm;rate=16000";
 constexpr size_t kMaxVocabularyTerms = 1000;
-constexpr size_t kFirstResponsePreviewBytes = 160;
 
 #if defined(CONFIG_LOG_DYNAMIC_LEVEL_CONTROL) && CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
 std::mutex sensitive_websocket_connect_mutex;
@@ -156,44 +155,6 @@ bool IsValidUtf8(std::string_view value) {
     return true;
 }
 
-void LogFirstServerMessage(const char* data, size_t length, bool binary,
-                           std::string_view secret) {
-    char first_bytes_hex[3 * 8] = {};
-    size_t hex_offset = 0;
-    const size_t hex_length = data == nullptr ? 0 : std::min<size_t>(length, 8);
-    for (size_t i = 0; i < hex_length; ++i) {
-        const int written = snprintf(first_bytes_hex + hex_offset,
-                                     sizeof(first_bytes_hex) - hex_offset, "%02X%s",
-                                     static_cast<unsigned char>(data[i]),
-                                     i + 1 < hex_length ? " " : "");
-        if (written <= 0) {
-            break;
-        }
-        hex_offset += static_cast<size_t>(written);
-    }
-
-    bool printable = data != nullptr && length > 0;
-    for (size_t i = 0; printable && i < length; ++i) {
-        const auto byte = static_cast<unsigned char>(data[i]);
-        printable = (byte >= 0x20 && byte <= 0x7E) || byte == '\r' || byte == '\n' ||
-                    byte == '\t';
-    }
-
-    std::string preview;
-    if (printable) {
-        preview.assign(data, std::min(length, kFirstResponsePreviewBytes));
-        std::replace_if(preview.begin(), preview.end(),
-                        [](char value) { return value == '\r' || value == '\n' || value == '\t'; },
-                        ' ');
-        preview = RedactSecret(std::move(preview), secret);
-    }
-
-    // TEMP: Remove after the first Gemini hardware response has been verified.
-    ESP_LOGI(TAG, "Gemini first response binary=%d length=%zu first8=%s%s%s", binary,
-             length, first_bytes_hex, printable ? " preview=" : "",
-             printable ? preview.c_str() : "");
-}
-
 }  // namespace
 
 GeminiTranscribeClient::GeminiTranscribeClient() {
@@ -252,7 +213,6 @@ bool GeminiTranscribeClient::Start(const AsrConfig& config, Callbacks callbacks)
     remote_disconnected_ = false;
     setup_complete_ = false;
     final_callback_sent_ = false;
-    first_server_message_logged_.store(false);
     pcm_drop_count_.store(0);
     connect_latency_ms_.store(0);
     state_.store(State::kIdle);
@@ -431,6 +391,7 @@ void GeminiTranscribeClient::WorkerLoop() {
     }
 
     int64_t setup_deadline_us = 0;
+    int64_t final_deadline_us = 0;
     if (!failed && !IsCancelRequested()) {
         std::string setup_error;
         const std::string setup_message = BuildSetupMessage(setup_error);
@@ -486,6 +447,10 @@ void GeminiTranscribeClient::WorkerLoop() {
                 final_received = true;
             } else if (result == ServerMessageResult::kError) {
                 failed = true;
+            } else if (state_.load() == State::kEnding && final_deadline_us > 0 &&
+                       esp_timer_get_time() >= final_deadline_us) {
+                Fail("Gemini final transcript timed out");
+                failed = true;
             }
             continue;
         }
@@ -502,6 +467,12 @@ void GeminiTranscribeClient::WorkerLoop() {
         if (!setup_complete_ && setup_deadline_us > 0 &&
             esp_timer_get_time() >= setup_deadline_us) {
             Fail("Gemini setup timed out");
+            failed = true;
+            continue;
+        }
+        if (state_.load() == State::kEnding && final_deadline_us > 0 &&
+            esp_timer_get_time() >= final_deadline_us) {
+            Fail("Gemini final transcript timed out");
             failed = true;
             continue;
         }
@@ -536,6 +507,7 @@ void GeminiTranscribeClient::WorkerLoop() {
                 std::lock_guard<std::mutex> lock(mutex_);
                 audio_stream_end_requested_ = false;
             }
+            final_deadline_us = esp_timer_get_time() + kFinalTranscriptTimeoutUs;
             SetState(State::kEnding);
             ESP_LOGI(TAG, "Gemini ASR audioStreamEnd sent");
         }
@@ -560,9 +532,6 @@ void GeminiTranscribeClient::WorkerLoop() {
 }
 
 void GeminiTranscribeClient::QueueServerMessage(const char* data, size_t length, bool binary) {
-    if (!first_server_message_logged_.exchange(true)) {
-        LogFirstServerMessage(data, length, binary, config_.gemini_api_key);
-    }
     if (data == nullptr || length == 0 || length > kMaxServerMessageBytes) {
         QueueNetworkError("Invalid Gemini response size");
         return;

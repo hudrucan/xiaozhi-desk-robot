@@ -4,14 +4,31 @@
 #include "settings.h"
 
 #include <esp_log.h>
+#include <freertos/task.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <charconv>
 #include <cstring>
+#include <iterator>
 #include <system_error>
 #include "assets/lang_config.h"
 
 #define TAG "MQTT"
+
+namespace {
+
+constexpr int kAudioPrimeDelayMs = 50;
+constexpr uint32_t kAudioPrimeSampleRate = 16000;
+constexpr uint32_t kAudioPrimeFrameDurationMs = 60;
+
+// Valid 60 ms Opus frame encoded from zero-valued 16 kHz mono PCM. It opens
+// the UDP return route without forwarding microphone audio to Xiaozhi ASR.
+constexpr uint8_t kAudioPrimeOpusSilence[] = {
+    0x58, 0x02, 0xF9, 0x30, 0x4D, 0xBB, 0x0D, 0xE5, 0xE3, 0x92,
+    0x09, 0x89, 0x38, 0xEB, 0xCA, 0xE1, 0xB1, 0xD1, 0xDD, 0x85,
+};
+
+}  // namespace
 
 MqttProtocol::MqttProtocol() {
     event_group_handle_ = xEventGroupCreate();
@@ -244,6 +261,23 @@ bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
 
     // Send without holding channel_mutex_ (see above).
     return udp->Send(encrypted) > 0;
+}
+
+bool MqttProtocol::PrimeAudioChannel() {
+    auto packet = std::make_unique<AudioStreamPacket>();
+    packet->sample_rate = kAudioPrimeSampleRate;
+    packet->frame_duration = kAudioPrimeFrameDurationMs;
+    packet->timestamp = 0;
+    packet->payload.assign(std::begin(kAudioPrimeOpusSilence),
+                           std::end(kAudioPrimeOpusSilence));
+    if (!SendAudio(std::move(packet))) {
+        return false;
+    }
+
+    // Let the gateway bind the UDP source before a detect/text request can
+    // cause TTS audio to be sent back to the device.
+    vTaskDelay(pdMS_TO_TICKS(kAudioPrimeDelayMs));
+    return true;
 }
 
 void MqttProtocol::CloseAudioChannel(bool send_goodbye) {

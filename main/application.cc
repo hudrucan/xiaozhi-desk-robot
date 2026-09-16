@@ -17,7 +17,6 @@
 #include <cJSON.h>
 #include <algorithm>
 #include <cstring>
-#include <iterator>
 #include <limits>
 #include <mutex>
 
@@ -28,9 +27,6 @@ namespace {
 constexpr int64_t kTextChatTimeoutUs = 60LL * 1000 * 1000;
 constexpr int64_t kTextChatTtsStopGraceUs = 750LL * 1000;
 constexpr int64_t kTextChatAudioQuietGraceUs = 300LL * 1000;
-constexpr int kTextChatUdpPrimeDelayMs = 50;
-constexpr uint32_t kTextChatUdpPrimeSampleRate = 16000;
-constexpr uint32_t kTextChatUdpPrimeFrameDurationMs = 60;
 
 // Official MQTT validates each listen/detect payload independently, including
 // while a conversation is already active. Keep native detect/text only for
@@ -106,15 +102,6 @@ void RegisterWebChatMcpTool(McpServer& mcp_server) {
             return pending;
         });
 }
-
-// Valid Opus frame containing 60 ms of silence at 16 kHz mono.
-// It is sent only to establish the MQTT gateway's UDP return path when a
-// typed conversation starts from Idle. Do not replace this with microphone
-// audio: typed chat must not leak captured audio into the user turn.
-constexpr uint8_t kTextChatUdpPrimeOpusSilence[] = {
-    0x58, 0x02, 0xF9, 0x30, 0x4D, 0xBB, 0x0D, 0xE5, 0xE3, 0x92,
-    0x09, 0x89, 0x38, 0xEB, 0xCA, 0xE1, 0xB1, 0xD1, 0xDD, 0x85,
-};
 
 }  // namespace
 
@@ -211,6 +198,13 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
+        if (gemini_vad_turn_active_.load()) {
+            if (speaking) {
+                gemini_vad_speech_started_.store(true);
+            } else if (gemini_vad_speech_started_.load()) {
+                gemini_vad_end_pending_.store(true);
+            }
+        }
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     callbacks.on_playback_drained = [this]() {
@@ -376,6 +370,7 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_VAD_CHANGE) {
+            HandleGeminiVadChange();
             if (GetDeviceState() == kDeviceStateListening) {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
@@ -1015,7 +1010,9 @@ void Application::HandleToggleChatEvent() {
             Schedule([this, mode]() { ContinueOpenAudioChannel(mode); });
             return;
         }
-        SetListeningMode(mode);
+        if (PrimeAudioChannelForGemini()) {
+            SetListeningMode(mode);
+        }
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
     } else if (state == kDeviceStateListening) {
@@ -1045,7 +1042,22 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
         }
     }
 
-    SetListeningMode(mode);
+    if (PrimeAudioChannelForGemini()) {
+        SetListeningMode(mode);
+    }
+}
+
+bool Application::PrimeAudioChannelForGemini() {
+    if (GetAsrTurnConfig().provider != AsrProvider::kGemini) {
+        return true;
+    }
+    if (protocol_ && protocol_->PrimeAudioChannel()) {
+        return true;
+    }
+
+    last_error_message_ = "Could not prime conversation audio channel";
+    xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+    return false;
 }
 
 void Application::HandleStartListeningEvent() {
@@ -1077,7 +1089,9 @@ void Application::HandleStartListeningEvent() {
             Schedule([this]() { ContinueOpenAudioChannel(kListeningModeManualStop); });
             return;
         }
-        SetListeningMode(kListeningModeManualStop);
+        if (PrimeAudioChannelForGemini()) {
+            SetListeningMode(kListeningModeManualStop);
+        }
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
         SetListeningMode(kListeningModeManualStop);
@@ -1198,6 +1212,9 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     if (GetAsrTurnConfig().provider == AsrProvider::kGemini) {
         // The backend channel remains open for the later typed-text bridge, but
         // Gemini turns must not start or feed the Xiaozhi ASR session.
+        if (!PrimeAudioChannelForGemini()) {
+            return;
+        }
         play_popup_on_listening_ = true;
         SetListeningMode(GetDefaultListeningMode());
         return;
@@ -1356,6 +1373,10 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     audio_service_.EnableWakeWordDetection(false);
+    gemini_vad_turn_active_.store(false);
+    gemini_vad_speech_started_.store(false);
+    gemini_vad_end_pending_.store(false);
+    gemini_audio_stream_end_requested_ = false;
 
     active_asr_provider_ = AsrProvider::kGemini;
     uint32_t turn_id = ++gemini_asr_turn_id_;
@@ -1370,8 +1391,8 @@ void Application::StartGeminiAsrTurn(const AsrConfig& config) {
         }
     };
     callbacks.on_final_transcript = [this, turn_id](const std::string& transcript) {
-        Schedule([this, turn_id, transcript]() {
-            HandleGeminiAsrFinal(turn_id, transcript);
+        Schedule([this, turn_id, transcript]() mutable {
+            HandleGeminiAsrFinal(turn_id, std::move(transcript));
         });
     };
     callbacks.on_error = [this, turn_id](const std::string& error) {
@@ -1399,10 +1420,41 @@ void Application::HandleGeminiAsrReady(uint32_t turn_id) {
     // Publish the client route before capture starts. AudioService performs
     // only a bounded non-blocking queue handoff from its AFE output callback.
     play_popup_on_listening_ = false;
+    gemini_vad_speech_started_.store(false);
+    gemini_vad_end_pending_.store(false);
+    gemini_audio_stream_end_requested_ = false;
+    gemini_vad_turn_active_.store(true);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, &gemini_asr_client_);
     audio_service_.EnableVoiceProcessing(true);
     ConfigureWakeWordForListening();
     ESP_LOGI(TAG, "Gemini ASR ready; voice processing enabled");
+}
+
+void Application::HandleGeminiVadChange() {
+    if (!gemini_vad_end_pending_.exchange(false) ||
+        !gemini_vad_turn_active_.exchange(false) ||
+        active_asr_provider_ != AsrProvider::kGemini ||
+        GetDeviceState() != kDeviceStateListening ||
+        gemini_audio_stream_end_requested_) {
+        return;
+    }
+
+    // Stop the realtime producer before asking the worker to flush its bounded
+    // PCM queue. The WebSocket send remains entirely on the Gemini worker task.
+    ESP_LOGI(TAG, "Gemini ASR VAD speech end");
+    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
+    gemini_audio_stream_end_requested_ = true;
+
+    if (!gemini_asr_client_.SendAudioStreamEnd()) {
+        const auto state = gemini_asr_client_.state();
+        if (state != GeminiTranscribeClient::State::kEnding &&
+            state != GeminiTranscribeClient::State::kFinalized &&
+            state != GeminiTranscribeClient::State::kClosed) {
+            ESP_LOGW(TAG, "Gemini ASR audioStreamEnd request ignored in state=%s",
+                     GeminiTranscribeClient::StateName(state));
+        }
+    }
 }
 
 void Application::HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript) {
@@ -1414,8 +1466,16 @@ void Application::HandleGeminiAsrFinal(uint32_t turn_id, std::string transcript)
     ESP_LOGI(TAG, "Gemini ASR final received bytes=%u",
              static_cast<unsigned>(transcript.size()));
     StopGeminiAsrTurn();
-    if (GetDeviceState() == kDeviceStateListening) {
-        SetDeviceState(kDeviceStateIdle);
+    ResetAsrTurnConfig();
+
+    std::string message;
+    if (!QueueTextChat(std::move(transcript), true, message)) {
+        if (text_chat_pending_.load()) {
+            ESP_LOGW(TAG, "Gemini ASR final superseded by another text turn");
+            return;
+        }
+        last_error_message_ = "Gemini ASR: " + message;
+        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     }
 }
 
@@ -1437,6 +1497,10 @@ void Application::StopGeminiAsrTurn() {
 
     // Stop capture before clearing its route. An in-flight callback may still
     // finish against the live client; only then does the worker receive Cancel().
+    gemini_vad_turn_active_.store(false);
+    gemini_vad_speech_started_.store(false);
+    gemini_vad_end_pending_.store(false);
+    gemini_audio_stream_end_requested_ = false;
     audio_service_.EnableVoiceProcessing(false);
     audio_service_.SetAsrProvider(AsrProvider::kGemini, nullptr);
     active_asr_provider_ = AsrProvider::kXiaozhi;
@@ -1617,12 +1681,24 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
 }
 
 bool Application::SubmitTextChat(const std::string& text, std::string& message) {
+    return QueueTextChat(text, false, message);
+}
+
+bool Application::QueueTextChat(std::string text, bool require_active_conversation,
+                                std::string& message) {
     if (text.empty()) {
         message = "Text chat input is empty";
         return false;
     }
     const auto state = GetDeviceState();
-    if (state != kDeviceStateIdle && state != kDeviceStateListening) {
+    if (require_active_conversation &&
+        (state != kDeviceStateListening || !protocol_ ||
+         !protocol_->IsAudioChannelOpened() || protocol_->session_id().empty())) {
+        message = "Active conversation is not available";
+        return false;
+    }
+    if (!require_active_conversation && state != kDeviceStateIdle &&
+        state != kDeviceStateListening) {
         message = "Text chat requires Idle or Listening";
         return false;
     }
@@ -1640,6 +1716,10 @@ bool Application::SubmitTextChat(const std::string& text, std::string& message) 
     text_chat_last_audio_us_.store(0);
     text_chat_tts_stop_us_.store(0);
 
+    if (require_active_conversation) {
+        EmitTextChatEvent("user", text);
+    }
+
     const size_t codepoints = CountUtf8Codepoints(text);
     if (ShouldUseWebChatMcpBridge(text)) {
         g_web_chat_bridge.Arm(text);
@@ -1649,7 +1729,7 @@ bool Application::SubmitTextChat(const std::string& text, std::string& message) 
         Schedule([this]() { RunTextChat(kTextChatMcpTrigger); });
     } else {
         g_web_chat_bridge.Clear();
-        Schedule([this, text]() { RunTextChat(text); });
+        Schedule([this, text = std::move(text)]() { RunTextChat(text); });
     }
 
     message = "Text chat queued";
@@ -1761,6 +1841,10 @@ void Application::RunTextChat(const std::string& text) {
         // listen/start or waiting for ASR. A fresh ASR turn starts only after
         // the typed response has finished playing.
         pending_listening_start_ = false;
+        if (active_asr_provider_ == AsrProvider::kGemini) {
+            StopGeminiAsrTurn();
+            ResetAsrTurnConfig();
+        }
         audio_service_.EnableVoiceProcessing(false);
     }
 
@@ -1812,21 +1896,10 @@ void Application::RunTextChat(const std::string& text) {
         // the UDP return path before detect/text is injected.
         protocol_->SendStartListening(listening_mode_);
 
-        auto prime_packet = std::make_unique<AudioStreamPacket>();
-        prime_packet->sample_rate = kTextChatUdpPrimeSampleRate;
-        prime_packet->frame_duration = kTextChatUdpPrimeFrameDurationMs;
-        prime_packet->timestamp = 0;
-        prime_packet->payload.assign(std::begin(kTextChatUdpPrimeOpusSilence),
-                                     std::end(kTextChatUdpPrimeOpusSilence));
-
-        if (!protocol_->SendAudio(std::move(prime_packet))) {
+        if (!protocol_->PrimeAudioChannel()) {
             reject("UDP audio prime failed", true, true);
             return;
         }
-
-        // Give the UDP gateway a short head start so it can bind the source
-        // address before the MQTT detect/text control message arrives.
-        vTaskDelay(pdMS_TO_TICKS(kTextChatUdpPrimeDelayMs));
 
         audio_service_.EnableVoiceProcessing(false);
         audio_service_.EnableWakeWordDetection(false);

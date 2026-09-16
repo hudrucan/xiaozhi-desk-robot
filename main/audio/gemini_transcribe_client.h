@@ -77,6 +77,7 @@ private:
     static constexpr size_t kSendChunkSamples = 1600;  // 100 ms at 16 kHz.
     static constexpr size_t kMaxPcmFrameSamples = 3200;
     static constexpr int64_t kSetupTimeoutUs = 10LL * 1000 * 1000;
+    static constexpr int64_t kFinalTranscriptTimeoutUs = 10LL * 1000 * 1000;
 
     enum class ServerMessageResult {
         kContinue,
@@ -92,7 +93,6 @@ private:
     std::atomic<State> state_{State::kIdle};
     std::atomic<bool> worker_running_{false};
     std::atomic<bool> worker_created_{false};
-    std::atomic<bool> first_server_message_logged_{false};
     std::atomic<uint32_t> pcm_drop_count_{0};
     std::atomic<uint32_t> connect_latency_ms_{0};
 
