@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <meta name="theme-color" content="#0b0906" />
+    <title>Xiaozhi Desk Robot</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <div class="brand">
+          <div class="mark">
+            <span class="eyes"><i></i><i></i></span>
+          </div>
+          <div>
+            <h1>Xiaozhi Desk Robot</h1>
+            <div class="sub">Local control · port 8080</div>
+          </div>
+        </div>
+        <div id="online" class="online"><i></i><span>Connecting</span></div>
+      </header>
+      <div class="dashboard">
+        <div class="column left-column">
+          <section class="card">
+            <div class="section-title">
+              <strong>Device</strong><span id="version">—</span>
+            </div>
+            <div class="device-grid">
+              <div class="device-row">
+                <span>Network</span><b id="ssid">—</b>
+              </div>
+              <div class="device-row">
+                <span>Signal</span><b id="rssi">—</b>
+              </div>
+              <div class="device-row">
+                <span>IP address</span><b id="ip">—</b>
+              </div>
+              <div class="device-row">
+                <span>Internal RAM</span><b id="sram">—</b>
+              </div>
+              <div class="device-row">
+                <span>PSRAM free</span><b id="psram">—</b>
+              </div>
+              <div class="device-row">
+                <span>Camera health</span><b id="cameraHealth">—</b>
+              </div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="section-title">
+              <strong>Robot status</strong><span id="uptime">—</span>
+            </div>
+            <div class="status">
+              <div class="metric">
+                <div class="label">Assistant</div>
+                <div class="value" id="state">—</div>
+              </div>
+              <div class="metric">
+                <div class="label">Camera</div>
+                <div class="value" id="camera">—</div>
+              </div>
+              <div class="metric">
+                <div class="label">Floor distance</div>
+                <div class="value" id="distance">—</div>
+              </div>
+              <div class="metric">
+                <div class="label">Cliff sensor</div>
+                <div class="value" id="rangeState">Checking</div>
+              </div>
+              <div class="metric">
+                <div class="label">Battery</div>
+                <div class="value" id="battery">Checking</div>
+              </div>
+              <div class="metric">
+                <div class="label">Current · power</div>
+                <div class="value" id="power">—</div>
+              </div>
+              <div class="metric wide">
+                <div class="label">Motion sensor</div>
+                <div class="value" id="motionSensor">Checking</div>
+              </div>
+              <div class="metric wide">
+                <div class="label">Secondary OLED</div>
+                <div class="value health" id="oledState">
+                  <i class="dot"></i><span>Checking</span>
+                </div>
+              </div>
+            </div>
+            <div class="capacity-test">
+              <div class="capacity-result">
+                <b id="capacityResult">0.0 mAh</b
+                ><small id="capacityState">Capacity test not started</small
+                ><small id="socState">SoC waiting for INA219</small>
+              </div>
+              <div class="capacity-buttons">
+                <button id="capacityStart">Start</button
+                ><button id="capacityStop">Stop</button
+                ><button id="capacityReset" class="reset">Reset</button>
+              </div>
+            </div>
+            <div class="threshold">
+              <div class="threshold-head">
+                <span>Cliff threshold</span><b id="cliffValue">150 mm</b>
+              </div>
+              <input
+                id="cliffThreshold"
+                type="range"
+                min="50"
+                max="500"
+                step="5"
+                value="150"
+              />
+            </div>
+            <div
+              class="segment-toggles"
+              style="margin-top: 11px; grid-template-columns: 1fr 1fr"
+            >
+              <label class="toggle"
+                ><input id="motionEmotions" type="checkbox" checked />MPU face
+                reactions</label
+              ><label class="toggle"
+                ><input id="emotionMovement" type="checkbox" />Emotion
+                movement</label
+              >
+            </div>
+          </section>
+          <section class="card">
+            <div class="section-title">
+              <strong>Audio &amp; lighting</strong>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Speaker</b><small>Output volume</small></span
+              ><input
+                id="speakerVolume"
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value="70"
+              /><span class="audio-value" id="speakerValue">70%</span>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Microphone</b><small>Input gain</small></span
+              ><input
+                id="microphoneGain"
+                type="range"
+                min="1"
+                max="3"
+                step="1"
+                value="1"
+              /><span class="audio-value" id="microphoneValue">1×</span>
+              <div class="vu-wrap">
+                <div class="vu"><i id="micLevel"></i></div>
+                <span class="clip" id="micClip">LIVE</span>
+              </div>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Screen</b><small>Backlight</small></span
+              ><input
+                id="screenBrightness"
+                type="range"
+                min="10"
+                max="100"
+                step="5"
+                value="75"
+              /><span class="audio-value" id="screenValue">75%</span>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Status light</b><small>Edison LED · GPIO48</small></span
+              ><input
+                id="statusLightBrightness"
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value="100"
+              /><span class="audio-value" id="statusLightValue">100%</span>
+            </div>
+          </section>
+          <section class="card">
+            <div class="section-title">
+              <strong>ASR</strong><span id="asrStatus">Checking</span>
+            </div>
+            <div class="display-settings">
+              <label class="field">
+                <span>ASR provider</span>
+                <select id="asrProvider">
+                  <option value="xiaozhi">Xiaozhi ASR</option>
+                  <option value="gemini">Gemini ASR</option>
+                </select>
+              </label>
+              <label class="field wide">
+                <span>Gemini API key</span>
+                <input
+                  id="geminiApiKey"
+                  class="text-input"
+                  type="password"
+                  autocomplete="new-password"
+                  placeholder="Leave blank to keep saved key"
+                />
+              </label>
+            </div>
+            <div class="asr-actions">
+              <button id="saveAsr" class="log-button">Save Gemini key</button>
+              <button id="clearGeminiKey" class="log-button">
+                Clear Gemini key
+              </button>
+            </div>
+            <p class="asr-note">
+              Provider switches are saved immediately and apply from the next listening turn.
+              The API key is saved separately.
+            </p>
+          </section>
+          <section class="card">
+            <div class="section-title">
+              <strong>Emotions</strong><span>5-second preview</span>
+            </div>
+            <div class="emotion-grid">
+              <button class="emotion" data-emotion="neutral">Neutral</button
+              ><button class="emotion" data-emotion="happy">Happy</button
+              ><button class="emotion" data-emotion="bored">Bored</button
+              ><button class="emotion" data-emotion="laughing">Laughing</button
+              ><button class="emotion" data-emotion="funny">Funny</button
+              ><button class="emotion" data-emotion="sad">Sad</button
+              ><button class="emotion" data-emotion="angry">Angry</button
+              ><button class="emotion" data-emotion="crying">Crying</button
+              ><button class="emotion" data-emotion="loving">Loving</button
+              ><button class="emotion" data-emotion="embarrassed">
+                Embarrassed</button
+              ><button class="emotion" data-emotion="surprised">
+                Surprised</button
+              ><button class="emotion" data-emotion="shocked">Shocked</button
+              ><button class="emotion" data-emotion="thinking">Thinking</button
+              ><button class="emotion" data-emotion="winking">Winking</button
+              ><button class="emotion" data-emotion="cool">Cool</button
+              ><button class="emotion" data-emotion="relaxed">Relaxed</button
+              ><button class="emotion" data-emotion="delicious">
+                Delicious</button
+              ><button class="emotion" data-emotion="kissy">Kissy</button
+              ><button class="emotion" data-emotion="confident">
+                Confident</button
+              ><button class="emotion" data-emotion="sleepy">Sleepy</button
+              ><button class="emotion" data-emotion="silly">Silly</button
+              ><button class="emotion" data-emotion="confused">Confused</button
+              ><button class="emotion" data-emotion="suspicious">
+                Suspicious</button
+              ><button class="emotion" data-emotion="shake">Shake</button>
+            </div>
+          </section>
+        </div>
+        <div class="column center-column">
+          <section class="card">
+            <div class="section-title">
+              <strong>Drive</strong><span id="durationLabel">250 ms</span>
+            </div>
+            <div class="dpad">
+              <button
+                class="control rotate-left-90"
+                data-turn="-90"
+                data-label="90°"
+                aria-label="Rotate left 90 degrees"
+                title="Rotate left 90°"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M7.4 6.4 6 5 2 9l4 4 1.4-1.4L5.8 10H13a5 5 0 1 1-4.6 7H6.2a7 7 0 1 0 6.8-9H5.8z"
+                  />
+                </svg></button
+              ><button
+                class="control up"
+                data-drive="forward"
+                aria-label="Forward"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 4 4 12h5v8h6v-8h5z" />
+                </svg></button
+              ><button
+                class="control rotate-right-90"
+                data-turn="90"
+                data-label="90°"
+                aria-label="Rotate right 90 degrees"
+                title="Rotate right 90°"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M7.4 6.4 6 5 2 9l4 4 1.4-1.4L5.8 10H13a5 5 0 1 1-4.6 7H6.2a7 7 0 1 0 6.8-9H5.8z"
+                  />
+                </svg></button
+              ><button class="control left" data-drive="left" aria-label="Left">
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 4 4 12h5v8h6v-8h5z" />
+                </svg></button
+              ><button class="control stop" data-stop>STOP</button
+              ><button
+                class="control right"
+                data-drive="right"
+                aria-label="Right"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 4 4 12h5v8h6v-8h5z" />
+                </svg></button
+              ><button
+                class="control rotate-left-180"
+                data-turn="-180"
+                data-label="180°"
+                aria-label="Rotate left 180 degrees"
+                title="Rotate left 180°"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M7.4 6.4 6 5 2 9l4 4 1.4-1.4L5.8 10H13a5 5 0 1 1-4.6 7H6.2a7 7 0 1 0 6.8-9H5.8z"
+                  />
+                </svg></button
+              ><button
+                class="control down"
+                data-drive="backward"
+                aria-label="Backward"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 4 4 12h5v8h6v-8h5z" />
+                </svg></button
+              ><button
+                class="control rotate-right-180"
+                data-turn="180"
+                data-label="180°"
+                aria-label="Rotate right 180 degrees"
+                title="Rotate right 180°"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M7.4 6.4 6 5 2 9l4 4 1.4-1.4L5.8 10H13a5 5 0 1 1-4.6 7H6.2a7 7 0 1 0 6.8-9H5.8z"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div class="range-row">
+              <span>50 ms</span
+              ><input
+                id="duration"
+                type="range"
+                min="50"
+                max="5000"
+                step="50"
+                value="250"
+              /><span>5 sec</span>
+            </div>
+            <div class="range-row" style="margin-top: 12px">
+              <span>Speed</span
+              ><input
+                id="motorSpeed"
+                type="range"
+                min="55"
+                max="100"
+                step="5"
+                value="100"
+              /><span id="motorSpeedValue">100%</span>
+            </div>
+            <div class="motor-state">
+              <span>Motion <b id="motion">Stopped</b></span
+              ><span>Queue <b id="queue">0</b></span
+              ><span>Time <b id="motorTime">0 ms</b></span>
+            </div>
+            <div class="progress"><i id="danceProgress"></i></div>
+          </section>
+          <section class="card">
+            <div class="section-title">
+              <strong>Displays</strong><span>Saved automatically</span>
+            </div>
+            <div class="display-actions">
+              <button
+                class="action"
+                id="displayFlip"
+                data-action="display_flip"
+              >
+                <span class="icon">↕</span
+                ><span
+                  ><b>Main display</b><small>Rotate 180°</small></span
+                ></button
+              ><button class="action" id="oledFlip" data-action="oled_flip">
+                <span class="icon">↕</span
+                ><span><b>Secondary OLED</b><small>Rotate 180°</small></span>
+              </button>
+            </div>
+            <div class="threshold">
+              <div class="threshold-head">
+                <span>OLED contrast</span><b id="oledContrastValue">50%</b>
+              </div>
+              <input
+                id="oledContrast"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="50"
+              />
+            </div>
+            <div class="display-settings">
+              <div class="oled-designer">
+                <div class="oled-preview-head">
+                  <span>Layout preview</span><b id="oledPageCount">—</b>
+                </div>
+                <div id="oledPreview" class="oled-pages">
+                  <div class="oled-empty">Waiting for OLED configuration</div>
+                </div>
+                <div class="oled-preview-head">
+                  <span>Widgets · display order</span
+                  ><span>Use arrows to reorder</span>
+                </div>
+                <div id="oledWidgets" class="oled-widget-list"></div>
+              </div>
+            </div>
+          </section>
+          <p class="hint">
+            Local network only · tap a direction to run for the selected time ·
+            STOP cancels
+          </p>
+        </div>
+        <div class="column right-column">
+          <div class="control-stack">
+            <section class="card conversation-card">
+              <div class="conversation-head">
+                <strong>Conversation</strong>
+                <div class="conversation-actions">
+                  <span id="chatState" class="chat-state">Ready</span
+                  ><button
+                    id="chatClear"
+                    class="chat-clear"
+                    title="Clear local conversation history"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div id="conversationHistory" class="conversation-history">
+                <div class="conversation-empty">
+                  Type or speak to chat with Xiaozhi
+                </div>
+              </div>
+              <div id="chatError" class="chat-error"></div>
+              <div class="chat-compose">
+                <textarea
+                  id="chatInput"
+                  class="chat-input"
+                  rows="1"
+                  placeholder="Message Xiaozhi…"
+                  aria-label="Chat message"
+                ></textarea
+                ><button id="chatSend" class="chat-send" disabled>Send</button>
+                <div class="chat-meta">
+                  <span>Enter to send · Shift+Enter for newline</span
+                  ><span id="chatCount" class="chat-count">0 / 512</span>
+                </div>
+              </div>
+            </section>
+            <section id="safety" class="card safety">
+              <div>
+                <b>Table edge detected</b
+                ><small>Forward and turns are locked. Reverse only.</small>
+              </div>
+              <button data-stop>STOP</button>
+            </section>
+            <section class="card">
+              <div class="section-title">
+                <strong>Browser camera</strong><span>VGA · JPEG</span>
+              </div>
+              <div class="camera-body">
+                <div id="snapshot" class="snapshot">
+                  <span>No snapshot yet</span
+                  ><img id="snapshotImage" alt="Camera snapshot" />
+                </div>
+                <div class="camera-copy">
+                  <p>
+                    Still capture or a light ~1 FPS browser preview. Live mode
+                    pauses outside Idle.
+                  </p>
+                  <div class="camera-buttons">
+                    <button id="takeSnapshot" class="mini-button">
+                      Take photo</button
+                    ><button id="browserLive" class="mini-button">Live</button
+                    ><button
+                      id="liveCamera"
+                      class="mini-button"
+                      data-action="live_camera"
+                    >
+                      Screen preview</button
+                    ><button
+                      id="cameraFlip"
+                      class="mini-button"
+                      data-action="camera_flip"
+                    >
+                      Flip camera
+                    </button>
+                  </div>
+                  <div id="snapshotMeta" class="camera-meta">Camera ready</div>
+                </div>
+              </div>
+            </section>
+            <section class="card">
+              <div class="section-title">
+                <strong>Quick actions</strong><span id="danceState">Ready</span>
+              </div>
+              <div class="actions">
+                <button class="action" id="wakeAction" data-action="wake">
+                  <span class="icon">◉</span
+                  ><span
+                    ><b id="wakeLabel">Wake</b
+                    ><small>Start or stop conversation</small></span
+                  ></button
+                ><button
+                  class="action"
+                  id="idleAction"
+                  data-action="return_idle"
+                >
+                  <span class="icon">○</span
+                  ><span
+                    ><b>Return to idle</b
+                    ><small>Stop activity safely</small></span
+                  ></button
+                ><button class="action" id="danceAction" data-action="dance">
+                  <span class="icon">♪</span
+                  ><span
+                    ><b>Dance</b><small>30–50 randomized steps</small></span
+                  ></button
+                ><button
+                  class="action"
+                  id="lightsAction"
+                  data-action="lights_toggle"
+                >
+                  <span class="icon">☀</span
+                  ><span
+                    ><b>Status lights</b><small>Toggle Edison LEDs</small></span
+                  ></button
+                ><button class="action" data-action="audio_test">
+                  <span class="icon">♫</span
+                  ><span
+                    ><b>Audio test</b><small>Play a speaker tone</small></span
+                  ></button
+                ><button class="action danger" data-action="wifi_config">
+                  <span class="icon">⌁</span
+                  ><span
+                    ><b>Wi-Fi config</b
+                    ><small>Reconnect this robot</small></span
+                  ></button
+                ><button class="action danger" data-action="reboot">
+                  <span class="icon">↯</span
+                  ><span><b>Reboot</b><small>Restart this robot</small></span>
+                </button>
+              </div>
+            </section>
+          </div>
+          <section class="card log-card">
+            <div class="log-head">
+              <div class="log-state">
+                <i></i><span id="logState">Live system log</span
+                ><span id="errorBadge" class="badge">0</span>
+              </div>
+              <div class="log-tools">
+                <input
+                  id="logSearch"
+                  class="log-search"
+                  placeholder="Search logs"
+                /><select id="logFilter" class="log-select">
+                  <option value="all">All</option>
+                  <option value="error">Errors</option>
+                  <option value="warn">Warnings</option>
+                  <option value="info">Info</option></select
+                ><button id="pauseLog" class="log-button">Pause</button
+                ><button id="downloadLog" class="log-button">Save</button
+                ><button id="clearLog" class="log-button">Clear</button>
+              </div>
+            </div>
+            <pre id="logOutput" class="log-output">
+Waiting for system logs…</pre
+            >
+            <div class="log-foot">
+              <span id="logSize">16 KB device buffer</span
+              ><label class="auto-scroll"
+                ><input id="autoScroll" type="checkbox" checked />
+                Auto-scroll</label
+              >
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+    <button id="panicStop" class="panic-stop" data-stop>STOP MOTORS</button>
+    <div class="toast" id="toast"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

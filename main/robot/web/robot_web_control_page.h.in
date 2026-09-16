@@ -1,0 +1,5 @@
+#pragma once
+
+inline constexpr char kRobotWebControlPage[] = R"CONTROL(
+@ROBOT_WEB_CONTROL_PAGE@
+)CONTROL";
