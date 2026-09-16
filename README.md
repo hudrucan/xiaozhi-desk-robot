@@ -93,6 +93,9 @@ The robot-specific subsystem under `main/robot/` owns the motor
 controller, Mochan display, secondary OLED, typed MCP/Web adapters, editable Web UI,
 battery monitor/SoC, MPU6050 integration and other desk-robot behavior.
 
+`main/application.*` remains the central event/session integrator. The stateful Typed Web Chat
+lifecycle and its MCP bridge are isolated in `main/chat/text_chat_controller.*`.
+
 ## Typed Web Chat
 
 The local Web Control page can submit text directly into the **existing Xiaozhi
@@ -116,6 +119,9 @@ long typed message
 ```
 
 The Web UI accepts up to **512 Unicode codepoints**.
+
+The controller preserves the existing session, timeout/completion handling and listening
+recovery.
 
 When typed chat starts from Idle, the firmware sends one valid Opus silence frame first
 to establish the MQTT gateway's UDP return path. This prevents the first TTS response

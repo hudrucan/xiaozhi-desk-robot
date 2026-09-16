@@ -4,7 +4,7 @@ Updated: 2026-09-16
 
 Branch: `main`
 
-Remote state at handoff: `main` is 10 commits ahead of `origin/main`
+Remote state at handoff: `main` is 12 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -40,8 +40,9 @@ Commit each completed batch locally and do not push `origin`.
 | `c739c47` | Move Web Control UI to split embedded source | Build/browser/hardware not run |
 | `b809343` | Document Phase 6 adapter and Web UI ownership | Documentation only |
 | `5cd1d84` | Isolate expressive motion planning from the composition root | Build/hardware not run |
+| `98e8f44` | Extract Typed Web Chat state and orchestration from `Application` | Build/hardware not run |
 
-Commits `51da4de` through `5cd1d84` have not been pushed to `origin`.
+Commits `51da4de` through `98e8f44` have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -98,6 +99,15 @@ from `/`; no asset route or frontend toolchain was added.
 `MotorController::Status` is the typed motor snapshot. Its existing JSON contract is retained
 through `MotorController::StatusJson`.
 
+Typed Web Chat state, the long-message MCP bridge, timeout/completion handling and listening
+recovery now live in:
+
+- `main/chat/text_chat_controller.h`
+- `main/chat/text_chat_controller.cc`
+
+`Application` remains the session/event-loop integrator and exposes the existing typed-chat
+entry points. Its protocol callbacks now forward chat lifecycle events to the controller.
+
 ## Preserved contracts and invariants
 
 - Existing GPIO assignments and shared-bus wiring are unchanged.
@@ -110,11 +120,16 @@ through `MotorController::StatusJson`.
 - Web routes, request parameters and JSON keys are unchanged.
 - Robot MCP tool names, schemas and response formats are unchanged.
 - Both MQTT+UDP and WebSocket protocol implementations remain present.
+- Typed Web Chat still uses native detect for at most 12 Unicode codepoints and
+  `self.web_chat.consume_pending` for longer input.
+- Idle-origin typed chat still primes the MQTT+UDP return path with deterministic Opus silence,
+  never microphone audio, and normal listening resumes after the typed turn.
 - No board/release matrix or CI build workflow has been reintroduced.
 
 ## Latest unverified batch
 
-Commits `51da4de`, `75ee843`, `c739c47` and `5cd1d84` completed Phases 6A through 7.
+Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84` and `98e8f44` completed Phases 6A
+through 8A.
 Robot-specific MCP bindings and Web Control action/status adaptation are no longer owned by
 `DeskRobotBoard`, and the editable Web UI is no longer maintained in a 3,179-line C++ header.
 Phase 7 moved pure randomized emotion/dance/gyro-look policy into
@@ -122,6 +137,11 @@ Phase 7 moved pure randomized emotion/dance/gyro-look policy into
 in the composition root. `desk_robot_board.cc` is now 1,448 lines. The remaining auxiliary
 sensor loop, cliff response, OLED telemetry, live-camera task and status aggregation were kept
 together because they are cross-subsystem lifecycle/integration glue.
+
+Phase 8A moved the Typed Web Chat lifecycle and MCP bridge into `TextChatController` without
+changing the public `Application` entry points or protocol contracts. `application.cc` is now
+1,885 lines (down from 2,277 immediately before Phase 8A). Gemini ASR turn orchestration remains
+in `Application` for the separate Phase 8B batch.
 
 Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the
 nine HTTP routes and port 8080 are retained. The CMake-assembled HTML body matches the previous
@@ -147,6 +167,10 @@ Files changed:
 - `main/robot/motion/expressive_motion_planner.cc`
 - `main/robot/motion/motion_reactions.h`
 - `main/robot/motion/motion_reactions.cc`
+- `main/application.h`
+- `main/application.cc`
+- `main/chat/text_chat_controller.h`
+- `main/chat/text_chat_controller.cc`
 
 Minimum validation:
 
@@ -163,6 +187,11 @@ Minimum validation:
    polling, logs, camera preview/snapshot and typed chat.
 9. Confirm emotion movement, randomized dance, MPU reactions and gyro-assisted emotion turns
    behave as before.
+10. Submit typed chat from Idle with both `<= 12` and `> 12` Unicode codepoints; confirm the
+    original text is displayed and the normal MCP/LLM/TTS response plays.
+11. Submit typed chat while Listening; confirm microphone capture is suppressed for the typed
+    turn and listening resumes afterward.
+12. Confirm timeout/channel-close failures restore Idle or the prior Listening mode as before.
 
 Build: **NOT RUN**
 
@@ -170,19 +199,21 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-After the user validates Phases 6A through 7, continue with Phase 8A:
+After the user validates Phase 8A, continue with Phase 8B:
 
 ```text
 main/application.h
 main/application.cc
-main/chat/text_chat_controller.h
-main/chat/text_chat_controller.cc
+main/audio/gemini_transcribe_client.h
+main/audio/gemini_transcribe_client.cc
+main/chat/gemini_asr_turn_controller.h
+main/chat/gemini_asr_turn_controller.cc
 ```
 
-Extract Typed Web Chat state and orchestration behind a focused controller while preserving the
-12-codepoint native/MCP threshold, `self.web_chat.consume_pending`, the existing session,
-MQTT-UDP silence-frame priming, timeout/completion behavior and listening recovery. Do not start
-Gemini ASR extraction in the same batch.
+Extract only the Gemini ASR turn lifecycle behind a focused controller. Preserve the existing
+provider selection, prewarm/cold-start behavior, VAD lifecycle, final-transcript handoff to
+Typed Web Chat, retry/timeout recovery and normal Xiaozhi ASR fallback. Do not retune ASR or
+reopen Phase 8A.
 
 ## Useful review checks
 

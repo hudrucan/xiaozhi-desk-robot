@@ -19,7 +19,8 @@ ESP-IDF v6.1 is the preferred SDK.
 
 ## Primary ownership
 
-- `main/application.*` — application/session lifecycle, protocol callbacks, typed Web Chat.
+- `main/application.*` — application/session lifecycle, protocol callbacks and subsystem integration.
+- `main/chat/text_chat_controller.*` — typed Web Chat state, MCP bridge and session/TTS coordination.
 - `main/device_state_machine.*` — legal runtime state transitions.
 - `main/protocols/` — shared protocol API, MQTT+UDP and WebSocket.
 - `main/audio/` — capture/playback, Opus, wake word and audio tasks.
@@ -134,6 +135,9 @@ reason about both transports even if only MQTT+UDP is exercised on the current r
 ## Typed Web Chat
 
 Preserve the current architecture.
+
+The application-owned lifecycle is implemented by `main/chat/text_chat_controller.*` and
+integrated through `Application`; do not spread its state back across protocol callbacks.
 
 ```text
 <= 12 Unicode codepoints
