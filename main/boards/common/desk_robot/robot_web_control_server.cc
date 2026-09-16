@@ -656,38 +656,47 @@ esp_err_t RobotWebControlServer::HandleSaveAsrConfig(httpd_req_t* request) {
         root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "provider") : nullptr;
     const cJSON* api_key =
         root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "api_key") : nullptr;
-    if (!cJSON_IsString(provider) || provider->valuestring == nullptr ||
-        (api_key != nullptr &&
-         (!cJSON_IsString(api_key) || api_key->valuestring == nullptr))) {
+    const bool has_provider = provider != nullptr;
+    const bool has_api_key = api_key != nullptr;
+    if (root == nullptr || (!has_provider && !has_api_key) ||
+        (has_provider && (!cJSON_IsString(provider) || provider->valuestring == nullptr)) ||
+        (has_api_key && (!cJSON_IsString(api_key) || api_key->valuestring == nullptr))) {
         cJSON_Delete(root);
         return SendJson(request, "400 Bad Request",
                         R"({"ok":false,"message":"Invalid ASR configuration"})");
     }
 
-    AsrProvider selected_provider;
-    if (std::strcmp(provider->valuestring, "xiaozhi") == 0) {
-        selected_provider = AsrProvider::kXiaozhi;
-    } else if (std::strcmp(provider->valuestring, "gemini") == 0) {
-        selected_provider = AsrProvider::kGemini;
-    } else {
-        cJSON_Delete(root);
-        return SendJson(request, "400 Bad Request",
-                        R"({"ok":false,"message":"Unknown ASR provider"})");
+    AsrProvider selected_provider = AsrProvider::kXiaozhi;
+    if (has_provider) {
+        if (std::strcmp(provider->valuestring, "xiaozhi") == 0) {
+            selected_provider = AsrProvider::kXiaozhi;
+        } else if (std::strcmp(provider->valuestring, "gemini") == 0) {
+            selected_provider = AsrProvider::kGemini;
+        } else {
+            cJSON_Delete(root);
+            return SendJson(request, "400 Bad Request",
+                            R"({"ok":false,"message":"Unknown ASR provider"})");
+        }
     }
 
-    // Persist a new secret first so selecting Gemini in the same request can
-    // validate against it. Blank/masked values intentionally preserve the key.
-    if (api_key != nullptr) {
+    // API-key updates are independent from provider selection. A blank/masked
+    // value intentionally preserves the existing secret in AsrSettings.
+    if (has_api_key) {
         AsrSettings::UpdateGeminiApiKey(api_key->valuestring);
     }
     cJSON_Delete(root);
 
-    const bool provider_saved = AsrSettings::SetProvider(selected_provider);
+    bool provider_saved = true;
+    if (has_provider) {
+        provider_saved = AsrSettings::SetProvider(selected_provider);
+    }
+
     const AsrConfig config = AsrSettings::Load();
-    const bool persisted = provider_saved && config.provider == selected_provider;
-    ESP_LOGI(TAG, "ASR config after save provider=%s configured=%d saved=%d",
+    const bool persisted = !has_provider || (provider_saved && config.provider == selected_provider);
+    ESP_LOGI(TAG,
+             "ASR config after update provider=%s configured=%d provider_requested=%d saved=%d",
              AsrProviderName(config.provider), config.IsGeminiConfigured() ? 1 : 0,
-             persisted ? 1 : 0);
+             has_provider ? 1 : 0, persisted ? 1 : 0);
     if (!persisted) {
         const char* message =
             selected_provider == AsrProvider::kGemini && !config.IsGeminiConfigured()
@@ -696,8 +705,11 @@ esp_err_t RobotWebControlServer::HandleSaveAsrConfig(httpd_req_t* request) {
         return SendJson(request, "400 Bad Request",
                         EncodeAsrConfigResponse(false, message, config));
     }
-    return SendJson(request, "200 OK",
-                    EncodeAsrConfigResponse(true, "ASR settings saved", config));
+
+    const char* message = has_provider && has_api_key
+                              ? "ASR settings saved"
+                              : has_provider ? "ASR provider updated" : "Gemini API key saved";
+    return SendJson(request, "200 OK", EncodeAsrConfigResponse(true, message, config));
 }
 
 esp_err_t RobotWebControlServer::HandleClearGeminiApiKey(httpd_req_t* request) {
