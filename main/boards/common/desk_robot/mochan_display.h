@@ -164,13 +164,13 @@ private:
     lv_obj_t* battery_status_ = nullptr;
     lv_timer_t* eye_timer_ = nullptr;
     lv_timer_t* notification_timer_ = nullptr;
-    lv_timer_t* typing_timer_ = nullptr;
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> camera_image_cached_;
     std::string typing_text_;
     size_t typing_position_ = 0;
     int32_t response_scroll_target_ = 0;
     uint8_t typing_cursor_phase_ = 0;
+    uint8_t typing_frame_countdown_ = 0;
     bool typing_cursor_visible_ = false;
     bool typing_active_ = false;
     bool typing_finishing_ = false;

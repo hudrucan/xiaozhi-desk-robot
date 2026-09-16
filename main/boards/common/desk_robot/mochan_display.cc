@@ -23,8 +23,6 @@ const lv_color_t kBrassHighlight = LV_COLOR_MAKE(0xe3, 0xc2, 0x7b);
 const lv_color_t kEyelidShadow = LV_COLOR_MAKE(0x72, 0x55, 0x2b);
 const lv_color_t kSpinnerTrack = LV_COLOR_MAKE(0x4b, 0x3b, 0x25);
 constexpr int kPreviewDurationMs = 5000;
-constexpr int kTypingPeriodMs = 42;
-constexpr int kTypingFinishPeriodMs = 20;
 constexpr int kResponseTextScale = 210;
 constexpr int kEyeLayoutOffsetY = 10;
 // Keep full-face motion and idle cadence tunables together for hardware iteration.
@@ -221,9 +219,6 @@ MochanDisplay::~MochanDisplay() {
     if (notification_timer_ != nullptr) {
         lv_timer_delete(notification_timer_);
     }
-    if (typing_timer_ != nullptr) {
-        lv_timer_delete(typing_timer_);
-    }
     for (auto* raster : {&left_raster_, &right_raster_}) {
         if (raster->pixels != nullptr) {
             lv_image_cache_drop(&raster->descriptor);
@@ -401,13 +396,6 @@ void MochanDisplay::SetupUI() {
             display->AdvanceEyeAnimation();
         },
         kFaceAnimationPeriodMs, this);
-
-    typing_timer_ = lv_timer_create(
-        [](lv_timer_t* timer) {
-            static_cast<MochanDisplay*>(lv_timer_get_user_data(timer))->UpdateTyping();
-        },
-        kTypingPeriodMs, this);
-    lv_timer_pause(typing_timer_);
 }
 
 void MochanDisplay::SetFaceState(FaceState state) {
@@ -850,6 +838,17 @@ void MochanDisplay::AdvanceEyeAnimation() {
     }
     UpdateEyes(blink_amount, idle_eligible);
     UpdateMouth(blink_amount, emotion);
+    // Keep typewriter work on the face frame clock. A separate 42 ms LVGL
+    // timer used to drift against this 33 ms callback and periodically force
+    // two expensive label/layout updates into the same display frame.
+    if (typing_active_) {
+        if (typing_frame_countdown_ == 0) {
+            UpdateTyping();
+            typing_frame_countdown_ = typing_active_ && !typing_finishing_ ? 1 : 0;
+        } else {
+            --typing_frame_countdown_;
+        }
+    }
     RecordAnimationTiming(callback_started_us, frame_interval_us);
 }
 
@@ -1574,12 +1573,8 @@ void MochanDisplay::StartTyping(const char* content) {
     typing_cursor_visible_ = true;
     typing_active_ = true;
     typing_finishing_ = false;
+    typing_frame_countdown_ = 0;
     RenderTypingText();
-    if (typing_timer_ != nullptr) {
-        lv_timer_set_period(typing_timer_, kTypingPeriodMs);
-        lv_timer_reset(typing_timer_);
-        lv_timer_resume(typing_timer_);
-    }
 }
 
 void MochanDisplay::UpdateTyping() {
@@ -1594,7 +1589,7 @@ void MochanDisplay::UpdateTyping() {
         // multiple TTS sentences arrive before the display has finished.
         const size_t remaining = typing_text_.size() - typing_position_;
         const int glyphs_per_tick =
-            typing_finishing_ ? 4 : (remaining > 72 ? 3 : (remaining > 32 ? 2 : 1));
+            typing_finishing_ ? 6 : (remaining > 72 ? 4 : (remaining > 32 ? 3 : 2));
         for (int glyph = 0; glyph < glyphs_per_tick && typing_position_ < typing_text_.size();
              ++glyph) {
             ++typing_position_;
@@ -1607,14 +1602,11 @@ void MochanDisplay::UpdateTyping() {
         typing_active_ = false;
         typing_finishing_ = false;
         typing_cursor_visible_ = false;
-        if (typing_timer_ != nullptr) {
-            lv_timer_pause(typing_timer_);
-        }
     }
 
     if (typing_active_) {
-        typing_cursor_phase_ = static_cast<uint8_t>((typing_cursor_phase_ + 1) % 12);
-        typing_cursor_visible_ = typing_cursor_phase_ < 6;
+        typing_cursor_phase_ = static_cast<uint8_t>((typing_cursor_phase_ + 1) % 8);
+        typing_cursor_visible_ = typing_cursor_phase_ < 4;
     } else {
         typing_cursor_visible_ = false;
     }
@@ -1629,18 +1621,11 @@ void MochanDisplay::FinishTyping() {
         typing_finishing_ = true;
         typing_active_ = true;
         typing_cursor_visible_ = true;
-        if (typing_timer_ != nullptr) {
-            lv_timer_set_period(typing_timer_, kTypingFinishPeriodMs);
-            lv_timer_reset(typing_timer_);
-            lv_timer_resume(typing_timer_);
-        }
+        typing_frame_countdown_ = 0;
     } else {
         typing_finishing_ = false;
         typing_cursor_visible_ = false;
         typing_active_ = false;
-        if (typing_timer_ != nullptr) {
-            lv_timer_pause(typing_timer_);
-        }
     }
     RenderTypingText();
 }
@@ -1652,13 +1637,10 @@ void MochanDisplay::ResetTyping() {
     typing_cursor_visible_ = false;
     typing_active_ = false;
     typing_finishing_ = false;
+    typing_frame_countdown_ = 0;
     response_scroll_target_ = 0;
     if (response_box_ != nullptr) {
         lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
-    }
-    if (typing_timer_ != nullptr) {
-        lv_timer_set_period(typing_timer_, kTypingPeriodMs);
-        lv_timer_pause(typing_timer_);
     }
 }
 
