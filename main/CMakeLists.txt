@@ -1,6 +1,8 @@
 # Define source files
-set(SOURCES "audio/audio_codec.cc"
+set(SOURCES "audio/asr_settings.cc"
+            "audio/audio_codec.cc"
             "audio/audio_service.cc"
+            "audio/gemini_transcribe_client.cc"
             "audio/demuxer/ogg_demuxer.cc"
             "notify/notify_player.cc"
             "audio/codecs/no_audio_codec.cc"
