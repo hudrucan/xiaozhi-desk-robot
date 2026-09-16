@@ -1,5 +1,5 @@
-#ifndef ESP32_S3_CAMERA_ROBOT_CONFIG_H_
-#define ESP32_S3_CAMERA_ROBOT_CONFIG_H_
+#ifndef XIAOZHI_ROBOT_HARDWARE_CONFIG_H_
+#define XIAOZHI_ROBOT_HARDWARE_CONFIG_H_
 
 #include <driver/gpio.h>
 #include <driver/i2c_types.h>
@@ -27,7 +27,6 @@
 #define BUILTIN_LED_LEDC_TIMER LEDC_TIMER_2
 #define BUILTIN_LED_LEDC_CHANNEL LEDC_CHANNEL_2
 #define BUILTIN_LED_STATUS_PROFILE_EDISON true
-#define STATUS_LIGHT_DEFAULT_BRIGHTNESS 100
 
 // ST7789 1.5-inch IPS, 240x240, eight-pin SPI module.
 #define DISPLAY_SPI_HOST SPI3_HOST
@@ -83,10 +82,6 @@
 #define DISTANCE_SENSOR_SDA_PIN GPIO_NUM_4
 #define DISTANCE_SENSOR_SCL_PIN GPIO_NUM_5
 #define DISTANCE_SENSOR_I2C_ADDRESS 0x29
-#define CLIFF_EDGE_DISTANCE_MM 150
-#define CLIFF_CONFIRM_SAMPLES 2
-#define CLIFF_AUTO_RETREAT_MS 180
-#define DISTANCE_SENSOR_PERIOD_MS 80
 
 // Shared auxiliary I2C bus: SSD1306 + INA219 + MPU6050.
 #define AUXILIARY_I2C_SDA_PIN GPIO_NUM_38
@@ -102,53 +97,14 @@
 // INA219 breakout with both A0/A1 jumpers open and an R005 (0.005 ohm) shunt.
 #define INA219_I2C_ADDRESS 0x40
 #define INA219_SHUNT_RESISTANCE_OHMS 0.005f
-#define INA219_SAMPLE_PERIOD_MS 100
-#define BATTERY_SOC_USABLE_CAPACITY_MAH 2862.1f
-// Initial diagnostic limit: ten nominal INA219 periods. Hardware logs should be used to confirm
-// this still exceeds normal scheduling jitter before it is treated as a final value.
-#define BATTERY_SOC_MAX_INTEGRATION_GAP_MS 1000
-// Initial quasi-rest parameters derived from the 2026-09-14 FullHD R100 idle/motor captures.
-#define BATTERY_SOC_QUASI_REST_MAX_CURRENT_MA 850.0f
-#define BATTERY_SOC_QUASI_REST_CURRENT_STDDEV_MA 75.0f
-#define BATTERY_SOC_QUASI_REST_VOLTAGE_STDDEV_MV 8.0f
-#define BATTERY_SOC_QUASI_REST_CURRENT_TRANSITION_MA 350.0f
-#define BATTERY_SOC_QUASI_REST_VOLTAGE_TRANSITION_MV 40.0f
-#define BATTERY_SOC_QUASI_REST_QUALIFICATION_MS 60000
-#define BATTERY_SOC_QUASI_REST_CORRECTION_INTERVAL_MS 60000
-#define BATTERY_SOC_QUASI_REST_CORRECTION_TIME_CONSTANT_MS (6 * 60 * 60 * 1000)
-// Full-charge taper measured with the installed charger: four LEDs steady at 4.246 V and -97 mA.
-// Require observed charging followed by sustained taper/near-zero current, so high open-circuit
-// voltage alone cannot anchor full. One minute filters startup transients without delaying an
-// already-full cold boot excessively.
-#define BATTERY_SOC_FULL_ANCHOR_MIN_VOLTAGE_V 4.20f
-#define BATTERY_SOC_FULL_ANCHOR_TAPER_CURRENT_MA 150.0f
-#define BATTERY_SOC_FULL_ANCHOR_QUALIFICATION_MS 60000
-// A fully charged cold boot under the robot's idle load measured 94.99% on the OCV curve. This
-// one-shot recovery handles charging completed while the ESP32 was switched off.
-#define BATTERY_SOC_BOOTSTRAP_FULL_ANCHOR_MIN_VOLTAGE_SOC_PERCENT 94.5f
-// Ignore small OCV/load-model differences; startup recovery only repairs a meaningful upward delta.
-#define BATTERY_SOC_BOOTSTRAP_VOLTAGE_REBASE_MIN_DELTA_PERCENT 2.0f
-// Controlled 2026-09-15 discharge stayed operational at 3.199 V and collapsed around
-// 3.11-3.17 V under a 0.64-0.71 A idle load. Anchor before the power disappears.
-#define BATTERY_SOC_EMPTY_ANCHOR_MAX_VOLTAGE_V 3.20f
-#define BATTERY_SOC_EMPTY_ANCHOR_QUALIFICATION_MS 10000
-#define BATTERY_CAPACITY_LOW_VOLTAGE_V 3.20f
-#define BATTERY_CAPACITY_LOW_VOLTAGE_DURATION_MS 10000
 
 // Optional MPU6050 on the shared auxiliary bus. It follows the same probe-first lifecycle as the
 // INA219; the sampling task starts only when at least one auxiliary sensor is detected.
 #define MPU6050_I2C_ADDRESS 0x68
-#define MPU6050_SAMPLE_PERIOD_MS 40
-#define MPU6050_TILT_THRESHOLD_DEG 28.0f
-#define MPU6050_SHAKE_THRESHOLD_DPS 180.0f
-#define MPU6050_PRESS_THRESHOLD_G 1.25f
-#define MPU6050_IMPACT_THRESHOLD_G 1.75f
-#define MPU6050_FREEFALL_THRESHOLD_G 0.45f
-#define MPU6050_GESTURE_COOLDOWN_MS 2500
 // Gyro Z is the yaw axis for the current flat, under-chassis MPU6050 mounting.
 // Positive corrected yaw must correspond to a right turn; flip this sign after
 // the first hardware direction check if the installed module is mirrored.
 #define MPU6050_YAW_AXIS 2
 #define MPU6050_YAW_SIGN 1.0f
 
-#endif  // ESP32_S3_CAMERA_ROBOT_CONFIG_H_
+#endif  // XIAOZHI_ROBOT_HARDWARE_CONFIG_H_

@@ -5,6 +5,7 @@
 #include "button.h"
 #include "codecs/no_audio_codec.h"
 #include "config/hardware_config.h"
+#include "config/tuning.h"
 #include "display/lcd_display.h"
 #include "esp32_camera.h"
 #ifdef INA219_I2C_ADDRESS

@@ -48,6 +48,8 @@ Current physical target:
 
 The authoritative pin map is
 [`main/robot/config/hardware_config.h`](main/robot/config/hardware_config.h).
+Behavior thresholds and calibrated runtime values live in
+[`main/robot/config/tuning.h`](main/robot/config/tuning.h).
 
 | Function | GPIO |
 | --- | --- |
@@ -84,7 +86,7 @@ main/
 ├── display/                       Reusable display infrastructure
 ├── mcp_server.*                   Device-side MCP framework
 ├── platform/                      Board, Wi-Fi and hardware adapters
-└── robot/                         Desk-robot implementation and pin map
+└── robot/                         Desk-robot implementation, config and tuning
 ```
 
 The robot-specific subsystem under `main/robot/` owns the motor

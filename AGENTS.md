@@ -25,7 +25,8 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/audio/` — capture/playback, Opus, wake word and audio tasks.
 - `main/mcp_server.*` — generic device-side MCP framework.
 - `main/platform/` — board, Wi-Fi and reusable hardware adapters.
-- `main/robot/config/hardware_config.h` — authoritative board identity and pin map.
+- `main/robot/config/hardware_config.h` — authoritative wiring, buses and electrical configuration.
+- `main/robot/config/tuning.h` — robot behavior thresholds, timing and calibration.
 - `main/robot/` — robot-specific hardware and behavior.
 - `main/robot/desk_robot_board.cc` — desk-robot integration.
 - `main/robot/motor_controller.*` — drive control.
@@ -81,6 +82,9 @@ The authoritative GPIO definitions are in:
 ```text
 main/robot/config/hardware_config.h
 ```
+
+Behavior thresholds and calibrated runtime values are in
+`main/robot/config/tuning.h`. Do not retune them during structural changes.
 
 Important shared buses:
 
