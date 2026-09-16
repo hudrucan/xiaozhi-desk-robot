@@ -337,6 +337,23 @@ void McpServer::AddPriorityTool(const std::string& name, const std::string& desc
                   std::make_unique<McpTool>(name, description, properties, std::move(callback)));
 }
 
+void McpServer::AddPriorityAssistantOnlyTool(const std::string& name,
+                                             const std::string& description,
+                                             const PropertyList& properties,
+                                             ToolCallback callback) {
+    if (std::find_if(tools_.begin(), tools_.end(), [&name](const auto& existing) {
+            return existing->name() == name;
+        }) != tools_.end()) {
+        ESP_LOGW(TAG, "Tool %s already added", name.c_str());
+        return;
+    }
+
+    auto tool = std::make_unique<McpTool>(name, description, properties, std::move(callback));
+    tool->set_assistant_only(true);
+    ESP_LOGI(TAG, "Add priority tool: %s [assistant]", name.c_str());
+    tools_.insert(tools_.begin(), std::move(tool));
+}
+
 void McpServer::AddUserOnlyTool(const std::string& name, const std::string& description,
                                 const PropertyList& properties, ToolCallback callback) {
     auto tool = std::make_unique<McpTool>(name, description, properties, std::move(callback));

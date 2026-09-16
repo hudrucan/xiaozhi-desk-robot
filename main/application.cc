@@ -85,7 +85,7 @@ bool ShouldUseWebChatMcpBridge(const std::string& text) {
 }
 
 void RegisterWebChatMcpTool(McpServer& mcp_server) {
-    mcp_server.AddPriorityTool(
+    mcp_server.AddPriorityAssistantOnlyTool(
         kTextChatMcpToolName,
         "When detect text is exactly 'web_chat', call this tool immediately before responding. "
         "It returns the full user message; answer that message, never the literal trigger.",

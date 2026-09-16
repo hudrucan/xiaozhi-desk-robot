@@ -264,6 +264,7 @@ private:
     PropertyList properties_;
     ToolCallback callback_;
     bool user_only_ = false;
+    bool assistant_only_ = false;
 
 public:
     McpTool(const std::string& name, const std::string& description, const PropertyList& properties,
@@ -271,10 +272,12 @@ public:
         : name_(name), description_(description), properties_(properties), callback_(callback) {}
 
     void set_user_only(bool user_only) { user_only_ = user_only; }
+    void set_assistant_only(bool assistant_only) { assistant_only_ = assistant_only; }
     inline const std::string& name() const { return name_; }
     inline const std::string& description() const { return description_; }
     inline const PropertyList& properties() const { return properties_; }
     inline bool user_only() const { return user_only_; }
+    inline bool assistant_only() const { return assistant_only_; }
 
     std::string to_json() const {
         std::vector<std::string> required = properties_.GetRequired();
@@ -322,16 +325,18 @@ public:
         }
         input_schema.release();
 
-        // Add audience annotation if the tool is user only (invisible to AI)
-        if (user_only_) {
+        // Audience annotations let the backend keep user-only tools away from the AI and
+        // assistant-only bridge tools out of user-facing tool activity.
+        if (user_only_ || assistant_only_) {
             CJsonUniquePtr annotations(cJSON_CreateObject());
             CJsonUniquePtr audience(cJSON_CreateArray());
-            CJsonUniquePtr user(cJSON_CreateString("user"));
-            if (annotations == nullptr || audience == nullptr || user == nullptr ||
-                !cJSON_AddItemToArray(audience.get(), user.get())) {
+            CJsonUniquePtr audience_role(
+                cJSON_CreateString(user_only_ ? "user" : "assistant"));
+            if (annotations == nullptr || audience == nullptr || audience_role == nullptr ||
+                !cJSON_AddItemToArray(audience.get(), audience_role.get())) {
                 return {};
             }
-            user.release();
+            audience_role.release();
             if (!cJSON_AddItemToObject(annotations.get(), "audience", audience.get())) {
                 return {};
             }
@@ -435,6 +440,8 @@ public:
                  const PropertyList& properties, ToolCallback callback);
     void AddPriorityTool(const std::string& name, const std::string& description,
                          const PropertyList& properties, ToolCallback callback);
+    void AddPriorityAssistantOnlyTool(const std::string& name, const std::string& description,
+                                      const PropertyList& properties, ToolCallback callback);
     void AddUserOnlyTool(const std::string& name, const std::string& description,
                          const PropertyList& properties, ToolCallback callback);
     void ParseMessage(const cJSON* json, ResponseSender response_sender = nullptr);
