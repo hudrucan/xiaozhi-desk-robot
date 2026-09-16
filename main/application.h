@@ -13,7 +13,6 @@
 #include <memory>
 #include <functional>
 #include <cstdint>
-#include <vector>
 
 #include "protocol.h"
 #include "ota.h"
@@ -21,7 +20,7 @@
 #include "gemini_asr_turn_controller.h"
 #include "device_state.h"
 #include "device_state_machine.h"
-#include "notify/notify_player.h"
+#include "notify/notification_controller.h"
 #include "chat/text_chat_controller.h"
 
 // Main event bits
@@ -154,8 +153,7 @@ private:
     GeminiAsrTurnController gemini_asr_controller_;
     AudioService audio_service_;
     TextChatController text_chat_controller_;
-    NotifyPlayer notify_player_;
-    uint32_t notification_playback_id_ = 0;
+    NotificationController notification_controller_;
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
@@ -183,10 +181,6 @@ private:
     void ContinueWakeWordInvoke(const std::string& wake_word);
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
-    void StartNotification(std::string audio_url, std::vector<NotifySubtitle> subtitles);
-    void StopNotification();
-    void HandleNotificationFinished(uint32_t playback_id, bool success);
-
     // Activation task (runs in background)
     void ActivationTask();
 
