@@ -5,6 +5,7 @@
 
 #include "mcp_server.h"
 #include <esp_app_desc.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_pthread.h>
 #include <freertos/FreeRTOS.h>
@@ -662,15 +663,15 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         ReplyError(id, "Failed to allocate MCP worker", worker_failure_sender);
         return;
     }
-    const BaseType_t created = xTaskCreate(
+    const BaseType_t created = xTaskCreateWithCaps(
         [](void* context) {
             std::unique_ptr<std::function<void()>> call(
                 static_cast<std::function<void()>*>(context));
             (*call)();
             call.reset();
-            vTaskDelete(nullptr);
+            vTaskDeleteWithCaps(nullptr);
         },
-        "mcp_tool", kWorkerStackSize, worker_call, 1, nullptr);
+        "mcp_tool", kWorkerStackSize, worker_call, 1, nullptr, MALLOC_CAP_SPIRAM);
     if (created != pdPASS) {
         delete worker_call;
         ReplyError(id, "Failed to start MCP worker", worker_failure_sender);
