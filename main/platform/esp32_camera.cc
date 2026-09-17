@@ -149,8 +149,10 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
 bool Esp32Camera::Capture() { return CaptureInternal(true); }
 
 bool Esp32Camera::CaptureOwnedJpeg() {
-    // MCP still capture is not a display-preview mode.
-    if (!CaptureInternal(false)) {
+    // Show the captured frame once as five-second user feedback. This does not
+    // make MCP a persistent preview mode; its camera ownership remains a
+    // transient still operation and the framebuffer is returned below.
+    if (!CaptureInternal(true)) {
         return false;
     }
 
