@@ -2,6 +2,7 @@
 #include "robot_web_control_page.h"
 #include "asr_settings.h"
 #include "control/robot_controller.h"
+#include "web/robot_web_status_routes.h"
 
 #include <esp_log.h>
 #include <esp_log_write.h>
@@ -237,12 +238,24 @@ std::string EncodeAsrConfigResponse(bool ok, const char* message, const AsrConfi
     return result;
 }
 
+std::string EncodeJson(cJSON* root, const char* fallback) {
+    if (root == nullptr) {
+        return fallback;
+    }
+    char* encoded = cJSON_PrintUnformatted(root);
+    const std::string result = encoded != nullptr ? encoded : fallback;
+    cJSON_free(encoded);
+    cJSON_Delete(root);
+    return result;
+}
+
 }  // namespace
 
 RobotWebControlServer::RobotWebControlServer(RobotController& controller,
                                              ChatProbeHandler chat_probe_handler)
     : controller_(controller),
       robot_adapter_(controller),
+      robot_status_(controller),
       chat_probe_handler_(std::move(chat_probe_handler)) {
     BeginLogCapture();
 }
@@ -267,7 +280,7 @@ bool RobotWebControlServer::Start(int port) {
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
-    config.max_uri_handlers = 9;
+    config.max_uri_handlers = 24;
     config.stack_size = 6144;
 
     if (httpd_start(&server_, &config) != ESP_OK) {
@@ -312,6 +325,12 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleChatProbe,
         .user_ctx = this,
     };
+    const httpd_uri_t get_conversation = {
+        .uri = "/api/chat",
+        .method = HTTP_GET,
+        .handler = HandleGetConversation,
+        .user_ctx = this,
+    };
     const httpd_uri_t clear_conversation = {
         .uri = "/api/chat",
         .method = HTTP_DELETE,
@@ -324,19 +343,29 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleSaveAsrConfig,
         .user_ctx = this,
     };
+    const httpd_uri_t get_asr_config = {
+        .uri = "/api/asr",
+        .method = HTTP_GET,
+        .handler = HandleGetAsrConfig,
+        .user_ctx = this,
+    };
     const httpd_uri_t clear_gemini_api_key = {
         .uri = "/api/asr",
         .method = HTTP_DELETE,
         .handler = HandleClearGeminiApiKey,
         .user_ctx = this,
     };
-    if (httpd_register_uri_handler(server_, &root) != ESP_OK ||
-        httpd_register_uri_handler(server_, &status) != ESP_OK ||
+    const bool routes_ok = httpd_register_uri_handler(server_, &root) == ESP_OK &&
+                           httpd_register_uri_handler(server_, &status) == ESP_OK &&
+                           RegisterRobotWebStatusRoutes(server_, this, HandleDomainStatus);
+    if (!routes_ok ||
         httpd_register_uri_handler(server_, &action) != ESP_OK ||
         httpd_register_uri_handler(server_, &logs) != ESP_OK ||
         httpd_register_uri_handler(server_, &snapshot) != ESP_OK ||
+        httpd_register_uri_handler(server_, &get_conversation) != ESP_OK ||
         httpd_register_uri_handler(server_, &chat_probe) != ESP_OK ||
         httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK ||
+        httpd_register_uri_handler(server_, &get_asr_config) != ESP_OK ||
         httpd_register_uri_handler(server_, &save_asr_config) != ESP_OK ||
         httpd_register_uri_handler(server_, &clear_gemini_api_key) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register local control routes");
@@ -367,6 +396,46 @@ std::string RobotWebControlServer::BuildStatus() {
     cJSON_free(encoded);
     cJSON_Delete(root);
     return result;
+}
+
+std::string RobotWebControlServer::BuildDomainStatus(const char* uri) {
+    return EncodeJson(CreateRobotWebDomainStatus(robot_status_, uri),
+                      R"({"error":"out of memory"})");
+}
+
+std::string RobotWebControlServer::BuildConversationStatus() {
+    std::lock_guard<std::mutex> lock(conversation_mutex_);
+    cJSON* root = cJSON_CreateObject();
+    if (root == nullptr) {
+        return R"({"state":"Error","error":"out of memory","messages":[]})";
+    }
+    cJSON_AddStringToObject(root, "state", conversation_state_.c_str());
+    cJSON_AddStringToObject(root, "error", conversation_error_.c_str());
+    cJSON* messages = cJSON_AddArrayToObject(root, "messages");
+    if (messages != nullptr) {
+        for (const auto& message : conversation_messages_) {
+            cJSON* item = cJSON_CreateObject();
+            if (item == nullptr) {
+                break;
+            }
+            cJSON_AddNumberToObject(item, "id", message.id);
+            cJSON_AddStringToObject(item, "role", message.role.c_str());
+            cJSON_AddStringToObject(item, "text", message.text.c_str());
+            cJSON_AddItemToArray(messages, item);
+        }
+    }
+    return EncodeJson(root, R"({"state":"Error","messages":[]})");
+}
+
+std::string RobotWebControlServer::BuildAsrStatus() {
+    const AsrConfig config = AsrSettings::Load();
+    cJSON* root = cJSON_CreateObject();
+    if (root == nullptr) {
+        return R"({"provider":"xiaozhi","gemini_configured":false})";
+    }
+    cJSON_AddStringToObject(root, "provider", AsrProviderName(config.provider));
+    cJSON_AddBoolToObject(root, "gemini_configured", config.IsGeminiConfigured());
+    return EncodeJson(root, R"({"provider":"xiaozhi","gemini_configured":false})");
 }
 
 void RobotWebControlServer::AppendConversationStatus(cJSON* root) {
@@ -464,6 +533,21 @@ esp_err_t RobotWebControlServer::HandleRoot(httpd_req_t* request) {
 esp_err_t RobotWebControlServer::HandleStatus(httpd_req_t* request) {
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
     return SendJson(request, "200 OK", self->BuildStatus());
+}
+
+esp_err_t RobotWebControlServer::HandleDomainStatus(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    return SendJson(request, "200 OK", self->BuildDomainStatus(request->uri));
+}
+
+esp_err_t RobotWebControlServer::HandleGetConversation(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    return SendJson(request, "200 OK", self->BuildConversationStatus());
+}
+
+esp_err_t RobotWebControlServer::HandleGetAsrConfig(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    return SendJson(request, "200 OK", self->BuildAsrStatus());
 }
 
 esp_err_t RobotWebControlServer::HandleLogs(httpd_req_t* request) {

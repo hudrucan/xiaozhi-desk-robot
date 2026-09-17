@@ -1,6 +1,7 @@
 #pragma once
 
 #include "web/robot_web_adapter.h"
+#include "web/robot_web_status.h"
 
 #include <esp_http_server.h>
 
@@ -32,6 +33,9 @@ public:
 private:
     static esp_err_t HandleRoot(httpd_req_t* request);
     static esp_err_t HandleStatus(httpd_req_t* request);
+    static esp_err_t HandleDomainStatus(httpd_req_t* request);
+    static esp_err_t HandleGetConversation(httpd_req_t* request);
+    static esp_err_t HandleGetAsrConfig(httpd_req_t* request);
     static esp_err_t HandleLogs(httpd_req_t* request);
     static esp_err_t HandleAction(httpd_req_t* request);
     static esp_err_t HandleSnapshot(httpd_req_t* request);
@@ -41,12 +45,16 @@ private:
     static esp_err_t HandleClearGeminiApiKey(httpd_req_t* request);
     static esp_err_t SendJson(httpd_req_t* request, const char* status, const std::string& body);
     std::string BuildStatus();
+    std::string BuildDomainStatus(const char* uri);
+    std::string BuildConversationStatus();
+    std::string BuildAsrStatus();
     void AppendConversationStatus(cJSON* root);
     void AppendAsrStatus(cJSON* root);
 
     httpd_handle_t server_ = nullptr;
     RobotController& controller_;
     RobotWebAdapter robot_adapter_;
+    RobotWebStatus robot_status_;
     ChatProbeHandler chat_probe_handler_;
 
     struct ConversationMessage {
