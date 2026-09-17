@@ -15,6 +15,7 @@ public:
     cJSON* CreateCamera();
     cJSON* CreateAudio();
     cJSON* CreateSystem();
+    cJSON* CreateEnvironment();
 
 private:
     RobotController& controller_;

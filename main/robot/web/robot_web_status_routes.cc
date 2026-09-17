@@ -9,10 +9,10 @@
 
 bool RegisterRobotWebStatusRoutes(httpd_handle_t server, void* context,
                                   esp_err_t (*handler)(httpd_req_t*)) {
-    const std::array<const char*, 8> uris = {
+    const std::array<const char*, 9> uris = {
         "/api/status/core",    "/api/status/motors", "/api/status/sensors",
         "/api/status/battery", "/api/status/display", "/api/status/camera",
-        "/api/status/audio",   "/api/status/system",
+        "/api/status/audio",   "/api/status/system", "/api/status/environment",
     };
     for (const char* uri : uris) {
         const httpd_uri_t route = {
@@ -52,6 +52,9 @@ cJSON* CreateRobotWebDomainStatus(RobotWebStatus& status, const char* uri) {
     }
     if (std::strcmp(uri, "/api/status/system") == 0) {
         return status.CreateSystem();
+    }
+    if (std::strcmp(uri, "/api/status/environment") == 0) {
+        return status.CreateEnvironment();
     }
     return nullptr;
 }

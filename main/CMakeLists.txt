@@ -97,6 +97,7 @@ list(APPEND SOURCES
     "robot/robot_web_control_server.cc"
     "robot/web/robot_web_adapter.cc"
     "robot/web/robot_web_status_core.cc"
+    "robot/web/robot_web_status_environment.cc"
     "robot/web/robot_web_status_hardware.cc"
     "robot/web/robot_web_status_io.cc"
     "robot/web/robot_web_status_routes.cc"

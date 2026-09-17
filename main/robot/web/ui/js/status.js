@@ -16,6 +16,7 @@ const domainConfig = {
   camera: { path: "/api/status/camera", render: renderCameraStatus },
   audio: { path: "/api/status/audio", render: renderAudioStatus },
   system: { path: "/api/status/system", render: renderSystemStatus },
+  environment: { path: "/api/status/environment", render: renderEnvironmentStatus },
   chat: { path: "/api/chat", render: renderConversation },
   asr: { path: "/api/asr", render: applyAsrStatus },
 };
@@ -23,6 +24,7 @@ const domainConfig = {
 function domainInterval(name) {
   if (["core", "motors", "sensors"].includes(name)) return robotActive ? 300 : 900;
   if (["battery", "camera", "audio"].includes(name)) return 1000;
+  if (name === "environment") return 1500;
   if (name === "system") return 4000;
   if (name === "chat") return ["Sending", "Waiting", "Speaking"].includes(chatBackendState)
     ? 400 : 1200;
@@ -220,6 +222,35 @@ function renderSystemStatus(status) {
   $("#psram").textContent = fmtBytes(status.free_psram_bytes);
 }
 
+function environmentStateLabel(state) {
+  if (state === "online") return "Online";
+  if (state === "degraded") return "Degraded";
+  return "Unavailable";
+}
+
+function renderEnvironmentStatus(status) {
+  const aht20 = status.aht20 || {};
+  const bmp280 = status.bmp280 || {};
+  const bh1750 = status.bh1750 || {};
+  const temperature = aht20.temperature_valid
+    ? Number(aht20.temperature_c).toFixed(1) + "°C" : null;
+  const humidity = aht20.humidity_valid
+    ? Number(aht20.humidity_percent).toFixed(0) + "% RH" : null;
+  const pressure = bmp280.pressure_valid
+    ? Number(bmp280.pressure_hpa).toFixed(1) + " hPa" : null;
+  const illuminance = bh1750.illuminance_valid
+    ? Number(bh1750.illuminance_lux).toFixed(0) + " lx" : null;
+
+  const summary = [temperature, humidity, pressure, illuminance].filter(Boolean);
+  $("#environmentSummary").textContent = summary.length ? summary.join(" · ") : "No data";
+  $("#aht20Status").textContent = [environmentStateLabel(aht20.state), temperature, humidity]
+    .filter(Boolean).join(" · ");
+  $("#bmp280Status").textContent = [environmentStateLabel(bmp280.state), pressure]
+    .filter(Boolean).join(" · ");
+  $("#bh1750Status").textContent = [environmentStateLabel(bh1750.state), illuminance]
+    .filter(Boolean).join(" · ");
+}
+
 function scheduleStatusLoop(delay = 0) {
   clearTimeout(statusTimer);
   statusTimer = setTimeout(runStatusScheduler, Math.max(0, delay));
@@ -288,6 +319,7 @@ function startStatusPolling() {
     camera: 220,
     audio: 300,
     system: 400,
+    environment: 450,
     display: 500,
     chat: 600,
     asr: 700,
