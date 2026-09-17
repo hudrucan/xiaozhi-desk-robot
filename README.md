@@ -276,28 +276,19 @@ transport exists.
 
 ### OTA / bootstrap
 
-The custom desk-robot target currently ignores official firmware updates. The existing
-OTA subsystem is still responsible for bootstrap/activation and server configuration,
-so it must not simply be deleted.
-
-Planned cleanup is to separate:
+The custom desk-robot target ignores any `firmware` object returned by the bootstrap endpoint.
+The existing OTA-named subsystem remains responsible for:
 
 ```text
-bootstrap / activation / server config
+bootstrap / activation / server config / server time
 ```
 
-from:
-
-```text
-official firmware download / flash update
-```
-
-without breaking MQTT/WebSocket configuration or activation.
+No official firmware download, partition-write or auto-upgrade path remains. The only retained
+`esp_ota_*` operation marks the currently running image valid after bootstrap succeeds so an
+ESP-IDF pending-verify image does not roll back.
 
 ## Known limitations / active work
 
-- Official firmware-upgrade code still exists internally even though automatic official
-  updates are ignored for this target; bootstrap/OTA separation is pending.
 - Battery SoC estimation supports coulomb counting, quasi-rest correction and anchors;
   real-cell calibration remains hardware-dependent.
 - The downward VL53L0X is a floor/cliff sensor, not a front obstacle sensor.

@@ -197,7 +197,7 @@ configuration.
 
 Do **not** delete the whole subsystem.
 
-The intended cleanup is:
+The audited current state is:
 
 ```text
 KEEP:
@@ -206,12 +206,16 @@ activation
 MQTT/WebSocket config
 server time
 asset behavior unless separately changed
+running-image validation after successful bootstrap
 
-REMOVE/ISOLATE:
-official firmware download
-firmware partition write
+ABSENT / DO NOT REINTRODUCE:
+official firmware download or partition write
 auto-upgrade path
 ```
+
+The bootstrap endpoint's `firmware` object is deliberately ignored. The retained
+`MarkCurrentVersionValid()` call only cancels ESP-IDF rollback for a successfully bootstrapped
+pending-verify image; it is not a firmware updater.
 
 Do not change the partition table as part of OTA cleanup unless explicitly requested and
 hardware-tested separately.
