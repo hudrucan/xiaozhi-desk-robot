@@ -9,6 +9,7 @@
 
 #include "board.h"
 #include "display.h"
+#include "lvgl_display/lvgl_image.h"
 
 #define TAG "DeskRobotCamera"
 
