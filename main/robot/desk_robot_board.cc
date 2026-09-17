@@ -27,6 +27,7 @@
 #include "sensors/mpu6050_motion_sensor.h"
 #endif
 #include "robot_web_control_server.h"
+#include "sensors/environment_controller.h"
 #include "sensors/shared_i2c_bus.h"
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
 #include "sensors/cliff_sensor.h"
@@ -120,6 +121,7 @@ private:
     esp_lcd_panel_handle_t panel_ = nullptr;
     SharedI2cBus primary_i2c_{PRIMARY_I2C_PORT, PRIMARY_I2C_SDA_PIN, PRIMARY_I2C_SCL_PIN,
                               "primary"};
+    EnvironmentController environment_controller_;
 #ifdef AUXILIARY_I2C_SDA_PIN
     SharedI2cBus auxiliary_i2c_{AUXILIARY_I2C_PORT, AUXILIARY_I2C_SDA_PIN,
                                 AUXILIARY_I2C_SCL_PIN, "auxiliary"};
@@ -1364,6 +1366,13 @@ public:
 #endif
         InitializeWebControl();
         ESP_LOGI(TAG, "Desk robot board initialized");
+        // Start best-effort environment probing only after board construction returns to the
+        // application loop. The controller adds a further delay before touching the primary bus.
+        Application::GetInstance().Schedule([this]() {
+            if (!environment_controller_.Start(primary_i2c_.handle())) {
+                ESP_LOGW(TAG, "Failed to start environment controller");
+            }
+        });
 #ifdef AUXILIARY_I2C_SDA_PIN
         // Board construction runs inside Application::Initialize(). Queue only the lightweight
         // task creation here; Application::Run() executes it after initialization has returned.
