@@ -14,6 +14,13 @@
 
 #define TAG "SecondaryDisplay"
 
+namespace {
+
+constexpr int kWidgetSchemaVersion = 2;
+constexpr size_t kLegacyWidgetCount = 5;
+
+}  // namespace
+
 std::string SecondaryDisplayController::WidgetKey(size_t index, const char* field) {
     return "ow" + std::to_string(index) + "_" + field;
 }
@@ -75,28 +82,33 @@ std::string SecondaryDisplayController::NormalizeConfigText(const std::string& t
     return normalized.empty() ? fallback : normalized;
 }
 
-void SecondaryDisplayController::LoadWidgets(Settings& settings, SecondaryOled::Config& config) {
-    if (settings.GetInt("oled_w_ver", 0) != 1) {
-        return;
+bool SecondaryDisplayController::LoadWidgets(Settings& settings, SecondaryOled::Config& config) {
+    const int version = settings.GetInt("oled_w_ver", 0);
+    if (version != 1 && version != kWidgetSchemaVersion) {
+        return false;
     }
+    const size_t stored_count = version == 1 ? kLegacyWidgetCount : config.widgets.size();
     auto widgets = config.widgets;
     std::array<bool, secondary_oled_layout::kMaxWidgets> seen = {};
-    for (size_t index = 0; index < widgets.size(); ++index) {
+    for (size_t index = 0; index < stored_count; ++index) {
         const int type = settings.GetInt(WidgetKey(index, "type"), -1);
-        if (type < 0 || type >= static_cast<int>(secondary_oled_layout::kMaxWidgets) ||
-            seen[type]) {
+        const int type_limit = version == 1 ? static_cast<int>(kLegacyWidgetCount)
+                                            : static_cast<int>(secondary_oled_layout::kMaxWidgets);
+        if (type < 0 || type >= type_limit || seen[type]) {
             ESP_LOGW(TAG, "Ignoring invalid persisted secondary OLED widget order");
-            return;
+            return false;
         }
         seen[type] = true;
         widgets[index].type = static_cast<SecondaryOled::WidgetType>(type);
         widgets[index].size = static_cast<SecondaryOled::WidgetSize>(std::clamp(
             static_cast<int>(settings.GetInt(WidgetKey(index, "size"), 0)), 0, 2));
-        widgets[index].enabled = settings.GetBool(WidgetKey(index, "on"), true);
+        widgets[index].enabled =
+            settings.GetBool(WidgetKey(index, "on"), widgets[index].enabled);
         widgets[index].mode = static_cast<uint8_t>(
             std::clamp(static_cast<int>(settings.GetInt(WidgetKey(index, "mode"), 0)), 0, 2));
     }
     config.widgets = widgets;
+    return version == 1;
 }
 
 bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex,
@@ -109,12 +121,18 @@ bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mu
         std::clamp(static_cast<int>(settings.GetInt("oled_contrast", 128)), 0, 255));
     config.brand = settings.GetString("oled_brand", "Desk Robot");
     config.distance_prefix = settings.GetString("oled_prefix", "Dist");
-    LoadWidgets(settings, config);
+    const bool migrate_widgets = LoadWidgets(settings, config);
     if (!oled_.Initialize(bus, bus_mutex, SECONDARY_OLED_I2C_ADDRESS, SECONDARY_OLED_WIDTH,
                           SECONDARY_OLED_HEIGHT, config.flip_180)) {
         return false;
     }
-    oled_.Configure(config);
+    if (!oled_.Configure(config)) {
+        return false;
+    }
+    if (migrate_widgets) {
+        PersistConfig(config);
+        ESP_LOGI(TAG, "Migrated secondary OLED widget layout from v1 to v2");
+    }
     telemetry_context_ = telemetry_context;
     telemetry_provider_ = telemetry_provider;
 
@@ -162,7 +180,7 @@ void SecondaryDisplayController::PersistConfig(const SecondaryOled::Config& conf
     settings.SetInt("oled_contrast", config.contrast);
     settings.SetString("oled_brand", config.brand);
     settings.SetString("oled_prefix", config.distance_prefix);
-    settings.SetInt("oled_w_ver", 1);
+    settings.SetInt("oled_w_ver", kWidgetSchemaVersion);
     for (size_t index = 0; index < config.widgets.size(); ++index) {
         const auto& widget = config.widgets[index];
         settings.SetInt(WidgetKey(index, "type"), static_cast<int>(widget.type));

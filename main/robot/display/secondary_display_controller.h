@@ -36,7 +36,7 @@ public:
 
 private:
     static std::string WidgetKey(size_t index, const char* field);
-    static void LoadWidgets(Settings& settings, SecondaryOled::Config& config);
+    static bool LoadWidgets(Settings& settings, SecondaryOled::Config& config);
     static void TaskEntry(void* arg);
     static void TemporaryTextResetTimer(void* arg);
     void RunTask();
