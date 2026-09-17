@@ -4,7 +4,7 @@ Updated: 2026-09-17
 
 Branch: `main`
 
-Remote state at handoff: `main` is 4 commits ahead of `origin/main`
+Remote state at handoff: `main` is 6 commits ahead of `origin/main`
 
 Push status: not pushed
 
@@ -44,9 +44,10 @@ Commit each completed batch locally and do not push `origin`.
 | `d8558d2` | Extract Gemini ASR turn lifecycle from `Application` | Build/hardware not run |
 | `4a01f11` | Split Mochan face rendering and overlay implementation | Build/hardware not run |
 | `1cc3fef` | Extract streamed-notification lifecycle from `Application` | Build/hardware not run |
+| `3827e94` | Split secondary OLED raster rendering from lifecycle/content | Build/hardware not run |
 
-Commits `4a01f11`, `d80ddcf`, `1cc3fef` and the accompanying Phase 8C documentation
-commit have not been pushed to `origin`.
+Commits `4a01f11`, `d80ddcf`, `1cc3fef`, `37d3c4b`, `3827e94` and the accompanying
+Phase 9 documentation commit have not been pushed to `origin`.
 
 ## Current architecture
 
@@ -140,6 +141,11 @@ The main face retains one `MochanDisplay` class/API, with implementation grouped
 The split is translation-unit-only: object ownership, animation timer cadence and LVGL state
 remain in `MochanDisplay`.
 
+The secondary OLED also retains one `SecondaryOled` class/API. Lifecycle, configuration,
+telemetry, event priority, widget content and I2C flushing remain in `secondary_oled.cc`, while
+glyph tables and low-level framebuffer/fitted-text raster primitives live in
+`secondary_oled_renderer.cc`.
+
 ## Preserved contracts and invariants
 
 - Existing GPIO assignments and shared-bus wiring are unchanged.
@@ -162,13 +168,15 @@ remain in `MochanDisplay`.
   mirroring and public display API are unchanged.
 - Notification JSON validation, busy-state rejection, subtitle timing, playback completion,
   interruption behavior and `kDeviceStateNotifying` transitions are unchanged.
+- Secondary OLED widget order/content, layout capabilities, page timing, event priority,
+  persistence, glyph data and raster calculations are unchanged.
 - No board/release matrix or CI build workflow has been reintroduced.
 
 ## Latest unverified batch
 
 Commits `51da4de`, `75ee843`, `c739c47`, `5cd1d84`, `98e8f44`, `d8558d2`,
-`4a01f11` and `1cc3fef` completed Phases 6A through 8C plus the optional Mochan display
-cleanup.
+`4a01f11`, `1cc3fef` and `3827e94` completed Phases 6A through 9 plus the optional
+Mochan display cleanup.
 Robot-specific MCP bindings and Web Control action/status adaptation are no longer owned by
 `DeskRobotBoard`, and the editable Web UI is no longer maintained in a 3,179-line C++ header.
 Phase 7 moved pure randomized emotion/dance/gyro-look policy into
@@ -194,6 +202,11 @@ The optional Mochan cleanup split the previous 2,101-line implementation into fo
 approximately 756, 708 and 694 lines. Source comparison confirmed the seven raster/rendering
 methods and all overlay/public-display methods were moved verbatim; only two narrow mouth-
 geometry query helpers were added for the remaining layout orchestration.
+
+Phase 9 split the previous 1,140-line secondary OLED implementation into an 856-line lifecycle,
+telemetry and content-rendering core plus a 287-line low-level raster renderer. All 17 moved
+methods and all 13 moved glyph tables match the previous implementation after whitespace-only
+normalization; the existing constexpr layout engine remains in `secondary_oled_layout.h`.
 
 Source review confirmed all 15 MCP tools, all 29 Web actions, all 98 robot status JSON keys, the
 nine HTTP routes and port 8080 are retained. The CMake-assembled HTML body matches the previous
@@ -229,6 +242,7 @@ Files changed:
 - `main/notify/notification_controller.cc`
 - `main/robot/display/mochan_face_renderer.cc`
 - `main/robot/display/mochan_display_overlay.cc`
+- `main/robot/display/secondary_oled_renderer.cc`
 
 Minimum validation:
 
@@ -258,6 +272,8 @@ Minimum validation:
     animation, response typing, notification, camera preview and boot splash render as before.
 17. Send a streamed notification with subtitles; confirm busy-state rejection, subtitle timing,
     normal completion and interruption by chat, listening, wake word and network disconnect.
+18. Confirm secondary OLED widgets, S/M/L layouts, page rotation, temporary text, contrast/flip,
+    cliff/network/battery/turn/calibration/gesture events and shared-I2C failure handling.
 
 Build: **NOT RUN**
 
@@ -265,19 +281,20 @@ Hardware: **NOT RUN**
 
 ## Next phase
 
-Continue with Phase 9: re-audit the secondary OLED implementation for a natural rendering split.
+Optionally audit Phase 11 OTA/bootstrap cleanup. This is the final planned architecture phase and
+must be skipped if official-upgrade code cannot be isolated without risking bootstrap behavior.
 
 ```text
-main/robot/display/secondary_oled.h
-main/robot/display/secondary_oled.cc
-main/robot/display/secondary_oled_layout.h
-main/robot/display/secondary_oled_layout.cc
+main/ota.h
+main/ota.cc
+main/application.cc (targeted bootstrap call sites only)
 ```
 
-Preserve OLED UX, layout behavior, persisted layout/settings, telemetry content and device
-lifecycle. Extract only a coherent renderer/helper boundary; if the existing layout split already
-makes the remaining implementation cohesive, document that finding and stop rather than forcing
-another class.
+Keep bootstrap, activation, MQTT/WebSocket/server configuration, server time and current asset
+behavior. Only remove or isolate official firmware download, partition writing and auto-upgrade
+paths that are still present and unreachable for this single target. Do not change the partition
+table. If those paths are already absent or inseparable from bootstrap configuration, document the
+audit and end the refactor without code changes.
 
 ## Useful review checks
 

@@ -103,6 +103,8 @@ Streamed notification playback, subtitle progress and application-state cleanup 
 
 The Mochan face keeps one public `MochanDisplay` API while its implementation is split into
 core animation/lifecycle, eye-and-mouth raster rendering, and overlay/status presentation.
+The secondary OLED likewise keeps one `SecondaryOled` API while low-level glyph and fitted-text
+raster primitives live in `secondary_oled_renderer.cc`.
 
 ## Typed Web Chat
 
