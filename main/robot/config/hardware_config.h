@@ -78,11 +78,16 @@
 #define CAMERA_PIN_RESET GPIO_NUM_NC
 #define CAMERA_XCLK_FREQ_HZ 20000000
 
-// Primary shared I2C bus: camera SCCB + downward-facing VL53L0X cliff sensor.
+// Primary shared I2C bus: camera SCCB + downward-facing VL53L0X + environment sensors.
 #define PRIMARY_I2C_PORT I2C_NUM_0
 #define PRIMARY_I2C_SDA_PIN CAMERA_PIN_SIOD
 #define PRIMARY_I2C_SCL_PIN CAMERA_PIN_SIOC
 #define DISTANCE_SENSOR_I2C_ADDRESS 0x29
+#define AHT20_I2C_ADDRESS 0x38
+#define BMP280_I2C_ADDRESS_PRIMARY 0x76
+#define BMP280_I2C_ADDRESS_FALLBACK 0x77
+#define BH1750_I2C_ADDRESS_PRIMARY 0x23
+#define BH1750_I2C_ADDRESS_FALLBACK 0x5C
 
 // Shared auxiliary I2C bus: SSD1306 + INA219 + MPU6050.
 #define AUXILIARY_I2C_SDA_PIN GPIO_NUM_38
