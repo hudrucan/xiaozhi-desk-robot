@@ -379,6 +379,12 @@ void AudioService::AudioOutputTask() {
         }
 
         codec_->OutputData(task.pcm);
+        const int output_rate = codec_->output_sample_rate() * codec_->output_channels();
+        if (output_rate > 0) {
+            output_clock_us_.fetch_add(
+                static_cast<uint32_t>(static_cast<uint64_t>(task.pcm.size()) * 1000000 / output_rate),
+                std::memory_order_relaxed);
+        }
 
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();

@@ -1,5 +1,6 @@
 #include "mochan_display.h"
 
+#include "application.h"
 #include "assets/lang_config.h"
 #include "display/lvgl_display/lvgl_theme.h"
 
@@ -21,19 +22,61 @@ const lv_color_t kBrass = LV_COLOR_MAKE(0xc6, 0xa1, 0x5b);
 const lv_color_t kBrassHighlight = LV_COLOR_MAKE(0xe3, 0xc2, 0x7b);
 const lv_color_t kSpinnerTrack = LV_COLOR_MAKE(0x4b, 0x3b, 0x25);
 constexpr int kResponseTextScale = 210;
-constexpr int kTypingGlyphsPerSecond = 31;
+// Sentence messages carry no word timestamps: use a conservative playback-
+// paced reveal, with faster catch-up only after the voice has drained.
+constexpr int kTypingGlyphsPerSecond = 28;
+constexpr int kTypingFinishingGlyphsPerSecond = 48;
+constexpr int64_t kTypingUpdateIntervalUs = 66000;
 constexpr int64_t kTypingCreditScale = 1000000;
 constexpr int64_t kTypingMaxElapsedUs = 100000;
 constexpr char kTag[] = "MochanDisplay";
 
-size_t CountUtf8GlyphsFrom(const std::string& text, size_t offset) {
-    size_t count = 0;
-    for (size_t i = offset; i < text.size(); ++i) {
-        if ((static_cast<uint8_t>(text[i]) & 0xc0) != 0x80) {
-            ++count;
+std::string ResponseDisplayText(const char* content) {
+    std::string text(content);
+    constexpr char kBridgeTool[] = "self.web_chat.consume_pending";
+    size_t position = 0;
+    while ((position = text.find(kBridgeTool, position)) != std::string::npos) {
+        size_t begin = position;
+        size_t end = position + sizeof(kBridgeTool) - 1;
+        // Only remove the display annotation and common no-argument call
+        // wrappers. This never changes the MCP payload or Web transcript.
+        while (begin > 0 && text[begin - 1] == '`') {
+            --begin;
+        }
+        if (text.compare(end, 4, "({})") == 0) {
+            end += 4;
+        } else if (text.compare(end, 2, "()") == 0) {
+            end += 2;
+        }
+        while (end < text.size() && text[end] == '`') {
+            ++end;
+        }
+        if (begin > 0 && text[begin - 1] == '[' && end < text.size() && text[end] == ']') {
+            --begin;
+            ++end;
+        }
+        text.erase(begin, end - begin);
+        // A tool-only line must not open the box or spend typewriter time on
+        // punctuation/icons. Preserve any real text on the same line.
+        const size_t previous_newline = begin == 0 ? std::string::npos : text.rfind('\n', begin - 1);
+        const size_t line_begin = previous_newline == std::string::npos ? 0 : previous_newline + 1;
+        const size_t newline = text.find('\n', begin);
+        const size_t line_end = newline == std::string::npos ? text.size() : newline;
+        std::string remainder = text.substr(line_begin, line_end - line_begin);
+        for (const char* icon : {"🔧", "🛠️", "🛠"}) {
+            size_t icon_position;
+            while ((icon_position = remainder.find(icon)) != std::string::npos) {
+                remainder.erase(icon_position, std::strlen(icon));
+            }
+        }
+        if (remainder.find_first_not_of(" \t\r`*[](){}:;,.->") == std::string::npos) {
+            text.erase(line_begin, line_end - line_begin + (newline != std::string::npos ? 1 : 0));
+            position = line_begin;
+        } else {
+            position = begin;
         }
     }
-    return count;
+    return text;
 }
 
 constexpr std::array<const char*, 34> kSupportedEmotions = {
@@ -115,12 +158,29 @@ void MochanDisplay::RenderTypingText() {
         return;
     }
 
-    std::string rendered = "> ";
-    rendered.append(typing_text_, 0, typing_position_);
+    // Keep the label/layout workload bounded during long answers. Retain the
+    // full transcript for cumulative server updates, but only render its tail.
+    if (typing_position_ - typing_window_start_ > 1024) {
+        typing_window_start_ = typing_position_ - 768;
+        while (typing_window_start_ < typing_position_ &&
+               (static_cast<uint8_t>(typing_text_[typing_window_start_]) & 0xc0) == 0x80) {
+            ++typing_window_start_;
+        }
+        const size_t word_end = typing_text_.find_first_of(" \n", typing_window_start_);
+        if (word_end != std::string::npos && word_end < typing_position_) {
+            typing_window_start_ = word_end + 1;
+        }
+    }
+    std::string rendered = typing_window_start_ == 0 ? "> " : "… ";
+    rendered.append(typing_text_, typing_window_start_, typing_position_ - typing_window_start_);
     if (typing_cursor_visible_) {
         rendered.push_back('|');
     }
-    lv_label_set_text(subtitle_, rendered.c_str());
+    if (rendered == typing_rendered_text_) {
+        return;
+    }
+    typing_rendered_text_ = std::move(rendered);
+    lv_label_set_text(subtitle_, typing_rendered_text_.c_str());
     lv_obj_update_layout(response_box_);
 
     // LVGL calculates scrolling from the label's unscaled height, while the
@@ -155,6 +215,7 @@ void MochanDisplay::StartTyping(const char* content) {
         typing_position_ = 0;
     } else if (incoming == typing_text_) {
         // Ignore a duplicate transcript update.
+        return;
     } else if (incoming.size() > typing_text_.size() &&
                incoming.compare(0, typing_text_.size(), typing_text_) == 0) {
         // Some servers send the complete accumulated transcript on every
@@ -177,9 +238,10 @@ void MochanDisplay::StartTyping(const char* content) {
     typing_finishing_ = false;
     if (!was_typing) {
         typing_last_update_us_ = esp_timer_get_time();
-        typing_glyph_credit_ = kTypingCreditScale;
+        typing_output_clock_us_ = Application::GetInstance().GetAudioService().GetOutputClockUs();
+        typing_glyph_credit_ = 0;
     }
-    RenderTypingText();
+    // Render on the face clock; sentence callbacks do not force extra layouts.
 }
 
 void MochanDisplay::UpdateTyping(int64_t now_us) {
@@ -188,18 +250,29 @@ void MochanDisplay::UpdateTyping(int64_t now_us) {
         return;
     }
 
-    if (typing_last_update_us_ == 0) {
-        typing_last_update_us_ = now_us;
+    if (now_us - typing_last_update_us_ < kTypingUpdateIntervalUs) {
+        return;
+    }
+    // Let an expensive eye/blink frame finish without adding a text layout.
+    // Bound the deferral so continuous expression changes cannot starve text.
+    if (esp_timer_get_time() - now_us > 18000 &&
+        now_us - typing_last_update_us_ < kTypingMaxElapsedUs) {
+        return;
     }
     const int64_t elapsed_us =
         std::clamp(now_us - typing_last_update_us_, int64_t{0}, kTypingMaxElapsedUs);
     typing_last_update_us_ = now_us;
 
-    const size_t remaining_glyphs = CountUtf8GlyphsFrom(typing_text_, typing_position_);
-    const int max_glyphs_per_frame =
-        typing_finishing_ ? 6 : (remaining_glyphs > 72 ? 3 : (remaining_glyphs > 32 ? 2 : 1));
-    typing_glyph_credit_ +=
-        elapsed_us * kTypingGlyphsPerSecond * max_glyphs_per_frame;
+    auto& audio = Application::GetInstance().GetAudioService();
+    const uint32_t output_clock_us = audio.GetOutputClockUs();
+    const uint32_t played_us = output_clock_us - typing_output_clock_us_;
+    typing_output_clock_us_ = output_clock_us;
+    const bool finishing_after_audio = typing_finishing_ && audio.IsPlaybackIdle();
+    const int64_t progress_us = finishing_after_audio ? elapsed_us : played_us;
+    const int rate = finishing_after_audio ? kTypingFinishingGlyphsPerSecond : kTypingGlyphsPerSecond;
+    constexpr int max_glyphs_per_frame = 6;
+    typing_glyph_credit_ = std::min<int64_t>(
+        typing_glyph_credit_ + progress_us * rate, max_glyphs_per_frame * kTypingCreditScale);
     int glyphs_to_reveal = static_cast<int>(typing_glyph_credit_ / kTypingCreditScale);
     glyphs_to_reveal = std::min(glyphs_to_reveal, max_glyphs_per_frame);
     typing_glyph_credit_ -= static_cast<int64_t>(glyphs_to_reveal) * kTypingCreditScale;
@@ -207,8 +280,8 @@ void MochanDisplay::UpdateTyping(int64_t now_us) {
     bool visual_changed = false;
     if (typing_position_ < typing_text_.size()) {
         // Advance one complete UTF-8 code point so Vietnamese glyphs never
-        // appear as temporarily corrupted byte sequences. A larger backlog
-        // earns more glyph credit so multi-sentence TTS can catch up smoothly.
+        // appear as temporarily corrupted byte sequences. A longer sentence
+        // must not accelerate the reveal ahead of audio playback.
         for (int glyph = 0;
              glyph < glyphs_to_reveal && typing_position_ < typing_text_.size();
              ++glyph) {
@@ -227,7 +300,7 @@ void MochanDisplay::UpdateTyping(int64_t now_us) {
 
     const bool previous_cursor_visible = typing_cursor_visible_;
     if (typing_active_) {
-        typing_cursor_phase_ = static_cast<uint8_t>((typing_cursor_phase_ + 1) % 16);
+        typing_cursor_phase_ = static_cast<uint8_t>((now_us / 66000) % 16);
         typing_cursor_visible_ = typing_cursor_phase_ < 8;
     } else {
         typing_cursor_visible_ = false;
@@ -247,7 +320,8 @@ void MochanDisplay::FinishTyping() {
         typing_active_ = true;
         typing_cursor_visible_ = true;
         typing_last_update_us_ = esp_timer_get_time();
-        typing_glyph_credit_ = kTypingCreditScale;
+        typing_output_clock_us_ = Application::GetInstance().GetAudioService().GetOutputClockUs();
+        typing_glyph_credit_ = 0;
     } else {
         typing_finishing_ = false;
         typing_cursor_visible_ = false;
@@ -258,8 +332,11 @@ void MochanDisplay::FinishTyping() {
 
 void MochanDisplay::ResetTyping() {
     typing_text_.clear();
+    typing_rendered_text_.clear();
+    typing_window_start_ = 0;
     typing_position_ = 0;
     typing_last_update_us_ = 0;
+    typing_output_clock_us_ = 0;
     typing_glyph_credit_ = 0;
     typing_cursor_phase_ = 0;
     typing_cursor_visible_ = false;
@@ -532,12 +609,17 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     if (subtitle_ == nullptr || content == nullptr) {
         return;
     }
+    const bool is_assistant = role != nullptr && std::strcmp(role, "assistant") == 0;
+    const std::string visible_text = is_assistant ? ResponseDisplayText(content) : content;
+    if (content[0] != '\0' && visible_text.empty()) {
+        return;
+    }
+    content = visible_text.c_str();
     DisplayLockGuard lock(this);
     if (content[0] != '\0') {
         FreezeMouthForExit();
     }
     CancelIdleScheduler(true);
-    const bool is_assistant = role != nullptr && std::strcmp(role, "assistant") == 0;
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
     if (content[0] == '\0') {

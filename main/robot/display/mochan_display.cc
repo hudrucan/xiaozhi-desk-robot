@@ -725,12 +725,16 @@ void MochanDisplay::AdvanceEyeAnimation() {
     if (yawn_active_) {
         blink_amount = std::max<uint8_t>(blink_amount, yawn_amount_ * 72 / 256);
     }
+    const int64_t face_work_started_us = esp_timer_get_time();
     UpdateEyes(blink_amount, idle_eligible);
     UpdateMouth(blink_amount, emotion);
+    max_face_work_us_ = std::max(max_face_work_us_, esp_timer_get_time() - face_work_started_us);
     // Keep typewriter work on the face frame clock. Time-based glyph credit
     // preserves a steady reveal when an occasional display frame arrives late.
     if (typing_active_) {
+        const int64_t text_work_started_us = esp_timer_get_time();
         UpdateTyping(callback_started_us);
+        max_text_work_us_ = std::max(max_text_work_us_, esp_timer_get_time() - text_work_started_us);
     }
     RecordAnimationTiming(callback_started_us, frame_interval_us);
 }
@@ -745,12 +749,17 @@ void MochanDisplay::RecordAnimationTiming(int64_t callback_started_us, int64_t f
     if (callback_started_us - last_performance_log_us_ < kPerformanceLogIntervalUs) {
         return;
     }
-    ESP_LOGI(kTag, "Face perf: frame=%lld us (max %lld), callback=%lld us (max %lld)",
+    ESP_LOGI(kTag, "Face perf: frame=%lld us (max %lld), callback=%lld us (max %lld), "
+                  "face_max=%lld us, text_max=%lld us",
              static_cast<long long>(frame_interval_us),
              static_cast<long long>(max_frame_interval_us_),
              static_cast<long long>(callback_duration_us),
-             static_cast<long long>(max_callback_duration_us_));
+             static_cast<long long>(max_callback_duration_us_),
+             static_cast<long long>(max_face_work_us_),
+             static_cast<long long>(max_text_work_us_));
     last_performance_log_us_ = callback_started_us;
     max_frame_interval_us_ = 0;
     max_callback_duration_us_ = 0;
+    max_face_work_us_ = 0;
+    max_text_work_us_ = 0;
 }

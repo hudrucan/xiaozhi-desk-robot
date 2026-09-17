@@ -130,6 +130,9 @@ public:
     bool IsInputClipping() const;
     bool IsIdle();
     bool IsPlaybackIdle();
+    // Monotonic modulo-2^32 PCM output clock; readers use unsigned deltas.
+    // No UI callbacks or locks are needed on the audio output task.
+    uint32_t GetOutputClockUs() const { return output_clock_us_.load(std::memory_order_relaxed); }
     bool IsWakeWordRunning() const {
         return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING;
     }
@@ -161,6 +164,7 @@ public:
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
+    std::atomic<uint32_t> output_clock_us_{0};
     std::unique_ptr<AudioEngine> audio_engine_;
     std::atomic<AsrProvider> asr_provider_{AsrProvider::kXiaozhi};
     std::atomic<GeminiTranscribeClient*> gemini_client_{nullptr};

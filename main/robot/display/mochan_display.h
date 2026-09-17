@@ -112,6 +112,7 @@ private:
     EyeRaster left_raster_;
     EyeRaster right_raster_;
     MouthRaster mouth_raster_;
+    int mouth_shape_opacity_ = 0;
     bool InitializeEyeRasters();
     bool InitializeMouthRaster();
     bool RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
@@ -169,9 +170,12 @@ private:
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> camera_image_cached_;
     std::string typing_text_;
+    std::string typing_rendered_text_;
+    size_t typing_window_start_ = 0;
     size_t typing_position_ = 0;
     int32_t response_scroll_target_ = 0;
     int64_t typing_last_update_us_ = 0;
+    uint32_t typing_output_clock_us_ = 0;
     int64_t typing_glyph_credit_ = 0;
     uint8_t typing_cursor_phase_ = 0;
     bool typing_cursor_visible_ = false;
@@ -204,6 +208,8 @@ private:
     int64_t last_animation_callback_us_ = 0;
     int64_t last_performance_log_us_ = 0;
     int64_t max_frame_interval_us_ = 0;
+    int64_t max_face_work_us_ = 0;
+    int64_t max_text_work_us_ = 0;
     int64_t max_callback_duration_us_ = 0;
     int64_t idle_session_started_ms_ = 0;
     int64_t next_idle_emotion_ms_ = 0;

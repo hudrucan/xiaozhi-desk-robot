@@ -13,7 +13,7 @@
 namespace {
 
 constexpr int kEyeLayoutOffsetY = 10;
-constexpr int kMouthIdleGapOffsetY = 8;
+constexpr int kMouthEyeCenterGap = 65;
 constexpr char kTag[] = "MochanDisplay";
 
 struct MouthPoint {
@@ -36,15 +36,13 @@ struct MouthGeometry {
 };
 
 constexpr MouthPoint kNeutralMouth[] = {
-    {6, 3},   {15, 5},  {24, 6},  {33, 6},  {42, 6},  {50, 6},  {58, 5},  {66, 3},  {73, 1},
-    {76, 1},  {78, 2},  {79, 3},  {80, 6},  {80, 9},  {79, 12}, {76, 15}, {73, 18}, {65, 21},
-    {57, 24}, {49, 25}, {40, 25}, {30, 25}, {20, 23}, {13, 21}, {6, 18},  {3, 16},  {2, 14},
-    {0, 12},  {0, 10},  {0, 8},   {2, 6},   {3, 4},   {6, 3},
+    {6, 0}, {46, 0}, {50, 2}, {52, 6}, {52, 10}, {50, 14},
+    {46, 16}, {6, 16}, {2, 14}, {0, 10}, {0, 6}, {2, 2},
 };
 constexpr MouthPoint kHappyMouth[] = {
-    {4, 1},  {14, 5}, {23, 7}, {33, 9},  {43, 10}, {53, 10}, {64, 8},  {74, 5},  {85, 1},  {88, 0},
-    {90, 1}, {90, 3}, {90, 7}, {85, 21}, {76, 32}, {64, 39}, {48, 42}, {34, 41}, {22, 37}, {12, 30},
-    {4, 20}, {2, 16}, {1, 12}, {0, 9},   {0, 6},   {0, 4},   {1, 2},   {2, 1},   {4, 1},
+    {2, 0}, {5, 0}, {12, 5}, {21, 8}, {30, 9}, {39, 8}, {48, 5},
+    {55, 0}, {58, 0}, {60, 2}, {60, 7}, {55, 16}, {46, 22},
+    {36, 25}, {24, 25}, {14, 22}, {5, 16}, {0, 7}, {0, 2},
 };
 constexpr MouthPoint kBoredMouth[] = {
     {6, 4},   {19, 5},  {32, 6},  {47, 4},  {63, 2},  {68, 1},  {72, 2},  {75, 3},  {78, 5},
@@ -53,10 +51,8 @@ constexpr MouthPoint kBoredMouth[] = {
     {0, 14},  {0, 12},  {0, 10},  {1, 8},   {2, 6},   {4, 5},   {6, 4},
 };
 constexpr MouthPoint kSleepyMouth[] = {
-    {10, 4},  {17, 2},  {25, 2},  {33, 1},  {42, 2},  {52, 3},  {60, 3},  {69, 2},  {76, 1},
-    {80, 1},  {84, 3},  {86, 6},  {88, 10}, {88, 16}, {87, 21}, {84, 26}, {78, 29}, {68, 31},
-    {58, 32}, {47, 32}, {35, 31}, {25, 30}, {16, 28}, {9, 26},  {4, 23},  {2, 20},  {0, 18},
-    {0, 14},  {1, 11},  {2, 9},   {4, 7},   {7, 5},   {10, 4},
+    {8, 0}, {14, 0}, {19, 2}, {22, 6}, {22, 12}, {19, 16},
+    {14, 18}, {8, 18}, {3, 16}, {0, 12}, {0, 6}, {3, 2},
 };
 constexpr MouthPoint kSurprisedMouth[] = {
     {17, 4},  {26, 2},  {34, 1},  {42, 1},  {49, 3},  {56, 6},  {61, 9},  {65, 14},
@@ -73,10 +69,10 @@ constexpr MouthPoint kAngryMouth[] = {
 };
 
 constexpr std::array<MouthGeometry, 6> kMouthGeometries = {{
-    {"neutral", 80, 124, 80, 25, 15, 256, -28, 96, kNeutralMouth, std::size(kNeutralMouth)},
-    {"happy", 75, 109, 91, 42, 13, 224, -42, 72, kHappyMouth, std::size(kHappyMouth)},
+    {"neutral", 94, 132, 52, 16, 15, 256, 0, 24, kNeutralMouth, std::size(kNeutralMouth)},
+    {"happy", 90, 128, 60, 25, 13, 256, 0, 24, kHappyMouth, std::size(kHappyMouth)},
     {"bored", 79, 116, 83, 26, 14, 256, -20, 80, kBoredMouth, std::size(kBoredMouth)},
-    {"sleepy", 76, 120, 89, 33, -2, 256, 34, 112, kSleepyMouth, std::size(kSleepyMouth)},
+    {"sleepy", 109, 128, 22, 18, -2, 192, 0, 32, kSleepyMouth, std::size(kSleepyMouth)},
     {"surprised", 85, 116, 70, 56, 9, 256, -14, 64, kSurprisedMouth, std::size(kSurprisedMouth)},
     {"angry", 74, 121, 93, 32, 13, 256, -24, 72, kAngryMouth, std::size(kAngryMouth)},
 }};
@@ -237,11 +233,25 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
         }
         if (face_layout_progress_ == 0) {
             exiting_mouth_emotion_.clear();
+            mouth_shape_opacity_ = 0;
         }
         return;
     }
 
     const auto* geometry = FindMouthGeometry(emotion);
+    // Fade out the old silhouette before swapping it. Eyes retain their
+    // approved interpolation, and the mouth never snaps between expressions.
+    if (mouth_raster_.rendered_emotion != emotion && mouth_shape_opacity_ > 0) {
+        mouth_shape_opacity_ = std::max(0, mouth_shape_opacity_ - 48);
+        geometry = FindMouthGeometry(mouth_raster_.rendered_emotion);
+        if (geometry != nullptr && mouth_shape_opacity_ > 0) {
+            emotion = geometry->emotion;
+        } else {
+            geometry = FindMouthGeometry(emotion);
+        }
+    } else {
+        mouth_shape_opacity_ = std::min(256, mouth_shape_opacity_ + 48);
+    }
     if (RenderMouthTarget(emotion)) {
         lv_obj_invalidate(mouth_);
     }
@@ -266,7 +276,7 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
     const int scale_x =
         layout_scale * (256 - yawn_amount_ * 24 / 256) / 256 * expression_scale_x / 256;
     const int deformation_y = geometry->base_scale_y + expression_deformation_y +
-                              yawn_amount_ * 160 / 256 +
+                              yawn_amount_ * (emotion == "sleepy" ? 384 : 160) / 256 +
                               mouth_motion_amount_ * geometry->idle_open_scale_y / 256 +
                               blink_amount * geometry->blink_scale_y / 100;
     const int scale_y = layout_scale * deformation_y / 256;
@@ -278,14 +288,17 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
         mouth_raster_.previous_scale_y = scale_y;
         lv_image_set_scale_y(mouth_, scale_y);
     }
-    const uint8_t opacity = face_layout_progress_ * LV_OPA_COVER / 256;
+    const uint8_t opacity = face_layout_progress_ * mouth_shape_opacity_ / 256 * LV_OPA_COVER / 256;
     if (mouth_raster_.previous_opacity != opacity) {
         mouth_raster_.previous_opacity = opacity;
         lv_obj_set_style_opa(mouth_, opacity, 0);
     }
-    const int mouth_x = idle_gaze_x_ * 3 / 4;
-    const int mouth_y = 25 + kMouthIdleGapOffsetY + face_layout_offset_y_ + idle_gaze_y_ * 3 / 4 -
-                        yawn_amount_ * 4 / 256 - mouth_motion_amount_ * 2 / 256 + blink_amount / 65;
+    // Follow the actual smoothed eye center, including its gentle vertical
+    // motion. Deformation stays around the mouth's center without extra bobbing.
+    const int mouth_x = (left_eye_geometry_.x + right_eye_geometry_.x) / 2;
+    const int eye_center_y = (left_eye_geometry_.y + right_eye_geometry_.y) / 2;
+    const int mouth_y = 25 + 120 + eye_center_y + face_layout_offset_y_ +
+                        kMouthEyeCenterGap - (geometry->y + geometry->height / 2);
     if (mouth_raster_.previous_x != mouth_x || mouth_raster_.previous_y != mouth_y) {
         mouth_raster_.previous_x = mouth_x;
         mouth_raster_.previous_y = mouth_y;
@@ -358,6 +371,12 @@ bool MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
             const float distance =
                 rounded_distance(px, py - center, half_width, half_height, radius);
             const float coverage = std::clamp(0.5f - distance, 0.0f, 1.0f);
+            if (coverage == 0.0f) {
+                // Transparent pixels need no inner-layer shading or color
+                // blending. Keep the exact visible geometry and antialiasing.
+                raster.pixels[y * EyeRaster::kWidth + x] = 0;
+                continue;
+            }
             const float inner_distance = rounded_distance(inner_x, py - inner_center, half_width,
                                                           inner_half_height, inner_radius);
             const float t = std::clamp((1.0f - inner_distance) / 2.0f, 0.0f, 1.0f);
