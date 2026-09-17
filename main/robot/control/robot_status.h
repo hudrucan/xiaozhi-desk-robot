@@ -5,6 +5,7 @@
 #include "motion/motor_controller.h"
 #include "power/battery_controller.h"
 #include "sensors/cliff_sensor.h"
+#include "sensors/environment_types.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,7 @@ struct RobotStatus {
 
     CliffSensor::Status cliff;
     BatteryController::Status battery;
+    EnvironmentStatus environment;
 
     bool motion_sensor_available = false;
     bool motion_sensor_valid = false;

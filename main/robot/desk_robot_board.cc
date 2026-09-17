@@ -1269,6 +1269,7 @@ private:
 #ifdef INA219_I2C_ADDRESS
         status.battery = battery_controller_.GetStatus();
 #endif
+        status.environment = environment_controller_.GetStatus();
 #ifdef MPU6050_I2C_ADDRESS
         status.motion_sensor_available = motion_sensor_.IsAvailable();
         status.motion_sensor_valid = motion_sensor_valid_.load();
