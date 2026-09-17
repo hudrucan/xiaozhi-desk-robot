@@ -285,7 +285,7 @@ bool Esp32Camera::CaptureInternal(bool update_preview) {
         }
     }
 
-    ESP_LOGI(TAG, "Captured frame: %dx%d, len=%zu, format=%d", current_fb_->width,
+    ESP_LOGD(TAG, "Captured frame: %dx%d, len=%zu, format=%d", current_fb_->width,
              current_fb_->height, current_fb_->len, current_fb_->format);
 
     return true;

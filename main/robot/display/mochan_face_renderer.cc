@@ -226,7 +226,7 @@ bool MochanDisplay::RenderMouthTarget(const std::string& emotion) {
         }
     }
     lv_image_cache_drop(&mouth_raster_.descriptor);
-    ESP_LOGI(kTag, "Mouth raster %s: %lld us", emotion.c_str(),
+    ESP_LOGD(kTag, "Mouth raster %s: %lld us", emotion.c_str(),
              static_cast<long long>(esp_timer_get_time() - render_started_us));
     return true;
 }

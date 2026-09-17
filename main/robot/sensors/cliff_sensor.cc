@@ -69,12 +69,12 @@ bool CliffSensor::ConfigureSensor(vl53l0x* sensor) {
 }
 
 bool CliffSensor::RecoverSensor(vl53l0x* sensor) {
-    ESP_LOGW(TAG, "Recovering VL53L0X device without resetting shared I2C bus");
+    ESP_LOGD(TAG, "Recovering VL53L0X device without resetting shared I2C bus");
     if (vl53l0x_reset(sensor) != ESP_OK || !ConfigureSensor(sensor)) {
-        ESP_LOGE(TAG, "VL53L0X device recovery failed");
+        ESP_LOGD(TAG, "VL53L0X device recovery failed");
         return false;
     }
-    ESP_LOGI(TAG, "VL53L0X device recovered");
+    ESP_LOGD(TAG, "VL53L0X device recovery completed");
     return true;
 }
 
@@ -85,6 +85,8 @@ void CliffSensor::RunTask() {
     TickType_t last_wake_time = xTaskGetTickCount();
     uint8_t unsafe_samples = 0;
     uint8_t consecutive_failures = 0;
+    bool failure_reported = false;
+    bool recovery_reported = false;
     while (true) {
         vl53l0x_data_t reading = {};
         esp_err_t error = ESP_FAIL;
@@ -99,22 +101,38 @@ void CliffSensor::RunTask() {
                 ++consecutive_failures;
                 const esp_err_t clear_error = vl53l0x_clear_interrupt_mask(sensor);
                 if (clear_error == ESP_OK) {
-                    ESP_LOGW(TAG, "VL53L0X measurement state cleared");
+                    ESP_LOGD(TAG, "VL53L0X measurement state cleared");
                 }
                 if (consecutive_failures >= 3) {
-                    RecoverSensor(sensor);
+                    const bool recovered = RecoverSensor(sensor);
+                    if (!recovery_reported) {
+                        if (recovered) {
+                            ESP_LOGI(TAG, "VL53L0X recovery applied; awaiting measurement");
+                        } else {
+                            ESP_LOGE(TAG, "VL53L0X recovery failed; background retries continue");
+                        }
+                        recovery_reported = true;
+                    }
                     consecutive_failures = 0;
                     last_wake_time = xTaskGetTickCount();
                 }
             }
         }
         if (error == ESP_OK) {
+            if (failure_reported) {
+                ESP_LOGI(TAG, "VL53L0X measurements resumed");
+                failure_reported = false;
+            }
+            recovery_reported = false;
             consecutive_failures = 0;
             distance_mm_.store(reading.distance_mm);
             distance_valid_.store(reading.valid && reading.distance_mm > 0);
         } else {
             distance_valid_.store(false);
-            ESP_LOGW(TAG, "VL53L0X measurement failed: %s", esp_err_to_name(error));
+            if (!failure_reported) {
+                ESP_LOGW(TAG, "VL53L0X measurement failed: %s", esp_err_to_name(error));
+                failure_reported = true;
+            }
         }
 
         const int edge_mm = edge_mm_.load(std::memory_order_relaxed);

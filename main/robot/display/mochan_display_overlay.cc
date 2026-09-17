@@ -678,7 +678,7 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
         const int scale_x = 256 * content_width / descriptor->header.w;
         const int scale_y = 256 * content_height / descriptor->header.h;
         lv_image_set_scale(camera_image_, std::max(scale_x, scale_y));
-        ESP_LOGI(kTag, "Showing camera preview: %ux%u", descriptor->header.w, descriptor->header.h);
+        ESP_LOGD(kTag, "Showing camera preview: %ux%u", descriptor->header.w, descriptor->header.h);
     }
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);

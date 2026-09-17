@@ -749,7 +749,7 @@ void MochanDisplay::RecordAnimationTiming(int64_t callback_started_us, int64_t f
     if (callback_started_us - last_performance_log_us_ < kPerformanceLogIntervalUs) {
         return;
     }
-    ESP_LOGI(kTag, "Face perf: frame=%lld us (max %lld), callback=%lld us (max %lld), "
+    ESP_LOGD(kTag, "Face perf: frame=%lld us (max %lld), callback=%lld us (max %lld), "
                   "face_max=%lld us, text_max=%lld us",
              static_cast<long long>(frame_interval_us),
              static_cast<long long>(max_frame_interval_us_),
