@@ -4,6 +4,7 @@
 #include "assets/lang_config.h"
 #include "button.h"
 #include "camera/camera_diagnostics.h"
+#include "camera/camera_settings.h"
 #include "camera/desk_robot_camera.h"
 #include "codecs/no_audio_codec.h"
 #include "config/hardware_config.h"
@@ -101,6 +102,7 @@ private:
     MotorController motors_{MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2};
     ExpressiveMotionPlanner expressive_motion_planner_;
     RobotSettings robot_settings_;
+    CameraSettingsStore camera_settings_;
     std::unique_ptr<RobotWebControlServer> web_control_server_;
     std::atomic_bool camera_flipped_{false};
     std::atomic_bool display_flipped_{false};
@@ -492,6 +494,9 @@ private:
     }
 
     void InitializeCamera() {
+        const bool legacy_flipped = robot_settings_.GetCameraFlipped();
+        camera_settings_.Load(legacy_flipped);
+        const CameraSettingsConfig camera_settings = camera_settings_.Get();
         camera_config_t config = {};
         config.pin_d0 = CAMERA_PIN_D0;
         config.pin_d1 = CAMERA_PIN_D1;
@@ -522,10 +527,10 @@ private:
         config.grab_mode = CAMERA_GRAB_LATEST;
         camera_ = new DeskRobotCamera(config, primary_i2c_.mutex());
 
-        const bool flipped = robot_settings_.GetCameraFlipped();
+        const bool flipped = camera_settings.sensor.mirror && camera_settings.sensor.flip;
         camera_flipped_.store(flipped);
-        camera_->SetHMirror(flipped);
-        camera_->SetVFlip(flipped);
+        camera_->SetHMirror(camera_settings.sensor.mirror);
+        camera_->SetVFlip(camera_settings.sensor.flip);
     }
 
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -656,6 +661,9 @@ private:
     void ApplyCameraFlip(bool flipped) {
         camera_->SetHMirror(flipped);
         camera_->SetVFlip(flipped);
+        camera_settings_.SetOrientation(flipped, flipped);
+        // Retain the original key as a deliberate migration fallback for
+        // firmware versions that do not know the camera settings schema.
         robot_settings_.SetCameraFlipped(flipped);
     }
 
