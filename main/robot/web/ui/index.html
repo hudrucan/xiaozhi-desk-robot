@@ -378,6 +378,35 @@
                 value="75"
               /><span class="audio-value" id="screenValue">75%</span>
             </div>
+            <div class="segment-toggles" style="margin: 4px 0 8px">
+              <label class="toggle"
+                ><input id="autoBrightness" type="checkbox" />Automatic screen brightness</label
+              >
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Auto minimum</b><small>Dark-room floor</small></span
+              ><input
+                id="autoBrightnessMinimum"
+                type="range"
+                min="10"
+                max="100"
+                step="5"
+                value="15"
+              /><span class="audio-value" id="autoBrightnessMinimumValue">15%</span>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Auto maximum</b><small>Bright-room ceiling</small></span
+              ><input
+                id="autoBrightnessMaximum"
+                type="range"
+                min="10"
+                max="100"
+                step="5"
+                value="85"
+              /><span class="audio-value" id="autoBrightnessMaximumValue">85%</span>
+            </div>
             <div class="audio-row">
               <span class="audio-name"
                 ><b>Status light</b><small>Edison LED · GPIO48</small></span

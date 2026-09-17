@@ -173,6 +173,24 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = "Screen brightness " + std::to_string(safe_brightness) + "%";
         return true;
     }
+    if (action == "auto_brightness") {
+        const bool enabled = value != 0;
+        controller_.SetAutoBrightnessEnabled(enabled);
+        message = enabled ? "Automatic brightness enabled" : "Automatic brightness disabled";
+        return true;
+    }
+    if (action == "auto_brightness_minimum") {
+        const int safe_brightness = std::clamp(value, 10, 100);
+        controller_.SetAutoBrightnessMinimum(safe_brightness);
+        message = "Automatic brightness minimum " + std::to_string(safe_brightness) + "%";
+        return true;
+    }
+    if (action == "auto_brightness_maximum") {
+        const int safe_brightness = std::clamp(value, 10, 100);
+        controller_.SetAutoBrightnessMaximum(safe_brightness);
+        message = "Automatic brightness maximum " + std::to_string(safe_brightness) + "%";
+        return true;
+    }
     if (action == "motor_speed") {
         const int safe_speed = std::clamp(value, MotorController::kMinSpeedPercent,
                                           MotorController::kMaxSpeedPercent);

@@ -140,8 +140,13 @@ void EnvironmentController::ServiceBh1750(int64_t now_us) {
     float lux = 0.0f;
     if (bh1750_.ReadLux(lux)) {
         PublishBh1750(lux, now_us);
-    } else if (RecordFailure(Sensor::kBh1750, now_us)) {
-        bh1750_.Shutdown();
+    } else {
+        if (light_callback_ != nullptr) {
+            light_callback_(light_context_, false, 0.0f, now_us);
+        }
+        if (RecordFailure(Sensor::kBh1750, now_us)) {
+            bh1750_.Shutdown();
+        }
     }
     next_bh1750_sample_us_ = now_us + MillisecondsToMicroseconds(BH1750_SAMPLE_PERIOD_MS);
 }
@@ -274,6 +279,9 @@ void EnvironmentController::PublishBh1750(float lux, int64_t now_us) {
     }
     if (recovered) {
         ESP_LOGI(TAG, "BH1750 read recovered");
+    }
+    if (light_callback_ != nullptr) {
+        light_callback_(light_context_, true, lux, now_us);
     }
 }
 

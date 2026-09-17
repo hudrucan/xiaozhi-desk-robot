@@ -76,7 +76,8 @@ function domainsForAction(name) {
   if (["forward", "backward", "left", "right", "stop", "turn_relative", "dance",
     "motor_speed", "drive_duration"].includes(name)) return ["motors"];
   if (name === "cliff_threshold" || name === "motion_emotions") return ["sensors"];
-  if (name.startsWith("oled_") || ["display_flip", "screen_brightness",
+  if (name.startsWith("oled_") || name.startsWith("auto_brightness") ||
+    ["display_flip", "screen_brightness",
     "status_light_brightness", "lights_toggle"].includes(name)) return ["display"];
   if (["speaker_volume", "microphone_gain", "audio_test"].includes(name)) return ["audio"];
   if (name === "camera_flip" || name === "live_camera") return ["camera"];

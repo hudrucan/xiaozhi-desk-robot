@@ -11,6 +11,7 @@
 #include "control/robot_settings.h"
 #include "display/lcd_display.h"
 #include "display/mochan_display.h"
+#include "display/auto_brightness_policy.h"
 #ifdef SECONDARY_OLED_I2C_ADDRESS
 #include "display/secondary_display_controller.h"
 #endif
@@ -122,6 +123,7 @@ private:
     SharedI2cBus primary_i2c_{PRIMARY_I2C_PORT, PRIMARY_I2C_SDA_PIN, PRIMARY_I2C_SCL_PIN,
                               "primary"};
     EnvironmentController environment_controller_;
+    AutoBrightnessPolicy auto_brightness_policy_;
 #ifdef AUXILIARY_I2C_SDA_PIN
     SharedI2cBus auxiliary_i2c_{AUXILIARY_I2C_PORT, AUXILIARY_I2C_SDA_PIN,
                                 AUXILIARY_I2C_SCL_PIN, "auxiliary"};
@@ -974,6 +976,54 @@ private:
             status_light_saved_brightness_.store(brightness);
         }
         ApplyStatusLightBrightness(brightness);
+        AutoBrightnessPolicy::Config auto_config = {
+            .enabled = robot_settings_.GetAutoBrightnessEnabled(),
+            .minimum_percent = robot_settings_.GetAutoBrightnessMinimum(),
+            .maximum_percent = robot_settings_.GetAutoBrightnessMaximum(),
+        };
+        if (auto_config.maximum_percent < auto_config.minimum_percent) {
+            auto_config.maximum_percent = auto_config.minimum_percent;
+        }
+        const int screen_brightness =
+            GetBacklight() != nullptr ? GetBacklight()->brightness() : 75;
+        auto_brightness_policy_.Configure(auto_config, screen_brightness,
+                                          esp_timer_get_time());
+    }
+
+    static void OnAmbientLight(void* arg, bool valid, float illuminance_lux,
+                               int64_t timestamp_us) {
+        auto* self = static_cast<DeskRobotBoard*>(arg);
+        if (!valid) {
+            self->auto_brightness_policy_.ResetReading();
+            return;
+        }
+        const auto target =
+            self->auto_brightness_policy_.Update(illuminance_lux, timestamp_us);
+        if (!target.has_value()) {
+            return;
+        }
+        Application::GetInstance().Schedule([self, brightness = *target]() {
+            if (self->auto_brightness_policy_.GetConfig().enabled &&
+                self->GetBacklight() != nullptr) {
+                self->GetBacklight()->SetBrightness(static_cast<uint8_t>(brightness), false);
+            }
+        });
+    }
+
+    void ApplyAutoBrightnessConfig(const AutoBrightnessPolicy::Config& requested) {
+        AutoBrightnessPolicy::Config config = requested;
+        config.minimum_percent = std::clamp(config.minimum_percent, 10, 100);
+        config.maximum_percent = std::clamp(config.maximum_percent, config.minimum_percent, 100);
+        const int current_brightness =
+            GetBacklight() != nullptr ? GetBacklight()->brightness() : 75;
+        auto_brightness_policy_.Configure(config, current_brightness, esp_timer_get_time());
+        robot_settings_.SetAutoBrightnessEnabled(config.enabled);
+        robot_settings_.SetAutoBrightnessMinimum(config.minimum_percent);
+        robot_settings_.SetAutoBrightnessMaximum(config.maximum_percent);
+        if (!config.enabled && GetBacklight() != nullptr) {
+            GetBacklight()->SetBrightness(
+                static_cast<uint8_t>(robot_settings_.GetManualScreenBrightness()), false);
+        }
     }
 
     void InitializeMotorStatusLight() {
@@ -1049,9 +1099,41 @@ private:
     void QueueScreenBrightness(int brightness) {
         const int safe_brightness = std::clamp(brightness, 10, 100);
         Application::GetInstance().Schedule([this, safe_brightness]() {
+            AutoBrightnessPolicy::Config config = auto_brightness_policy_.GetConfig();
+            config.enabled = false;
+            auto_brightness_policy_.Configure(config, safe_brightness, esp_timer_get_time());
+            robot_settings_.SetAutoBrightnessEnabled(false);
             if (GetBacklight() != nullptr) {
                 GetBacklight()->SetBrightness(static_cast<uint8_t>(safe_brightness), true);
             }
+        });
+    }
+
+    void QueueAutoBrightnessEnabled(bool enabled) {
+        Application::GetInstance().Schedule([this, enabled]() {
+            AutoBrightnessPolicy::Config config = auto_brightness_policy_.GetConfig();
+            config.enabled = enabled;
+            ApplyAutoBrightnessConfig(config);
+        });
+    }
+
+    void QueueAutoBrightnessMinimum(int brightness) {
+        const int safe_brightness = std::clamp(brightness, 10, 100);
+        Application::GetInstance().Schedule([this, safe_brightness]() {
+            AutoBrightnessPolicy::Config config = auto_brightness_policy_.GetConfig();
+            config.minimum_percent = safe_brightness;
+            config.maximum_percent = std::max(config.maximum_percent, safe_brightness);
+            ApplyAutoBrightnessConfig(config);
+        });
+    }
+
+    void QueueAutoBrightnessMaximum(int brightness) {
+        const int safe_brightness = std::clamp(brightness, 10, 100);
+        Application::GetInstance().Schedule([this, safe_brightness]() {
+            AutoBrightnessPolicy::Config config = auto_brightness_policy_.GetConfig();
+            config.maximum_percent = safe_brightness;
+            config.minimum_percent = std::min(config.minimum_percent, safe_brightness);
+            ApplyAutoBrightnessConfig(config);
         });
     }
 
@@ -1193,6 +1275,15 @@ private:
     void SetSpeakerVolume(int volume) override { QueueSpeakerVolume(volume); }
     void SetMicrophoneGain(int gain) override { QueueMicrophoneGain(gain); }
     void SetScreenBrightness(int brightness) override { QueueScreenBrightness(brightness); }
+    void SetAutoBrightnessEnabled(bool enabled) override {
+        QueueAutoBrightnessEnabled(enabled);
+    }
+    void SetAutoBrightnessMinimum(int brightness) override {
+        QueueAutoBrightnessMinimum(brightness);
+    }
+    void SetAutoBrightnessMaximum(int brightness) override {
+        QueueAutoBrightnessMaximum(brightness);
+    }
     void SetMotorSpeed(int speed) override { QueueMotorSpeed(speed); }
     void SetDriveDuration(int duration_ms) override { QueueDriveDuration(duration_ms); }
     void SetEmotionMovementEnabled(bool enabled) override {
@@ -1268,6 +1359,11 @@ private:
         status.microphone_level = audio_service.GetInputLevel();
         status.microphone_clipping = audio_service.IsInputClipping();
         status.screen_brightness = GetBacklight() != nullptr ? GetBacklight()->brightness() : 0;
+        const AutoBrightnessPolicy::Config auto_brightness =
+            auto_brightness_policy_.GetConfig();
+        status.auto_brightness_enabled = auto_brightness.enabled;
+        status.auto_brightness_minimum = auto_brightness.minimum_percent;
+        status.auto_brightness_maximum = auto_brightness.maximum_percent;
         status.status_light_brightness = status_light_brightness_.load();
         status.live_camera_available = live_camera_task_ != nullptr;
         status.live_camera = live_camera_enabled_.load();
@@ -1384,7 +1480,8 @@ public:
         // Start best-effort environment probing only after board construction returns to the
         // application loop. The controller adds a further delay before touching the primary bus.
         Application::GetInstance().Schedule([this]() {
-            if (!environment_controller_.Start(primary_i2c_.handle())) {
+            if (!environment_controller_.Start(primary_i2c_.handle(), this,
+                                               &DeskRobotBoard::OnAmbientLight)) {
                 ESP_LOGW(TAG, "Failed to start environment controller");
             }
         });

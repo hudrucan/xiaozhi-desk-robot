@@ -25,6 +25,9 @@ struct RobotStatus {
     int microphone_level = 0;
     bool microphone_clipping = false;
     int screen_brightness = 0;
+    bool auto_brightness_enabled = false;
+    int auto_brightness_minimum = 15;
+    int auto_brightness_maximum = 85;
     int status_light_brightness = 0;
     bool live_camera_available = false;
     bool live_camera = false;

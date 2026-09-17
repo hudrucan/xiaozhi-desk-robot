@@ -16,6 +16,9 @@ cJSON* RobotWebStatus::CreateDisplay() {
     }
     cJSON_AddBoolToObject(root, "display_flipped", status.display_flipped);
     cJSON_AddNumberToObject(root, "screen_brightness", status.screen_brightness);
+    cJSON_AddBoolToObject(root, "auto_brightness_enabled", status.auto_brightness_enabled);
+    cJSON_AddNumberToObject(root, "auto_brightness_minimum", status.auto_brightness_minimum);
+    cJSON_AddNumberToObject(root, "auto_brightness_maximum", status.auto_brightness_maximum);
     cJSON_AddNumberToObject(root, "status_light_brightness", status.status_light_brightness);
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     cJSON_AddBoolToObject(root, "oled_available", status.oled_available);

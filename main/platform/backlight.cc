@@ -48,13 +48,13 @@ void Backlight::SetBrightness(uint8_t brightness, bool permanent) {
         brightness = 100;
     }
 
-    if (brightness_ == brightness) {
-        return;
-    }
-
     if (permanent) {
         Settings settings("display", true);
         settings.SetInt("brightness", brightness);
+    }
+
+    if (brightness_ == brightness) {
+        return;
     }
 
     target_brightness_ = brightness;
@@ -118,4 +118,3 @@ void PwmBacklight::SetBrightnessImpl(uint8_t brightness) {
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty_cycle);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
-

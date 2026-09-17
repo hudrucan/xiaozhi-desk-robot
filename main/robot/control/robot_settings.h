@@ -22,4 +22,11 @@ public:
     void SetDriveDurationMs(int duration_ms) const;
     bool GetEmotionMovementEnabled() const;
     void SetEmotionMovementEnabled(bool enabled) const;
+    int GetManualScreenBrightness() const;
+    bool GetAutoBrightnessEnabled() const;
+    void SetAutoBrightnessEnabled(bool enabled) const;
+    int GetAutoBrightnessMinimum() const;
+    void SetAutoBrightnessMinimum(int brightness) const;
+    int GetAutoBrightnessMaximum() const;
+    void SetAutoBrightnessMaximum(int brightness) const;
 };

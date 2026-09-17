@@ -16,7 +16,11 @@
 
 class EnvironmentController {
 public:
-    bool Start(i2c_master_bus_handle_t bus);
+    using LightCallback = void (*)(void* context, bool valid, float illuminance_lux,
+                                   int64_t timestamp_us);
+
+    bool Start(i2c_master_bus_handle_t bus, void* light_context = nullptr,
+               LightCallback light_callback = nullptr);
     void Stop();
     EnvironmentStatus GetStatus() const;
 
@@ -62,4 +66,6 @@ private:
     int64_t next_aht20_sample_us_ = 0;
     int64_t next_bmp280_sample_us_ = 0;
     int64_t next_bh1750_sample_us_ = 0;
+    void* light_context_ = nullptr;
+    LightCallback light_callback_ = nullptr;
 };

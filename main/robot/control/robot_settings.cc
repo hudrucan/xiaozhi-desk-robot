@@ -111,3 +111,42 @@ void RobotSettings::SetEmotionMovementEnabled(bool enabled) const {
     Settings settings("desk_robot", true);
     settings.SetBool("emotion_move", enabled);
 }
+
+int RobotSettings::GetManualScreenBrightness() const {
+    Settings settings("display", false);
+    return std::clamp(static_cast<int>(settings.GetInt("brightness", 75)), 10, 100);
+}
+
+bool RobotSettings::GetAutoBrightnessEnabled() const {
+    Settings settings("desk_robot", false);
+    return settings.GetBool("auto_bright", false);
+}
+
+void RobotSettings::SetAutoBrightnessEnabled(bool enabled) const {
+    Settings settings("desk_robot", true);
+    settings.SetBool("auto_bright", enabled);
+}
+
+int RobotSettings::GetAutoBrightnessMinimum() const {
+    Settings settings("desk_robot", false);
+    return std::clamp(static_cast<int>(settings.GetInt("auto_bmin",
+                                                       AUTO_BRIGHTNESS_DEFAULT_MIN_PERCENT)),
+                      10, 100);
+}
+
+void RobotSettings::SetAutoBrightnessMinimum(int brightness) const {
+    Settings settings("desk_robot", true);
+    settings.SetInt("auto_bmin", std::clamp(brightness, 10, 100));
+}
+
+int RobotSettings::GetAutoBrightnessMaximum() const {
+    Settings settings("desk_robot", false);
+    return std::clamp(static_cast<int>(settings.GetInt("auto_bmax",
+                                                       AUTO_BRIGHTNESS_DEFAULT_MAX_PERCENT)),
+                      10, 100);
+}
+
+void RobotSettings::SetAutoBrightnessMaximum(int brightness) const {
+    Settings settings("desk_robot", true);
+    settings.SetInt("auto_bmax", std::clamp(brightness, 10, 100));
+}

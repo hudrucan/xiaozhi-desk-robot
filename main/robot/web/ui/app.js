@@ -32,6 +32,8 @@ function bindRangeControls() {
     ["speakerVolume", "speakerValue", "speaker_volume", "%"],
     ["microphoneGain", "microphoneValue", "microphone_gain", "×"],
     ["screenBrightness", "screenValue", "screen_brightness", "%"],
+    ["autoBrightnessMinimum", "autoBrightnessMinimumValue", "auto_brightness_minimum", "%"],
+    ["autoBrightnessMaximum", "autoBrightnessMaximumValue", "auto_brightness_maximum", "%"],
     ["statusLightBrightness", "statusLightValue", "status_light_brightness", "%"],
     ["cliffThreshold", "cliffValue", "cliff_threshold", " mm"],
   ].forEach(([inputId, labelId, actionName, suffix]) => {
@@ -59,6 +61,8 @@ function bindRobotControls() {
     action("motion_emotions", { value: event.target.checked ? 1 : 0 });
   $("#emotionMovement").onchange = (event) =>
     action("emotion_movement", { value: event.target.checked ? 1 : 0 });
+  $("#autoBrightness").onchange = (event) =>
+    action("auto_brightness", { value: event.target.checked ? 1 : 0 });
   $("#capacityStart").onclick = () => action("battery_capacity_start");
   $("#capacityStop").onclick = () => action("battery_capacity_stop");
   $("#capacityReset").onclick = () => {

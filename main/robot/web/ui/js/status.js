@@ -176,6 +176,15 @@ function renderDisplayStatus(status) {
   oled.className = "value health " + (status.oled_available ? "good" : "bad");
   oled.querySelector("span").textContent = status.oled_available ? "Ready" : "Offline";
   setRange($("#screenBrightness"), status.screen_brightness, $("#screenValue"), "%");
+  if (document.activeElement !== $("#autoBrightness")) {
+    $("#autoBrightness").checked = !!status.auto_brightness_enabled;
+  }
+  setRange($("#autoBrightnessMinimum"), status.auto_brightness_minimum,
+    $("#autoBrightnessMinimumValue"), "%");
+  setRange($("#autoBrightnessMaximum"), status.auto_brightness_maximum,
+    $("#autoBrightnessMaximumValue"), "%");
+  $("#autoBrightnessMinimum").disabled = !status.auto_brightness_enabled;
+  $("#autoBrightnessMaximum").disabled = !status.auto_brightness_enabled;
   setRange($("#statusLightBrightness"), status.status_light_brightness,
     $("#statusLightValue"), "%");
   if (Number.isFinite(status.oled_contrast)) {

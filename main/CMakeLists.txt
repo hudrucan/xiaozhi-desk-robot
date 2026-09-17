@@ -75,6 +75,7 @@ list(APPEND SOURCES
     "robot/display/mochan_display.cc"
     "robot/display/mochan_face_renderer.cc"
     "robot/display/mochan_display_overlay.cc"
+    "robot/display/auto_brightness_policy.cc"
     "robot/display/secondary_display_controller.cc"
     "robot/display/secondary_oled.cc"
     "robot/display/secondary_oled_renderer.cc"

@@ -4,7 +4,8 @@
 
 #define TAG "Environment"
 
-bool EnvironmentController::Start(i2c_master_bus_handle_t bus) {
+bool EnvironmentController::Start(i2c_master_bus_handle_t bus, void* light_context,
+                                  LightCallback light_callback) {
     if (running_.load(std::memory_order_acquire)) {
         return true;
     }
@@ -13,6 +14,8 @@ bool EnvironmentController::Start(i2c_master_bus_handle_t bus) {
     }
 
     bus_ = bus;
+    light_context_ = light_context;
+    light_callback_ = light_callback;
     running_.store(true, std::memory_order_release);
     TaskHandle_t task = nullptr;
     if (xTaskCreate(TaskEntry, "environment", 6144, this, 1, &task) != pdPASS) {
