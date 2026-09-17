@@ -41,7 +41,8 @@ ESP-IDF v6.1 is the preferred SDK.
 - `main/robot/display/secondary_oled_renderer.cc` — secondary OLED glyph and fitted-text raster primitives.
 - `main/robot/motion/` — gyro-turn lifecycle, expressive movement planning and
   motion-reaction policy.
-- `main/robot/sensors/auxiliary_i2c.*` — deferred shared auxiliary-bus ownership and lifecycle.
+- `main/robot/sensors/shared_i2c_bus.*` — shared primary/auxiliary I2C ownership and
+  deferred auxiliary-bus lifecycle.
 - `main/robot/sensors/cliff_sensor.*` — downward VL53L0X floor sensing and cliff state.
 - `main/robot/power/` — INA219 telemetry, SoC estimation, persistence and capacity tests.
 - `main/robot/desk_robot_board.cc` — desk-robot integration.
@@ -110,12 +111,15 @@ Behavior thresholds and calibrated runtime values are in
 Important shared buses:
 
 ```text
-GPIO4/5   camera SCCB + downward VL53L0X
-GPIO38/14 SSD1306 + INA219 + MPU6050 auxiliary I2C
+GPIO4/5   primary I2C0: camera SCCB + downward VL53L0X
+GPIO38/14 auxiliary I2C1: SSD1306 + INA219 + MPU6050
 ```
 
 GPIO availability is tight because the camera and octal PSRAM/flash configuration consume
 many pins. Do not move or repurpose pins as cleanup.
+
+The primary bus is owned by `SharedI2cBus` and initialized before the camera. The camera
+must reuse that existing bus rather than create another GPIO4/GPIO5 owner.
 
 The auxiliary I2C devices are deliberately initialized later and serially. Do not turn
 their initialization back into concurrent boot-time probing.

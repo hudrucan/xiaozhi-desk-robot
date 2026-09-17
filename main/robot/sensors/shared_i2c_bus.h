@@ -7,24 +7,28 @@
 
 #include <mutex>
 
-class AuxiliaryI2c {
+class SharedI2cBus {
 public:
     using DeferredInitializer = void (*)(void* context);
 
-    AuxiliaryI2c(i2c_port_t port, gpio_num_t sda, gpio_num_t scl);
+    SharedI2cBus(i2c_port_t port, gpio_num_t sda, gpio_num_t scl, const char* name);
 
+    bool Initialize();
     bool StartDeferredInitialization(void* context, DeferredInitializer initializer);
     i2c_master_bus_handle_t handle() const { return bus_; }
+
+    // Cooperative lock for project-owned multi-step operations and lifecycle work.
+    // Camera SCCB does not use this lock; ESP-IDF serializes master transactions.
     std::mutex& mutex() { return mutex_; }
 
 private:
-    bool InitializeBus();
     void RunDeferredInitialization();
     static void DeferredInitializationTask(void* arg);
 
     i2c_port_t port_;
     gpio_num_t sda_;
     gpio_num_t scl_;
+    const char* name_;
     i2c_master_bus_handle_t bus_ = nullptr;
     std::mutex mutex_;
     TaskHandle_t initialization_task_ = nullptr;

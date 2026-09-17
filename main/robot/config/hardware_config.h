@@ -78,9 +78,10 @@
 #define CAMERA_PIN_RESET GPIO_NUM_NC
 #define CAMERA_XCLK_FREQ_HZ 20000000
 
-// Downward-facing VL53L0X cliff sensor sharing the camera SCCB/I2C bus.
-#define DISTANCE_SENSOR_SDA_PIN GPIO_NUM_4
-#define DISTANCE_SENSOR_SCL_PIN GPIO_NUM_5
+// Primary shared I2C bus: camera SCCB + downward-facing VL53L0X cliff sensor.
+#define PRIMARY_I2C_PORT I2C_NUM_0
+#define PRIMARY_I2C_SDA_PIN CAMERA_PIN_SIOD
+#define PRIMARY_I2C_SCL_PIN CAMERA_PIN_SIOC
 #define DISTANCE_SENSOR_I2C_ADDRESS 0x29
 
 // Shared auxiliary I2C bus: SSD1306 + INA219 + MPU6050.

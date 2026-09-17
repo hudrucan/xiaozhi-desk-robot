@@ -1,14 +1,18 @@
-#include "auxiliary_i2c.h"
+#include "shared_i2c_bus.h"
 
 #include <esp_err.h>
 #include <esp_log.h>
 
-#define TAG "AuxiliaryI2c"
+#define TAG "SharedI2cBus"
 
-AuxiliaryI2c::AuxiliaryI2c(i2c_port_t port, gpio_num_t sda, gpio_num_t scl)
-    : port_(port), sda_(sda), scl_(scl) {}
+SharedI2cBus::SharedI2cBus(i2c_port_t port, gpio_num_t sda, gpio_num_t scl, const char* name)
+    : port_(port), sda_(sda), scl_(scl), name_(name) {}
 
-bool AuxiliaryI2c::InitializeBus() {
+bool SharedI2cBus::Initialize() {
+    if (bus_ != nullptr) {
+        return true;
+    }
+
     i2c_master_bus_config_t bus_config = {
         .i2c_port = port_,
         .sda_io_num = sda_,
@@ -22,36 +26,37 @@ bool AuxiliaryI2c::InitializeBus() {
     const esp_err_t error = i2c_new_master_bus(&bus_config, &bus_);
     if (error != ESP_OK) {
         bus_ = nullptr;
-        ESP_LOGW(TAG, "Cannot create auxiliary I2C bus on SDA GPIO%d/SCL GPIO%d: %s", sda_, scl_,
-                 esp_err_to_name(error));
+        ESP_LOGW(TAG, "Cannot create %s I2C bus on SDA GPIO%d/SCL GPIO%d: %s", name_, sda_,
+                 scl_, esp_err_to_name(error));
         return false;
     }
-    ESP_LOGI(TAG, "Auxiliary I2C bus ready on SDA GPIO%d/SCL GPIO%d", sda_, scl_);
+    ESP_LOGI(TAG, "%s I2C bus ready on SDA GPIO%d/SCL GPIO%d", name_, sda_, scl_);
     return true;
 }
 
-void AuxiliaryI2c::DeferredInitializationTask(void* arg) {
-    static_cast<AuxiliaryI2c*>(arg)->RunDeferredInitialization();
+void SharedI2cBus::DeferredInitializationTask(void* arg) {
+    static_cast<SharedI2cBus*>(arg)->RunDeferredInitialization();
 }
 
-void AuxiliaryI2c::RunDeferredInitialization() {
+void SharedI2cBus::RunDeferredInitialization() {
     // This task is queued from Application::Run(), after Application::Initialize() returns.
     // A short delay also lets the main display and audio DMA settle before another driver is added.
     vTaskDelay(pdMS_TO_TICKS(250));
-    ESP_LOGI(TAG, "Deferred auxiliary I2C initialization starting");
+    ESP_LOGI(TAG, "Deferred %s I2C initialization starting", name_);
 
-    if (InitializeBus() && initializer_ != nullptr) {
+    if (Initialize() && initializer_ != nullptr) {
         initializer_(initializer_context_);
     }
 
-    ESP_LOGI(TAG, "Deferred auxiliary I2C initialization complete");
+    ESP_LOGI(TAG, "Deferred %s I2C initialization complete", name_);
     initializer_ = nullptr;
     initializer_context_ = nullptr;
     initialization_task_ = nullptr;
     vTaskDelete(nullptr);
 }
 
-bool AuxiliaryI2c::StartDeferredInitialization(void* context, DeferredInitializer initializer) {
+bool SharedI2cBus::StartDeferredInitialization(void* context,
+                                               DeferredInitializer initializer) {
     if (initialization_task_ != nullptr) {
         return true;
     }
@@ -62,7 +67,7 @@ bool AuxiliaryI2c::StartDeferredInitialization(void* context, DeferredInitialize
         initialization_task_ = nullptr;
         initializer_ = nullptr;
         initializer_context_ = nullptr;
-        ESP_LOGE(TAG, "Failed to create deferred auxiliary I2C initialization task");
+        ESP_LOGE(TAG, "Failed to create deferred %s I2C initialization task", name_);
         return false;
     }
     return true;

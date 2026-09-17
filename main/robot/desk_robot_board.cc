@@ -27,12 +27,11 @@
 #include "sensors/mpu6050_motion_sensor.h"
 #endif
 #include "robot_web_control_server.h"
-#include "sensors/auxiliary_i2c.h"
+#include "sensors/shared_i2c_bus.h"
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
 #include "sensors/cliff_sensor.h"
 #endif
 
-#include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include <esp_app_desc.h>
 #include <esp_heap_caps.h>
@@ -119,9 +118,11 @@ private:
     std::string temporary_emotion_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
+    SharedI2cBus primary_i2c_{PRIMARY_I2C_PORT, PRIMARY_I2C_SDA_PIN, PRIMARY_I2C_SCL_PIN,
+                              "primary"};
 #ifdef AUXILIARY_I2C_SDA_PIN
-    AuxiliaryI2c auxiliary_i2c_{AUXILIARY_I2C_PORT, AUXILIARY_I2C_SDA_PIN,
-                                AUXILIARY_I2C_SCL_PIN};
+    SharedI2cBus auxiliary_i2c_{AUXILIARY_I2C_PORT, AUXILIARY_I2C_SDA_PIN,
+                                AUXILIARY_I2C_SCL_PIN, "auxiliary"};
 #endif
 #ifdef INA219_I2C_ADDRESS
     BatteryController battery_controller_;
@@ -142,7 +143,6 @@ private:
     TaskHandle_t auxiliary_sensor_task_ = nullptr;
 #endif
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
-    i2c_master_bus_handle_t camera_i2c_bus_ = nullptr;
     CliffSensor cliff_sensor_;
     std::atomic_bool cliff_retreat_pending_{false};
 #endif
@@ -501,16 +501,10 @@ private:
         config.pin_pclk = CAMERA_PIN_PCLK;
         config.pin_vsync = CAMERA_PIN_VSYNC;
         config.pin_href = CAMERA_PIN_HREF;
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-        // Reuse the new-driver I2C0 bus already created for the VL53L0X.
+        // Reuse the primary new-driver I2C bus instead of creating another SCCB owner.
         config.pin_sccb_sda = GPIO_NUM_NC;
         config.pin_sccb_scl = GPIO_NUM_NC;
-        config.sccb_i2c_port = I2C_NUM_0;
-#else
-        config.pin_sccb_sda = CAMERA_PIN_SIOD;
-        config.pin_sccb_scl = CAMERA_PIN_SIOC;
-        config.sccb_i2c_port = I2C_NUM_0;
-#endif
+        config.sccb_i2c_port = PRIMARY_I2C_PORT;
         config.pin_pwdn = CAMERA_PIN_PWDN;
         config.pin_reset = CAMERA_PIN_RESET;
         config.xclk_freq_hz = CAMERA_XCLK_FREQ_HZ;
@@ -531,20 +525,6 @@ private:
     }
 
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
-    void InitializeCameraI2c() {
-        i2c_master_bus_config_t bus_config = {
-            .i2c_port = I2C_NUM_0,
-            .sda_io_num = DISTANCE_SENSOR_SDA_PIN,
-            .scl_io_num = DISTANCE_SENSOR_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .intr_priority = 0,
-            .trans_queue_depth = 0,
-            .flags = {.enable_internal_pullup = true},
-        };
-        ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &camera_i2c_bus_));
-    }
-
     static void OnCliffDetected(void* arg) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
         const bool was_moving_forward =
@@ -597,7 +577,7 @@ private:
     }
 
     void InitializeDistanceSensor() {
-        cliff_sensor_.Initialize(camera_i2c_bus_, robot_settings_.GetCliffEdgeMm(), this,
+        cliff_sensor_.Initialize(primary_i2c_.handle(), robot_settings_.GetCliffEdgeMm(), this,
                                  &DeskRobotBoard::OnCliffDetected);
     }
 #endif
@@ -1361,8 +1341,8 @@ public:
             GetBacklight()->RestoreBrightness();
         }
         InitializeButtons();
+        ESP_ERROR_CHECK(primary_i2c_.Initialize() ? ESP_OK : ESP_FAIL);
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
-        InitializeCameraI2c();
         InitializeCliffSettings();
 #endif
         InitializeCamera();

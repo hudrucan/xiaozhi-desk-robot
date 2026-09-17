@@ -86,7 +86,7 @@ list(APPEND SOURCES
     "robot/power/battery_controller.cc"
     "robot/power/battery_soc_estimator.cc"
     "robot/power/ina219_power_monitor.cc"
-    "robot/sensors/auxiliary_i2c.cc"
+    "robot/sensors/shared_i2c_bus.cc"
     "robot/sensors/cliff_sensor.cc"
     "robot/sensors/mpu6050_motion_sensor.cc"
     "robot/robot_web_control_server.cc"

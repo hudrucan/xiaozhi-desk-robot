@@ -60,14 +60,13 @@ Behavior thresholds and calibrated runtime values live in
 | Main display SCLK / MOSI / RST / DC / BL | 19 / 20 / 21 / 47 / 45 |
 | Left motor IN1 / IN2 | 43 / 44 |
 | Right motor IN1 / IN2 | 3 / 46 |
-| Camera SCCB SDA / SCL | 4 / 5 |
-| VL53L0X SDA / SCL | 4 / 5 |
-| Auxiliary I2C SDA / SCL | 38 / 14 |
+| Primary I2C0 SDA / SCL (camera SCCB + VL53L0X) | 4 / 5 |
+| Auxiliary I2C1 SDA / SCL (SSD1306 + INA219 + MPU6050) | 38 / 14 |
 
 Two bus-sharing details are intentional:
 
-- The VL53L0X shares the camera SCCB/I2C lines on GPIO4/5.
-- SSD1306, INA219 and MPU6050 share the auxiliary I2C bus on GPIO38/14.
+- The camera SCCB and VL53L0X reuse one primary I2C0 owner on GPIO4/5.
+- SSD1306, INA219 and MPU6050 share the auxiliary I2C1 bus on GPIO38/14.
 
 Do not move these devices casually: GPIO availability on this board is tight and the
 camera/PSRAM configuration already consumes most usable pins.
@@ -264,9 +263,10 @@ https://github.com/78/xiaozhi-esp32
 
 ### Shared I2C initialization
 
-SSD1306, INA219 and MPU6050 initialization is intentionally deferred and serialized.
-This avoids startup races on the shared auxiliary I2C bus. Preserve that lifecycle when
-adding another device.
+`SharedI2cBus` owns both buses. Primary I2C0 is initialized before the camera, and the
+camera SCCB plus downward VL53L0X reuse its existing handle. SSD1306, INA219 and MPU6050
+initialization on auxiliary I2C1 remains intentionally deferred and serialized to avoid
+startup races. Preserve these ownership and lifecycle rules when adding another device.
 
 ### Protocols
 
