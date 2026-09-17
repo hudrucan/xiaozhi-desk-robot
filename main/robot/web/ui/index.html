@@ -51,6 +51,26 @@
               </div>
             </div>
           </section>
+              <section class="card">
+            <div class="section-title">
+              <strong>Environment</strong
+              ><span id="environmentSummary">Waiting</span>
+            </div>
+            <div class="status">
+              <div class="metric wide">
+                <div class="label">AHT20 · temperature &amp; humidity</div>
+                <div class="value" id="aht20Status">Checking</div>
+              </div>
+              <div class="metric wide">
+                <div class="label">BMP280 · pressure</div>
+                <div class="value" id="bmp280Status">Checking</div>
+              </div>
+              <div class="metric wide">
+                <div class="label">BH1750 · illuminance</div>
+                <div class="value" id="bh1750Status">Checking</div>
+              </div>
+            </div>
+          </section>
           <section class="card">
             <div class="section-title">
               <strong>Robot status</strong><span id="uptime">—</span>
@@ -131,82 +151,6 @@
           </section>
           <section class="card">
             <div class="section-title">
-              <strong>Environment</strong><span id="environmentSummary">Waiting</span>
-            </div>
-            <div class="status">
-              <div class="metric wide">
-                <div class="label">AHT20 · temperature &amp; humidity</div>
-                <div class="value" id="aht20Status">Checking</div>
-              </div>
-              <div class="metric wide">
-                <div class="label">BMP280 · pressure</div>
-                <div class="value" id="bmp280Status">Checking</div>
-              </div>
-              <div class="metric wide">
-                <div class="label">BH1750 · illuminance</div>
-                <div class="value" id="bh1750Status">Checking</div>
-              </div>
-            </div>
-          </section>
-          <section class="card">
-            <div class="section-title">
-              <strong>Audio &amp; lighting</strong>
-            </div>
-            <div class="audio-row">
-              <span class="audio-name"
-                ><b>Speaker</b><small>Output volume</small></span
-              ><input
-                id="speakerVolume"
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value="70"
-              /><span class="audio-value" id="speakerValue">70%</span>
-            </div>
-            <div class="audio-row">
-              <span class="audio-name"
-                ><b>Microphone</b><small>Input gain</small></span
-              ><input
-                id="microphoneGain"
-                type="range"
-                min="1"
-                max="3"
-                step="1"
-                value="1"
-              /><span class="audio-value" id="microphoneValue">1×</span>
-              <div class="vu-wrap">
-                <div class="vu"><i id="micLevel"></i></div>
-                <span class="clip" id="micClip">LIVE</span>
-              </div>
-            </div>
-            <div class="audio-row">
-              <span class="audio-name"
-                ><b>Screen</b><small>Backlight</small></span
-              ><input
-                id="screenBrightness"
-                type="range"
-                min="10"
-                max="100"
-                step="5"
-                value="75"
-              /><span class="audio-value" id="screenValue">75%</span>
-            </div>
-            <div class="audio-row">
-              <span class="audio-name"
-                ><b>Status light</b><small>Edison LED · GPIO48</small></span
-              ><input
-                id="statusLightBrightness"
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value="100"
-              /><span class="audio-value" id="statusLightValue">100%</span>
-            </div>
-          </section>
-          <section class="card">
-            <div class="section-title">
               <strong>ASR</strong><span id="asrStatus">Checking</span>
             </div>
             <div class="display-settings">
@@ -235,8 +179,8 @@
               </button>
             </div>
             <p class="asr-note">
-              Provider switches are saved immediately and apply from the next listening turn.
-              The API key is saved separately.
+              Provider switches are saved immediately and apply from the next
+              listening turn. The API key is saved separately.
             </p>
           </section>
           <section class="card">
@@ -389,6 +333,63 @@
               ><span>Time <b id="motorTime">0 ms</b></span>
             </div>
             <div class="progress"><i id="danceProgress"></i></div>
+          </section>
+          <section class="card">
+            <div class="section-title">
+              <strong>Audio &amp; lighting</strong>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Speaker</b><small>Output volume</small></span
+              ><input
+                id="speakerVolume"
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value="70"
+              /><span class="audio-value" id="speakerValue">70%</span>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Microphone</b><small>Input gain</small></span
+              ><input
+                id="microphoneGain"
+                type="range"
+                min="1"
+                max="3"
+                step="1"
+                value="1"
+              /><span class="audio-value" id="microphoneValue">1×</span>
+              <div class="vu-wrap">
+                <div class="vu"><i id="micLevel"></i></div>
+                <span class="clip" id="micClip">LIVE</span>
+              </div>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Screen</b><small>Backlight</small></span
+              ><input
+                id="screenBrightness"
+                type="range"
+                min="10"
+                max="100"
+                step="5"
+                value="75"
+              /><span class="audio-value" id="screenValue">75%</span>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Status light</b><small>Edison LED · GPIO48</small></span
+              ><input
+                id="statusLightBrightness"
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value="100"
+              /><span class="audio-value" id="statusLightValue">100%</span>
+            </div>
           </section>
           <section class="card">
             <div class="section-title">
