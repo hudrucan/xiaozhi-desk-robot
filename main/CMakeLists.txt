@@ -103,44 +103,51 @@ list(APPEND INCLUDE_DIRS
 # Keep the Web Control UI editable as focused HTML, CSS, and JavaScript files while
 # preserving the existing single-page response at runtime. CMake assembles a generated
 # header in the build tree; generated output is never a source-of-truth file.
-set(ROBOT_WEB_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/robot/web/ui")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${ROBOT_WEB_UI_DIR}/index.html"
-    "${ROBOT_WEB_UI_DIR}/style.css"
-    "${ROBOT_WEB_UI_DIR}/app.js"
-)
-file(READ "${ROBOT_WEB_UI_DIR}/index.html" ROBOT_WEB_CONTROL_PAGE)
-file(READ "${ROBOT_WEB_UI_DIR}/style.css" ROBOT_WEB_CONTROL_STYLE)
-file(READ "${ROBOT_WEB_UI_DIR}/app.js" ROBOT_WEB_CONTROL_SCRIPT)
-string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
-string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
-string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
-string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
-string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
-string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
-string(REPLACE
-    "    <link rel=\"stylesheet\" href=\"style.css\" />"
-    "    <style>\n${ROBOT_WEB_CONTROL_STYLE}\n    </style>"
-    ROBOT_WEB_CONTROL_PAGE
-    "${ROBOT_WEB_CONTROL_PAGE}"
-)
-string(REPLACE
-    "    <script src=\"app.js\"></script>"
-    "    <script>\n${ROBOT_WEB_CONTROL_SCRIPT}\n    </script>"
-    ROBOT_WEB_CONTROL_PAGE
-    "${ROBOT_WEB_CONTROL_PAGE}"
-)
-if(ROBOT_WEB_CONTROL_PAGE MATCHES "(style\\.css|app\\.js)")
-    message(FATAL_ERROR "Web Control UI assembly failed")
+#
+# ESP-IDF evaluates component CMakeLists.txt once during early dependency expansion.
+# File generation must not run in that pass because its current source directory can
+# point at the temporary build context instead of this component's source directory.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    set(ROBOT_WEB_UI_DIR "${CMAKE_CURRENT_LIST_DIR}/robot/web/ui")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${ROBOT_WEB_UI_DIR}/index.html"
+        "${ROBOT_WEB_UI_DIR}/style.css"
+        "${ROBOT_WEB_UI_DIR}/app.js"
+    )
+    file(READ "${ROBOT_WEB_UI_DIR}/index.html" ROBOT_WEB_CONTROL_PAGE)
+    file(READ "${ROBOT_WEB_UI_DIR}/style.css" ROBOT_WEB_CONTROL_STYLE)
+    file(READ "${ROBOT_WEB_UI_DIR}/app.js" ROBOT_WEB_CONTROL_SCRIPT)
+    string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
+    string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
+    string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
+    string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
+    string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
+    string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
+    string(REPLACE
+        "    <link rel=\"stylesheet\" href=\"style.css\" />"
+        "    <style>\n${ROBOT_WEB_CONTROL_STYLE}\n    </style>"
+        ROBOT_WEB_CONTROL_PAGE
+        "${ROBOT_WEB_CONTROL_PAGE}"
+    )
+    string(REPLACE
+        "    <script src=\"app.js\"></script>"
+        "    <script>\n${ROBOT_WEB_CONTROL_SCRIPT}\n    </script>"
+        ROBOT_WEB_CONTROL_PAGE
+        "${ROBOT_WEB_CONTROL_PAGE}"
+    )
+    if(ROBOT_WEB_CONTROL_PAGE MATCHES "(style\\.css|app\\.js)")
+        message(FATAL_ERROR "Web Control UI assembly failed")
+    endif()
+
+    set(ROBOT_WEB_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    file(MAKE_DIRECTORY "${ROBOT_WEB_GENERATED_DIR}")
+    configure_file(
+        "${CMAKE_CURRENT_LIST_DIR}/robot/web/robot_web_control_page.h.in"
+        "${ROBOT_WEB_GENERATED_DIR}/robot_web_control_page.h"
+        @ONLY
+    )
+    list(APPEND INCLUDE_DIRS "${ROBOT_WEB_GENERATED_DIR}")
 endif()
-set(ROBOT_WEB_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${ROBOT_WEB_GENERATED_DIR}")
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/robot/web/robot_web_control_page.h.in"
-    "${ROBOT_WEB_GENERATED_DIR}/robot_web_control_page.h"
-    @ONLY
-)
-list(APPEND INCLUDE_DIRS "${ROBOT_WEB_GENERATED_DIR}")
 
 # Select language directory according to Kconfig
 if(CONFIG_LANGUAGE_EN_US)

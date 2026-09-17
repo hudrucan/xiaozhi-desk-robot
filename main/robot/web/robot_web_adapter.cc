@@ -257,7 +257,7 @@ cJSON* RobotWebAdapter::CreateStatus() {
     const RobotStatus status = controller_.GetStatus();
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
-        return R"({"state":"unknown","error":"out of memory"})";
+        return nullptr;
     }
     cJSON_AddStringToObject(root, "state", status.state.c_str());
     cJSON_AddBoolToObject(root, "asr_ready", status.asr_ready);
