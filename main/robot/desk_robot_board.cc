@@ -626,6 +626,19 @@ private:
         telemetry.gyro_turn_progress_deg = static_cast<int>(std::lround(gyro.progress_deg));
         telemetry.gyro_turn_intensity_percent = gyro.intensity_percent;
 #endif
+        const auto environment = self->environment_controller_.GetStatus();
+        telemetry.temperature_valid = environment.temperature_valid;
+        telemetry.temperature_tenths_c =
+            static_cast<int>(std::lround(environment.temperature_c * 10.0f));
+        telemetry.humidity_valid = environment.humidity_valid;
+        telemetry.humidity_tenths_percent =
+            static_cast<int>(std::lround(environment.humidity_percent * 10.0f));
+        telemetry.pressure_valid = environment.pressure_valid;
+        telemetry.pressure_tenths_hpa =
+            static_cast<int>(std::lround(environment.pressure_hpa * 10.0f));
+        telemetry.illuminance_valid = environment.illuminance_valid;
+        telemetry.illuminance_lux =
+            static_cast<int>(std::lround(environment.illuminance_lux));
     }
 
     void InitializeSecondaryOled() {

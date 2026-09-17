@@ -402,7 +402,15 @@ void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
                          telemetry.motion_calibrating != telemetry_.motion_calibrating ||
                          telemetry.low_battery != telemetry_.low_battery ||
                          telemetry.battery_percent != telemetry_.battery_percent ||
-                         telemetry.battery_voltage_mv != telemetry_.battery_voltage_mv;
+                         telemetry.battery_voltage_mv != telemetry_.battery_voltage_mv ||
+                         telemetry.temperature_valid != telemetry_.temperature_valid ||
+                         telemetry.temperature_tenths_c != telemetry_.temperature_tenths_c ||
+                         telemetry.humidity_valid != telemetry_.humidity_valid ||
+                         telemetry.humidity_tenths_percent != telemetry_.humidity_tenths_percent ||
+                         telemetry.pressure_valid != telemetry_.pressure_valid ||
+                         telemetry.pressure_tenths_hpa != telemetry_.pressure_tenths_hpa ||
+                         telemetry.illuminance_valid != telemetry_.illuminance_valid ||
+                         telemetry.illuminance_lux != telemetry_.illuminance_lux;
     if (changed || pulse_triggered) {
         telemetry_ = telemetry;
         dirty_ = true;
@@ -556,6 +564,11 @@ void SecondaryOled::RenderSingleLineWidgetLocked(
             icon = kCapacityIcon;
             break;
         }
+        case WidgetType::kClimate:
+        case WidgetType::kPressure:
+        case WidgetType::kLight:
+            RenderEnvironmentSingleLineWidgetLocked(placement, widget);
+            return;
     }
 
     constexpr int kOuterPadding = 2;
@@ -723,6 +736,11 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
             }
             break;
         }
+        case WidgetType::kClimate:
+        case WidgetType::kPressure:
+        case WidgetType::kLight:
+            RenderEnvironmentWidgetLocked(placement, *widget);
+            break;
     }
 }
 

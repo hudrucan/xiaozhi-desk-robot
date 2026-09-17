@@ -4,6 +4,9 @@ const oledMeta = {
   power: ["Current / Power", "INA219 telemetry", "I / P"],
   motion: ["Motion sensor", "State and tilt", "Motion"],
   capacity: ["Battery measuring", "Capacity and time", "mAh"],
+  climate: ["Climate", "Temperature and humidity", "Temp / RH"],
+  pressure: ["Pressure", "BMP280 pressure", "hPa"],
+  light: ["Light", "BH1750 illuminance", "Lux"],
 };
 
 function oledModeOptions(type, selected) {
@@ -13,6 +16,12 @@ function oledModeOptions(type, selected) {
       ? ["State", "Tilt", "State + Tilt"]
       : type === "capacity"
         ? ["mAh", "Elapsed", "mAh + elapsed"]
+        : type === "climate"
+          ? ["Temperature", "Humidity", "Temperature + humidity"]
+          : type === "pressure"
+            ? ["Pressure", "Compact pressure"]
+            : type === "light"
+              ? ["Lux", "Light level", "Lux + level"]
         : ["Default"];
   return modes.map((name, index) =>
     '<option value="' + index + '" ' + (index === selected ? "selected" : "") + ">" +

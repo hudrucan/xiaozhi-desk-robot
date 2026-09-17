@@ -19,6 +19,9 @@ public:
         kPower,
         kMotion,
         kCapacity,
+        kClimate,
+        kPressure,
+        kLight,
     };
 
     enum class PowerMode : uint8_t {
@@ -37,6 +40,23 @@ public:
         kMah,
         kElapsed,
         kMahAndElapsed,
+    };
+
+    enum class ClimateMode : uint8_t {
+        kTemperature,
+        kHumidity,
+        kTemperatureAndHumidity,
+    };
+
+    enum class PressureMode : uint8_t {
+        kPressure,
+        kCompact,
+    };
+
+    enum class LightMode : uint8_t {
+        kLux,
+        kLevel,
+        kLuxAndLevel,
     };
 
     enum class NetworkState : uint8_t {
@@ -67,6 +87,9 @@ public:
             {WidgetType::kPower, WidgetSize::kSmall, true, 2},
             {WidgetType::kCapacity, WidgetSize::kMedium, true, 2},
             {WidgetType::kMotion, WidgetSize::kMedium, true, 2},
+            {WidgetType::kClimate, WidgetSize::kSmall, false, 2},
+            {WidgetType::kPressure, WidgetSize::kSmall, false, 0},
+            {WidgetType::kLight, WidgetSize::kSmall, false, 2},
         }};
     };
 
@@ -95,6 +118,14 @@ public:
         bool low_battery = false;
         int battery_percent = 0;
         int battery_voltage_mv = 0;
+        bool temperature_valid = false;
+        int temperature_tenths_c = 0;
+        bool humidity_valid = false;
+        int humidity_tenths_percent = 0;
+        bool pressure_valid = false;
+        int pressure_tenths_hpa = 0;
+        bool illuminance_valid = false;
+        int illuminance_lux = 0;
     };
 
     bool Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, uint8_t address, int width,
@@ -158,6 +189,10 @@ private:
     EventType ActiveEventLocked(int64_t now_us) const;
     void RebuildLayoutLocked();
     void RenderDashboardLocked();
+    void RenderEnvironmentSingleLineWidgetLocked(
+        const secondary_oled_layout::Placement& placement, const WidgetConfig& widget);
+    void RenderEnvironmentWidgetLocked(const secondary_oled_layout::Placement& placement,
+                                       const WidgetConfig& widget);
     void RenderEventLocked(EventType event);
     void RenderLocked();
     void RenderSingleLineWidgetLocked(const secondary_oled_layout::Placement& placement,

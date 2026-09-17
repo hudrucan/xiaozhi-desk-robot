@@ -42,6 +42,12 @@ const char* SecondaryDisplayController::WidgetTypeName(SecondaryOled::WidgetType
             return "motion";
         case SecondaryOled::WidgetType::kCapacity:
             return "capacity";
+        case SecondaryOled::WidgetType::kClimate:
+            return "climate";
+        case SecondaryOled::WidgetType::kPressure:
+            return "pressure";
+        case SecondaryOled::WidgetType::kLight:
+            return "light";
     }
     return "branding";
 }
