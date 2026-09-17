@@ -20,6 +20,7 @@ and a local web control panel.
 - MPU6050 motion/gesture sensing and gyro-assisted relative turns
 - Downward-facing VL53L0X floor/cliff detection
 - INA219 current/power telemetry and persistent battery SoC estimation
+- AHT20 temperature/humidity, BMP280 pressure and BH1750 illuminance sensing
 - Local Web Control UI for status, motion, camera, display, audio and diagnostics
 - Typed Web Chat using the same Xiaozhi session, MCP tools and TTS output
 - Device-side MCP tools for robot status, motion, sensors, camera and control
@@ -41,6 +42,9 @@ Current physical target:
 | VL53L0X | Downward floor / cliff sensing |
 | MPU6050 | Motion, gestures and yaw feedback |
 | INA219 | Battery voltage/current/power telemetry |
+| AHT20 | Ambient temperature and relative humidity |
+| BMP280 | Barometric pressure |
+| BH1750 | Ambient illuminance and optional automatic screen brightness |
 | TTP223 | Touch / boot control |
 | Edison/status LED | Robot status lighting |
 
@@ -60,16 +64,37 @@ Behavior thresholds and calibrated runtime values live in
 | Main display SCLK / MOSI / RST / DC / BL | 19 / 20 / 21 / 47 / 45 |
 | Left motor IN1 / IN2 | 43 / 44 |
 | Right motor IN1 / IN2 | 3 / 46 |
-| Primary I2C0 SDA / SCL (camera SCCB + VL53L0X) | 4 / 5 |
+| Primary I2C0 SDA / SCL (camera SCCB + VL53L0X + environment sensors) | 4 / 5 |
 | Auxiliary I2C1 SDA / SCL (SSD1306 + INA219 + MPU6050) | 38 / 14 |
 
 Two bus-sharing details are intentional:
 
-- The camera SCCB and VL53L0X reuse one primary I2C0 owner on GPIO4/5.
+- The camera SCCB, VL53L0X, AHT20, BMP280 and BH1750 reuse one primary I2C0 owner on GPIO4/5.
 - SSD1306, INA219 and MPU6050 share the auxiliary I2C1 bus on GPIO38/14.
 
 Do not move these devices casually: GPIO availability on this board is tight and the
 camera/PSRAM configuration already consumes most usable pins.
+
+Environment sensor addresses are fixed to the known module variants; firmware does not scan the
+whole bus:
+
+| Device | Address |
+| --- | --- |
+| VL53L0X | `0x29` |
+| AHT20 | `0x38` |
+| BMP280 | `0x76`, fallback `0x77` |
+| BH1750 | `0x23`, fallback `0x5C` |
+
+Environment devices are best-effort clients. The robot boots with any combination from zero to
+three sensors, isolates repeated per-device failures, and retries a missing device every 30
+seconds. It never resets the shared bus in response to an environment-sensor failure. Software can
+recover from a NACK, open wire, lost module power or reconnect; it cannot isolate a hard short on
+SDA/SCL, which may also disrupt the camera and cliff sensor.
+
+Before final assembly, measure the effective SDA/SCL pull-up resistance with the robot unpowered.
+Mount AHT20/BMP280 near an outside edge with airflow and away from the ESP32, camera, motor driver,
+regulators, battery, motors and display backlight. Mount BH1750 facing upward or forward/upward and
+shield it from direct TFT/status-LED light and chassis shadow.
 
 ## Architecture
 
@@ -102,8 +127,10 @@ Streamed notification playback, subtitle progress and application-state cleanup 
 
 The Mochan face keeps one public `MochanDisplay` API while its implementation is split into
 core animation/lifecycle, eye-and-mouth raster rendering, and overlay/status presentation.
-The secondary OLED likewise keeps one `SecondaryOled` API while low-level glyph and fitted-text
-raster primitives live in `secondary_oled_renderer.cc`.
+The secondary OLED likewise keeps one `SecondaryOled` API. Low-level glyph and fitted-text raster
+primitives live in `secondary_oled_renderer.cc`, the original five widget renderers live in
+`secondary_oled_widgets.cc`, and environment widgets live in
+`secondary_oled_environment_widgets.cc`.
 
 ## Typed Web Chat
 
@@ -146,9 +173,10 @@ It provides:
 - motor drive and relative turns
 - cliff threshold and safety status
 - battery/current/power telemetry
+- independent AHT20, BMP280 and BH1750 environment status
 - capacity-test / SoC status
 - MPU6050 state
-- main-display and secondary-OLED controls
+- main-display, automatic-brightness and secondary-OLED controls
 - camera snapshot / lightweight browser preview
 - emotion preview
 - speaker, microphone and status-light controls
@@ -162,14 +190,25 @@ main/robot/robot_web_control_server.*       HTTP routes, logs, chat/ASR, snapsho
 main/robot/web/robot_web_adapter.*          Robot actions and status JSON
 main/robot/web/ui/index.html                Editable markup
 main/robot/web/ui/style.css                 Editable styling
-main/robot/web/ui/app.js                    Editable browser behavior
+main/robot/web/ui/js/                       Focused browser behavior modules
+main/robot/web/ui/app.js                    Browser event wiring
 main/robot/web/robot_web_control_page.h.in  Build-tree generated-page template
 ```
 
-CMake assembles the three UI source files into a self-contained generated header in the
+CMake assembles the UI source files into a self-contained generated header in the
 build tree. Edit the HTML/CSS/JavaScript sources, not generated build output. The firmware
 continues to serve the complete page from `/`; no separate asset routes or frontend
 toolchain are required.
+
+Environment telemetry is polled independently through `/api/status/environment`. One missing
+sensor does not mark the robot offline or hide healthy measurements from the other sensors. The
+secondary OLED exposes eight configurable widgets; persisted five-widget layouts are migrated
+from schema v1 to v2 while preserving their existing order and settings.
+
+Automatic main-display brightness is disabled by default. When enabled, it maps filtered BH1750
+lux into persisted minimum/maximum brightness bounds, with hysteresis and a minimum update
+interval to avoid visible flicker. A missing or failed BH1750 holds the current brightness. A
+manual brightness change disables automatic mode and remains the boot fallback.
 
 ## MCP
 
@@ -177,6 +216,10 @@ The generic device-side MCP framework is intentionally retained as an extension 
 
 Robot-specific MCP tools expose hardware state and actions such as camera input, motion,
 distance, battery/status and motor-related behavior.
+
+`self.environment.get` reports the cached AHT20, BMP280 and BH1750 state, raw valid readings,
+light/comfort classifications and pressure trend. It performs no I2C transaction in the MCP
+handler, and reports each sensor independently so partial hardware failure remains visible.
 
 Their robot-facing registration and serialization live in:
 
@@ -264,9 +307,24 @@ https://github.com/78/xiaozhi-esp32
 ### Shared I2C initialization
 
 `SharedI2cBus` owns both buses. Primary I2C0 is initialized before the camera, and the
-camera SCCB plus downward VL53L0X reuse its existing handle. SSD1306, INA219 and MPU6050
-initialization on auxiliary I2C1 remains intentionally deferred and serialized to avoid
-startup races. Preserve these ownership and lifecycle rules when adding another device.
+camera SCCB plus downward VL53L0X reuse its existing handle. Environment probing starts only
+after camera and VL53L0X initialization. AHT20 conversion is advanced as a non-blocking phase
+machine, while pressure trend uses spaced cached BMP280 samples. SSD1306, INA219 and MPU6050
+initialization on auxiliary I2C1 remains intentionally deferred and serialized to avoid startup
+races. Preserve these ownership and lifecycle rules when adding another device.
+
+### Persistent environment/display settings
+
+The following NVS entries are persistent behavior/API and should only be renamed with an explicit
+migration:
+
+| Namespace | Key | Purpose |
+| --- | --- | --- |
+| `desk_robot` | `oled_w_ver` | Secondary OLED widget-layout schema version |
+| `desk_robot` | `owN_type`, `owN_size`, `owN_on`, `owN_mode` | Per-slot OLED widget configuration |
+| `desk_robot` | `auto_bright` | Automatic main-display brightness enabled state |
+| `desk_robot` | `auto_bmin`, `auto_bmax` | Automatic-brightness bounds |
+| `display` | `brightness` | Manual and sensor-less boot fallback brightness |
 
 ### Protocols
 
@@ -292,6 +350,8 @@ ESP-IDF pending-verify image does not roll back.
 - Battery SoC estimation supports coulomb counting, quasi-rest correction and anchors;
   real-cell calibration remains hardware-dependent.
 - The downward VL53L0X is a floor/cliff sensor, not a front obstacle sensor.
+- Environment classifications, pressure-trend sensitivity and the automatic-brightness curve are
+  preliminary until the production sensor modules are mounted and measured on real hardware.
 - Some large robot implementation files are intentionally left intact for now; future
   modularization should be behavior-preserving rather than a rewrite.
 
