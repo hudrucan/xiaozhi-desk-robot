@@ -2,7 +2,6 @@
 
 #include <string>
 
-struct cJSON;
 class RobotController;
 
 class RobotWebAdapter {
@@ -11,8 +10,6 @@ public:
 
     bool ExecuteAction(const std::string& action, int value, const std::string& text,
                        std::string& message);
-    cJSON* CreateStatus();
-
 private:
     RobotController& controller_;
 };

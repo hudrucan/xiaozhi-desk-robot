@@ -1,14 +1,10 @@
 #include "robot_web_adapter.h"
 
 #include "config/hardware_config.h"
-#include "config/tuning.h"
 #include "control/robot_controller.h"
 #ifdef SECONDARY_OLED_I2C_ADDRESS
 #include "display/secondary_display_controller.h"
 #endif
-
-#include <esp_timer.h>
-#include <cJSON.h>
 
 #include <algorithm>
 #include <string>
@@ -34,7 +30,7 @@ bool ParseDirection(const std::string& direction, MotorController::Direction& co
 }  // namespace
 
 bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
-                                          const std::string& text, std::string& message) {
+                                    const std::string& text, std::string& message) {
     MotorController::Direction direction;
     if (ParseDirection(action, direction)) {
         const int safe_duration = std::clamp(value, 50, 2000);
@@ -250,156 +246,4 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
     }
     message = "Unknown action";
     return false;
-}
-
-
-cJSON* RobotWebAdapter::CreateStatus() {
-    const RobotStatus status = controller_.GetStatus();
-    cJSON* root = cJSON_CreateObject();
-    if (root == nullptr) {
-        return nullptr;
-    }
-    cJSON_AddStringToObject(root, "state", status.state.c_str());
-    cJSON_AddBoolToObject(root, "asr_ready", status.asr_ready);
-    cJSON_AddBoolToObject(root, "asr_preparing", status.asr_preparing);
-    cJSON_AddBoolToObject(root, "camera_available", status.camera_available);
-    cJSON_AddBoolToObject(root, "camera_flipped", status.camera_flipped);
-    cJSON_AddBoolToObject(root, "display_flipped", status.display_flipped);
-    cJSON_AddStringToObject(root, "emotion", status.emotion.c_str());
-    cJSON_AddNumberToObject(root, "speaker_volume", status.speaker_volume);
-    cJSON_AddNumberToObject(root, "microphone_gain", status.microphone_gain);
-    cJSON_AddNumberToObject(root, "microphone_level", status.microphone_level);
-    cJSON_AddBoolToObject(root, "microphone_clipping", status.microphone_clipping);
-    cJSON_AddNumberToObject(root, "screen_brightness", status.screen_brightness);
-    cJSON_AddNumberToObject(root, "status_light_brightness", status.status_light_brightness);
-    cJSON_AddBoolToObject(root, "live_camera", status.live_camera);
-    cJSON_AddNumberToObject(root, "motor_speed", status.motor_speed);
-    cJSON_AddNumberToObject(root, "drive_duration_ms", status.drive_duration_ms);
-    cJSON_AddBoolToObject(root, "emotion_movement_enabled",
-                          status.emotion_movement_enabled);
-    cJSON_AddBoolToObject(root, "emotion_movement_active", status.emotion_movement_active);
-    cJSON* motor_status = cJSON_CreateObject();
-    if (motor_status != nullptr) {
-        cJSON_AddBoolToObject(motor_status, "available", status.motors.available);
-        cJSON_AddBoolToObject(motor_status, "faulted", status.motors.faulted);
-        cJSON_AddBoolToObject(motor_status, "moving", status.motors.moving);
-        cJSON_AddStringToObject(motor_status, "direction",
-                                MotorController::DirectionName(status.motors.direction));
-        cJSON_AddNumberToObject(motor_status, "intensity_percent",
-                                status.motors.intensity_percent);
-        cJSON_AddNumberToObject(motor_status, "queued", status.motors.queued);
-        cJSON_AddNumberToObject(motor_status, "remaining_ms", status.motors.remaining_ms);
-        cJSON_AddBoolToObject(motor_status, "sequence_active", status.motors.sequence_active);
-        cJSON_AddNumberToObject(motor_status, "sequence_total", status.motors.sequence_total);
-        cJSON_AddNumberToObject(motor_status, "sequence_completed",
-                                status.motors.sequence_completed);
-        cJSON_AddItemToObject(root, "motors", motor_status);
-    }
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-    const auto& cliff = status.cliff;
-    cJSON_AddNumberToObject(root, "distance_mm", cliff.distance_mm);
-    cJSON_AddBoolToObject(root, "distance_valid", cliff.valid);
-    cJSON_AddBoolToObject(root, "cliff_detected", cliff.cliff_detected);
-    cJSON_AddNumberToObject(root, "cliff_edge_mm", cliff.edge_mm);
-#endif
-#ifdef INA219_I2C_ADDRESS
-    const auto& battery = status.battery;
-    cJSON_AddBoolToObject(root, "battery_available", battery.available);
-    cJSON_AddBoolToObject(root, "battery_valid", battery.valid);
-    cJSON_AddNumberToObject(root, "battery_percent", battery.percent);
-    cJSON_AddNumberToObject(root, "battery_voltage_v", battery.voltage_v);
-    cJSON_AddNumberToObject(root, "battery_current_ma", battery.current_ma);
-    cJSON_AddNumberToObject(root, "battery_power_mw", battery.power_mw);
-    cJSON_AddNumberToObject(root, "battery_signed_current_ma", battery.signed_current_ma);
-    cJSON_AddNumberToObject(root, "battery_shunt_voltage_mv", battery.shunt_voltage_mv);
-    cJSON_AddNumberToObject(root, "battery_bus_voltage_v", battery.bus_voltage_v);
-    cJSON_AddNumberToObject(root, "battery_remaining_mah", battery.remaining_mah);
-    cJSON_AddNumberToObject(root, "battery_capacity_mah", BATTERY_SOC_USABLE_CAPACITY_MAH);
-    cJSON_AddStringToObject(root, "battery_soc_method", "coulomb_quasi_rest_anchors");
-    cJSON_AddBoolToObject(root, "battery_soc_tracking_degraded",
-                          battery.soc_tracking_degraded);
-    cJSON_AddBoolToObject(root, "battery_soc_quasi_resting", battery.soc_quasi_resting);
-    cJSON_AddNumberToObject(root, "battery_soc_voltage_reference_percent",
-                            battery.soc_voltage_reference_percent);
-    cJSON_AddNumberToObject(root, "battery_soc_voltage_correction_mah",
-                            battery.soc_voltage_correction_mah);
-    cJSON_AddBoolToObject(root, "battery_soc_full_anchored", battery.soc_full_anchored);
-    cJSON_AddBoolToObject(root, "battery_soc_bootstrap_voltage_rebased",
-                          battery.soc_bootstrap_voltage_rebased);
-    cJSON_AddBoolToObject(root, "battery_soc_empty_anchored", battery.soc_empty_anchored);
-    cJSON_AddBoolToObject(root, "battery_conversion_ready", battery.conversion_ready);
-    cJSON_AddBoolToObject(root, "battery_math_overflow", battery.math_overflow);
-    const char* flow_state = !battery.valid                         ? "unknown"
-                             : battery.signed_current_ma < -20.0f   ? "charging"
-                             : battery.signed_current_ma > 20.0f    ? "discharging"
-                                                                    : "near_zero";
-    cJSON_AddStringToObject(root, "battery_flow_state", flow_state);
-    cJSON_AddStringToObject(root, "external_power", "unknown");
-    cJSON_AddBoolToObject(root, "battery_charging", battery.charging);
-    cJSON_AddBoolToObject(root, "battery_discharging", battery.discharging);
-    cJSON_AddBoolToObject(root, "battery_capacity_test_active", battery.capacity_test_active);
-    cJSON_AddBoolToObject(root, "battery_capacity_test_measuring",
-                          battery.capacity_test_measuring);
-    cJSON_AddNumberToObject(root, "battery_capacity_test_mah",
-                            battery.capacity_test_uah / 1000.0);
-    cJSON_AddNumberToObject(root, "battery_capacity_test_seconds",
-                            battery.capacity_test_seconds);
-#endif
-#ifdef MPU6050_I2C_ADDRESS
-    const auto& gyro = status.gyro;
-    cJSON_AddBoolToObject(root, "motion_sensor_available", status.motion_sensor_available);
-    cJSON_AddBoolToObject(root, "motion_sensor_valid", status.motion_sensor_valid);
-    cJSON_AddBoolToObject(root, "motion_emotions_enabled", status.motion_emotions_enabled);
-    cJSON_AddNumberToObject(root, "motion_roll_deg", status.motion_roll_deg);
-    cJSON_AddNumberToObject(root, "motion_pitch_deg", status.motion_pitch_deg);
-    cJSON_AddNumberToObject(root, "motion_acceleration_g", status.motion_acceleration_g);
-    cJSON_AddNumberToObject(root, "motion_rotation_dps", status.motion_rotation_dps);
-    cJSON_AddNumberToObject(root, "motion_yaw_rate_dps", gyro.yaw_rate_dps);
-    cJSON_AddNumberToObject(root, "motion_yaw_bias_dps", gyro.yaw_bias_dps);
-    cJSON_AddBoolToObject(root, "gyro_bias_valid", gyro.bias_valid);
-    const int64_t gyro_sample_us = gyro.sample_timestamp_us;
-    cJSON_AddNumberToObject(
-        root, "gyro_sample_age_ms",
-        gyro_sample_us > 0 ? (esp_timer_get_time() - gyro_sample_us) / 1000.0 : -1.0);
-    cJSON_AddBoolToObject(root, "gyro_turn_available", gyro.available);
-    cJSON_AddBoolToObject(root, "gyro_turn_pending", gyro.pending);
-    cJSON_AddBoolToObject(root, "gyro_turn_active", gyro.active);
-    cJSON_AddNumberToObject(root, "gyro_turn_target_deg", gyro.target_deg);
-    cJSON_AddNumberToObject(root, "gyro_turn_progress_deg", gyro.progress_deg);
-    cJSON_AddStringToObject(root, "gyro_turn_stop_reason",
-                            GyroTurnController::StopReasonName(gyro.stop_reason));
-    cJSON_AddStringToObject(root, "motion_gesture", status.motion_gesture.c_str());
-#endif
-#ifdef SECONDARY_OLED_I2C_ADDRESS
-    cJSON_AddBoolToObject(root, "oled_available", status.oled_available);
-    const auto& oled_config = status.oled_config;
-    cJSON_AddBoolToObject(root, "oled_flipped", oled_config.flip_180);
-    cJSON_AddNumberToObject(root, "oled_contrast", oled_config.contrast);
-    cJSON_AddNumberToObject(root, "oled_page_count", status.oled_page_count);
-    cJSON_AddStringToObject(root, "oled_brand", oled_config.brand.c_str());
-    cJSON_AddStringToObject(root, "oled_distance_prefix", oled_config.distance_prefix.c_str());
-    cJSON* oled_widgets = cJSON_AddArrayToObject(root, "oled_widgets");
-    if (oled_widgets != nullptr) {
-        for (const auto& widget : oled_config.widgets) {
-            cJSON* item = cJSON_CreateObject();
-            if (item == nullptr) {
-                break;
-            }
-            cJSON_AddStringToObject(item, "type",
-                                    SecondaryDisplayController::WidgetTypeName(widget.type));
-            cJSON_AddBoolToObject(item, "enabled", widget.enabled);
-            cJSON_AddNumberToObject(item, "size", static_cast<int>(widget.size));
-            cJSON_AddNumberToObject(item, "mode", widget.mode);
-            cJSON_AddItemToArray(oled_widgets, item);
-        }
-    }
-#endif
-    cJSON_AddStringToObject(root, "version", status.version.c_str());
-    cJSON_AddStringToObject(root, "ip", status.ip.c_str());
-    cJSON_AddStringToObject(root, "ssid", status.ssid.c_str());
-    cJSON_AddNumberToObject(root, "rssi", status.rssi);
-    cJSON_AddNumberToObject(root, "uptime_sec", status.uptime_sec);
-    cJSON_AddNumberToObject(root, "free_internal_bytes", status.free_internal_bytes);
-    cJSON_AddNumberToObject(root, "free_psram_bytes", status.free_psram_bytes);
-    return root;
 }

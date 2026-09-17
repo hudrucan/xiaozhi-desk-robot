@@ -295,12 +295,6 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleRoot,
         .user_ctx = this,
     };
-    const httpd_uri_t status = {
-        .uri = "/api/status",
-        .method = HTTP_GET,
-        .handler = HandleStatus,
-        .user_ctx = this,
-    };
     const httpd_uri_t action = {
         .uri = "/api/action",
         .method = HTTP_POST,
@@ -356,7 +350,6 @@ bool RobotWebControlServer::Start(int port) {
         .user_ctx = this,
     };
     const bool routes_ok = httpd_register_uri_handler(server_, &root) == ESP_OK &&
-                           httpd_register_uri_handler(server_, &status) == ESP_OK &&
                            RegisterRobotWebStatusRoutes(server_, this, HandleDomainStatus);
     if (!routes_ok ||
         httpd_register_uri_handler(server_, &action) != ESP_OK ||
@@ -381,21 +374,6 @@ void RobotWebControlServer::Stop() {
         httpd_stop(server_);
         server_ = nullptr;
     }
-}
-
-std::string RobotWebControlServer::BuildStatus() {
-    cJSON* root = robot_adapter_.CreateStatus();
-    if (root == nullptr) {
-        return R"({"state":"unknown","error":"out of memory"})";
-    }
-    AppendConversationStatus(root);
-    AppendAsrStatus(root);
-
-    char* encoded = cJSON_PrintUnformatted(root);
-    const std::string result = encoded != nullptr ? encoded : R"({"state":"unknown"})";
-    cJSON_free(encoded);
-    cJSON_Delete(root);
-    return result;
 }
 
 std::string RobotWebControlServer::BuildDomainStatus(const char* uri) {
@@ -436,40 +414,6 @@ std::string RobotWebControlServer::BuildAsrStatus() {
     cJSON_AddStringToObject(root, "provider", AsrProviderName(config.provider));
     cJSON_AddBoolToObject(root, "gemini_configured", config.IsGeminiConfigured());
     return EncodeJson(root, R"({"provider":"xiaozhi","gemini_configured":false})");
-}
-
-void RobotWebControlServer::AppendConversationStatus(cJSON* root) {
-    std::lock_guard<std::mutex> lock(conversation_mutex_);
-    cJSON* conversation = cJSON_AddObjectToObject(root, "conversation");
-    if (conversation == nullptr) {
-        return;
-    }
-    cJSON_AddStringToObject(conversation, "state", conversation_state_.c_str());
-    cJSON_AddStringToObject(conversation, "error", conversation_error_.c_str());
-    cJSON* messages = cJSON_AddArrayToObject(conversation, "messages");
-    if (messages == nullptr) {
-        return;
-    }
-    for (const auto& message : conversation_messages_) {
-        cJSON* item = cJSON_CreateObject();
-        if (item == nullptr) {
-            break;
-        }
-        cJSON_AddNumberToObject(item, "id", message.id);
-        cJSON_AddStringToObject(item, "role", message.role.c_str());
-        cJSON_AddStringToObject(item, "text", message.text.c_str());
-        cJSON_AddItemToArray(messages, item);
-    }
-}
-
-void RobotWebControlServer::AppendAsrStatus(cJSON* root) {
-    const AsrConfig config = AsrSettings::Load();
-    cJSON* asr = cJSON_AddObjectToObject(root, "asr");
-    if (asr == nullptr) {
-        return;
-    }
-    cJSON_AddStringToObject(asr, "provider", AsrProviderName(config.provider));
-    cJSON_AddBoolToObject(asr, "gemini_configured", config.IsGeminiConfigured());
 }
 
 void RobotWebControlServer::TrimConversationLocked() {
@@ -528,11 +472,6 @@ esp_err_t RobotWebControlServer::HandleRoot(httpd_req_t* request) {
     httpd_resp_set_type(request, "text/html; charset=utf-8");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     return httpd_resp_send(request, kRobotWebControlPage, HTTPD_RESP_USE_STRLEN);
-}
-
-esp_err_t RobotWebControlServer::HandleStatus(httpd_req_t* request) {
-    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
-    return SendJson(request, "200 OK", self->BuildStatus());
 }
 
 esp_err_t RobotWebControlServer::HandleDomainStatus(httpd_req_t* request) {
