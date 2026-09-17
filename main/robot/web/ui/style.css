@@ -576,6 +576,17 @@
       .audio-row + .audio-row {
         border-top: 1px solid var(--line2);
       }
+      .screen-brightness-row {
+        grid-template-columns: 102px minmax(70px, 1fr) 40px auto;
+      }
+      .brightness-auto {
+        min-width: 0;
+        padding: 7px 8px;
+        white-space: nowrap;
+      }
+      .brightness-auto-short {
+        display: none;
+      }
       .audio-name b {
         display: block;
         font-size: 11px;
@@ -976,9 +987,31 @@
         color: var(--hi);
         font-weight: 600;
       }
+      .oled-preview-toggle {
+        width: 100%;
+        border: 0;
+        background: none;
+        padding: 0;
+        text-align: left;
+        cursor: pointer;
+      }
+      .oled-preview-toggle i {
+        display: inline-block;
+        margin-right: 4px;
+        color: var(--hi);
+        font-size: 13px;
+        font-style: normal;
+        transition: transform 0.15s ease;
+      }
+      .oled-preview-toggle.expanded i {
+        transform: rotate(90deg);
+      }
       .oled-pages {
         display: grid;
         gap: 7px;
+      }
+      .oled-pages[hidden] {
+        display: none;
       }
       .oled-page {
         position: relative;
@@ -1369,6 +1402,22 @@
           margin-bottom: 8px;
         }
       }
+      @media (max-width: 500px) {
+        .screen-brightness-row {
+          grid-template-columns: 82px minmax(60px, 1fr) 34px auto;
+          gap: 6px;
+        }
+        .brightness-auto {
+          padding: 6px;
+          gap: 5px;
+        }
+        .brightness-auto-long {
+          display: none;
+        }
+        .brightness-auto-short {
+          display: inline;
+        }
+      }
       @media (max-width: 380px) {
         .dpad {
           grid-template-columns: repeat(3, 62px);
@@ -1396,6 +1445,9 @@
         }
         .audio-row {
           grid-template-columns: 82px 1fr 34px;
+        }
+        .screen-brightness-row {
+          grid-template-columns: 72px minmax(54px, 1fr) 32px auto;
         }
         .capacity-test {
           grid-template-columns: 1fr;

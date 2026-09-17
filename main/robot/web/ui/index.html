@@ -366,7 +366,7 @@
                 <span class="clip" id="micClip">LIVE</span>
               </div>
             </div>
-            <div class="audio-row">
+            <div class="audio-row screen-brightness-row">
               <span class="audio-name"
                 ><b>Screen</b><small>Backlight</small></span
               ><input
@@ -376,11 +376,11 @@
                 max="100"
                 step="5"
                 value="75"
-              /><span class="audio-value" id="screenValue">75%</span>
-            </div>
-            <div class="segment-toggles" style="margin: 4px 0 8px">
-              <label class="toggle"
-                ><input id="autoBrightness" type="checkbox" />Automatic screen brightness</label
+              /><span class="audio-value" id="screenValue">75%</span
+              ><label class="toggle brightness-auto"
+                ><input id="autoBrightness" type="checkbox" /><span class="brightness-auto-long"
+                  >Automatic brightness</span
+                ><span class="brightness-auto-short">Auto</span></label
               >
             </div>
             <div class="audio-row">
@@ -454,10 +454,16 @@
             </div>
             <div class="display-settings">
               <div class="oled-designer">
-                <div class="oled-preview-head">
-                  <span>Layout preview</span><b id="oledPageCount">—</b>
-                </div>
-                <div id="oledPreview" class="oled-pages">
+                <button
+                  id="oledPreviewToggle"
+                  class="oled-preview-head oled-preview-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="oledPreview"
+                >
+                  <span><i>›</i> Layout preview</span><b id="oledPageCount">—</b>
+                </button>
+                <div id="oledPreview" class="oled-pages" hidden>
                   <div class="oled-empty">Waiting for OLED configuration</div>
                 </div>
                 <div class="oled-preview-head">

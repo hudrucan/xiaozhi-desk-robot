@@ -115,6 +115,7 @@ bindChatAndAsrControls();
 bindRangeControls();
 bindRobotControls();
 bindCameraAndLogControls();
+bindOledPreviewToggle();
 restoreLogs();
 startStatusPolling();
 fetchLogs();

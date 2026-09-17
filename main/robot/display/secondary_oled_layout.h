@@ -8,7 +8,7 @@ namespace secondary_oled_layout {
 
 constexpr uint8_t kDisplayWidth = 128;
 constexpr uint8_t kDisplayHeight = 32;
-constexpr size_t kMaxWidgets = 8;
+constexpr size_t kMaxWidgets = 9;
 constexpr size_t kMaxPanelsPerPage = 3;
 constexpr size_t kMaxPages = kMaxWidgets;
 

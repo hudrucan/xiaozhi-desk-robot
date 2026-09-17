@@ -605,6 +605,8 @@ private:
         telemetry.capacity_uah = battery.capacity_test_uah;
         telemetry.capacity_seconds = battery.capacity_test_seconds;
         telemetry.battery_percent = battery.percent;
+        telemetry.battery_remaining_mah = static_cast<uint32_t>(
+            std::lround(std::max(0.0f, battery.remaining_mah)));
         telemetry.battery_voltage_mv =
             static_cast<int>(std::lround(battery.voltage_v * 1000.0f));
         telemetry.low_battery = telemetry.power_valid && !battery.charging &&

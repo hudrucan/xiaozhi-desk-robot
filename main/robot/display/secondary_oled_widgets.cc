@@ -23,6 +23,9 @@ constexpr uint8_t kMotionIcon[8] = {
 constexpr uint8_t kCapacityIcon[8] = {
     0x18, 0x7e, 0x42, 0x5a, 0x5a, 0x5a, 0x7e, 0x00,
 };
+constexpr uint8_t kBatteryIcon[8] = {
+    0x00, 0x7e, 0x42, 0x5a, 0x5a, 0x42, 0x7e, 0x18,
+};
 
 std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
     if (text.empty()) {
@@ -53,6 +56,12 @@ std::string FormatCapacityMah(uint32_t capacity_uah) {
     const uint32_t capacity_mah =
         static_cast<uint32_t>((static_cast<uint64_t>(capacity_uah) + 500) / 1000);
     std::snprintf(text, sizeof(text), "%lumAh", static_cast<unsigned long>(capacity_mah));
+    return text;
+}
+
+std::string FormatRemainingMah(uint32_t remaining_mah) {
+    char text[16] = {};
+    std::snprintf(text, sizeof(text), "%lumAh", static_cast<unsigned long>(remaining_mah));
     return text;
 }
 
@@ -160,6 +169,12 @@ void SecondaryOled::RenderSingleLineWidgetLocked(
             icon = kCapacityIcon;
             break;
         }
+        case WidgetType::kBatteryRemaining:
+            primary = telemetry_.power_valid
+                          ? FormatRemainingMah(telemetry_.battery_remaining_mah)
+                          : "--mAh";
+            icon = kBatteryIcon;
+            break;
         case WidgetType::kClimate:
         case WidgetType::kPressure:
         case WidgetType::kLight:
@@ -324,6 +339,19 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
                 DrawIconTextFitted(left, top, content_width, content_height, kCapacityIcon,
                                    mode == CapacityMode::kMah ? first : second,
                                    FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+        case WidgetType::kBatteryRemaining: {
+            const std::string remaining = telemetry_.power_valid
+                                              ? FormatRemainingMah(telemetry_.battery_remaining_mah)
+                                              : "--mAh";
+            if (roomy) {
+                DrawIconTwoLinesFitted(left, top, content_width, content_height, kBatteryIcon,
+                                       "Remaining", remaining, FontSize::kRegular, allow_icon);
+            } else {
+                DrawIconTextFitted(left, top, content_width, content_height, kBatteryIcon,
+                                   remaining, FontSize::kEmphasis, allow_icon);
             }
             break;
         }

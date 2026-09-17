@@ -7,6 +7,7 @@ const oledMeta = {
   climate: ["Climate", "Temperature and humidity", "Temp / RH"],
   pressure: ["Pressure", "BMP280 pressure", "hPa"],
   light: ["Light", "BH1750 illuminance", "Lux"],
+  battery_remaining: ["Battery remaining", "Estimated charge left", "mAh left"],
 };
 
 function oledModeOptions(type, selected) {
@@ -114,7 +115,8 @@ function renderOledEditor(status, widgets) {
   oledWidgetSignature = signature;
   $("#oledWidgets").innerHTML = widgets.map((widget, index) => {
     const meta = oledMeta[widget.type] || [widget.type, ""];
-    const modeDisabled = widget.type === "branding" || widget.type === "distance";
+    const modeDisabled = widget.type === "branding" || widget.type === "distance" ||
+      widget.type === "battery_remaining";
     return '<div class="oled-widget"><div class="oled-order">' +
       '<button data-oled-up="' + index + '" ' + (index === 0 ? "disabled" : "") +
       ' aria-label="Move up">↑</button>' +
@@ -156,6 +158,18 @@ function renderOledPreview(status, widgets) {
       "</span></div>",
     ).join("")
     : '<div class="oled-empty">No widgets enabled</div>';
+}
+
+function bindOledPreviewToggle() {
+  const toggle = $("#oledPreviewToggle");
+  const preview = $("#oledPreview");
+  let expanded = false;
+  toggle.onclick = () => {
+    expanded = !expanded;
+    preview.hidden = !expanded;
+    toggle.classList.toggle("expanded", expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+  };
 }
 
 function renderOledConfig(status) {

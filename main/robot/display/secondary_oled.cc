@@ -362,6 +362,7 @@ void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
                          telemetry.motion_calibrating != telemetry_.motion_calibrating ||
                          telemetry.low_battery != telemetry_.low_battery ||
                          telemetry.battery_percent != telemetry_.battery_percent ||
+                         telemetry.battery_remaining_mah != telemetry_.battery_remaining_mah ||
                          telemetry.battery_voltage_mv != telemetry_.battery_voltage_mv ||
                          telemetry.temperature_valid != telemetry_.temperature_valid ||
                          telemetry.temperature_tenths_c != telemetry_.temperature_tenths_c ||

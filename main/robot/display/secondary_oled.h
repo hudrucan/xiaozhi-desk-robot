@@ -22,6 +22,7 @@ public:
         kClimate,
         kPressure,
         kLight,
+        kBatteryRemaining,
     };
 
     enum class PowerMode : uint8_t {
@@ -90,6 +91,7 @@ public:
             {WidgetType::kClimate, WidgetSize::kSmall, false, 2},
             {WidgetType::kPressure, WidgetSize::kSmall, false, 0},
             {WidgetType::kLight, WidgetSize::kSmall, false, 2},
+            {WidgetType::kBatteryRemaining, WidgetSize::kMedium, true, 0},
         }};
     };
 
@@ -117,6 +119,7 @@ public:
         bool motion_calibrating = false;
         bool low_battery = false;
         int battery_percent = 0;
+        uint32_t battery_remaining_mah = 0;
         int battery_voltage_mv = 0;
         bool temperature_valid = false;
         int temperature_tenths_c = 0;

@@ -16,8 +16,8 @@
 
 namespace {
 
-constexpr int kWidgetSchemaVersion = 2;
-constexpr size_t kLegacyWidgetCount = 5;
+constexpr int kWidgetSchemaVersion = 3;
+constexpr size_t kVersion2WidgetCount = 8;
 
 }  // namespace
 
@@ -55,6 +55,8 @@ const char* SecondaryDisplayController::WidgetTypeName(SecondaryOled::WidgetType
             return "pressure";
         case SecondaryOled::WidgetType::kLight:
             return "light";
+        case SecondaryOled::WidgetType::kBatteryRemaining:
+            return "battery_remaining";
     }
     return "branding";
 }
@@ -84,16 +86,18 @@ std::string SecondaryDisplayController::NormalizeConfigText(const std::string& t
 
 bool SecondaryDisplayController::LoadWidgets(Settings& settings, SecondaryOled::Config& config) {
     const int version = settings.GetInt("oled_w_ver", 0);
-    if (version != 1 && version != kWidgetSchemaVersion) {
+    if (version != 2 && version != kWidgetSchemaVersion) {
         return false;
     }
-    const size_t stored_count = version == 1 ? kLegacyWidgetCount : config.widgets.size();
+    const size_t stored_count =
+        version == 2 ? kVersion2WidgetCount : config.widgets.size();
     auto widgets = config.widgets;
     std::array<bool, secondary_oled_layout::kMaxWidgets> seen = {};
     for (size_t index = 0; index < stored_count; ++index) {
         const int type = settings.GetInt(WidgetKey(index, "type"), -1);
-        const int type_limit = version == 1 ? static_cast<int>(kLegacyWidgetCount)
-                                            : static_cast<int>(secondary_oled_layout::kMaxWidgets);
+        const int type_limit = version == 2
+                                   ? static_cast<int>(kVersion2WidgetCount)
+                                   : static_cast<int>(secondary_oled_layout::kMaxWidgets);
         if (type < 0 || type >= type_limit || seen[type]) {
             ESP_LOGW(TAG, "Ignoring invalid persisted secondary OLED widget order");
             return false;
@@ -108,7 +112,7 @@ bool SecondaryDisplayController::LoadWidgets(Settings& settings, SecondaryOled::
             std::clamp(static_cast<int>(settings.GetInt(WidgetKey(index, "mode"), 0)), 0, 2));
     }
     config.widgets = widgets;
-    return version == 1;
+    return version != kWidgetSchemaVersion;
 }
 
 bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex,
@@ -131,7 +135,7 @@ bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mu
     }
     if (migrate_widgets) {
         PersistConfig(config);
-        ESP_LOGI(TAG, "Migrated secondary OLED widget layout from v1 to v2");
+        ESP_LOGI(TAG, "Migrated secondary OLED widget layout to v%d", kWidgetSchemaVersion);
     }
     telemetry_context_ = telemetry_context;
     telemetry_provider_ = telemetry_provider;
