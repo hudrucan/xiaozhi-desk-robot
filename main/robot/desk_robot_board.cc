@@ -3,7 +3,6 @@
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
-#include "camera/camera_diagnostics.h"
 #include "camera/camera_settings.h"
 #include "camera/desk_robot_camera.h"
 #include "codecs/no_audio_codec.h"
@@ -1441,13 +1440,6 @@ private:
         status.uptime_sec = esp_timer_get_time() / 1000000;
         status.free_internal_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         status.free_psram_bytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        const CameraBootDiagnostics camera_diagnostics =
-            CameraDiagnostics::GetBootDiagnostics();
-        status.last_reset_reason = camera_diagnostics.reset_reason;
-        status.camera_operation_interrupted = camera_diagnostics.interrupted;
-        status.last_camera_stage =
-            CameraDiagnostics::StageName(camera_diagnostics.interrupted_stage);
-        status.last_camera_operation_id = camera_diagnostics.interrupted_operation_id;
         return status;
     }
 
@@ -1484,7 +1476,6 @@ public:
         // The web dashboard is not reachable until Wi-Fi comes up, so begin
         // buffering here to retain display, camera, and audio initialization logs.
         RobotWebControlServer::BeginLogCapture();
-        CameraDiagnostics::Initialize();
         InitializeSpi();
         InitializeDisplay();
         // Bring up the panel backlight before camera/audio initialization. A

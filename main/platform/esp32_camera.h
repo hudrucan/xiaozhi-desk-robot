@@ -71,5 +71,4 @@ protected:
 
 private:
     bool CaptureInternal(bool update_preview);
-    void LogHttpDiagnostics(const char* stage, int64_t request_start_us) const;
 };

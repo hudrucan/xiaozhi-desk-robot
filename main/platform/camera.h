@@ -17,7 +17,6 @@ public:
     // Stops persistent preview consumers only. A transient MCP capture owns its
     // own lifecycle and must not be cancelled by this hook.
     virtual void ForceOff() {}
-    virtual void OnMcpResultSerialized() {}
     virtual void OnMcpResponseSent() {}
 };
 

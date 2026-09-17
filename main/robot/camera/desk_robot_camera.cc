@@ -1,7 +1,5 @@
 #include "desk_robot_camera.h"
 
-#include "camera_diagnostics.h"
-
 #include <chrono>
 
 #include <esp_log.h>
@@ -42,20 +40,14 @@ bool DeskRobotCamera::Capture() {
         EndMcpOperation();
         return false;
     }
-    mcp_diagnostic_operation_id_ =
-        CameraDiagnostics::BeginOperation(CameraDiagnosticStage::kCapture);
     const int64_t capture_start_us = esp_timer_get_time();
-    ESP_LOGI(TAG, "MCP camera operation=%lu capture begin",
-             static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()));
+    ESP_LOGI(TAG, "MCP camera capture begin");
     const bool captured = Esp32Camera::CaptureOwnedJpeg();
     const int64_t capture_ms = (esp_timer_get_time() - capture_start_us) / 1000;
-    ESP_LOGI(TAG, "MCP camera operation=%lu capture %s elapsed=%lldms",
-             static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()),
-             captured ? "done" : "failed", static_cast<long long>(capture_ms));
+    ESP_LOGI(TAG, "MCP camera capture %s elapsed=%lldms", captured ? "done" : "failed",
+             static_cast<long long>(capture_ms));
     mcp_capture_pending_ = captured;
     if (!captured) {
-        CameraDiagnostics::CompleteOperation();
-        mcp_diagnostic_operation_id_ = 0;
         EndMcpOperation();
     }
     return captured;
@@ -180,41 +172,24 @@ bool DeskRobotCamera::IsAvailable() const { return Esp32Camera::IsAvailable(); }
 
 std::expected<std::string, std::string> DeskRobotCamera::Explain(const std::string& question) {
     if (!mcp_capture_pending_.exchange(false)) {
-        CameraDiagnostics::CompleteOperation();
-        mcp_diagnostic_operation_id_ = 0;
         EndMcpOperation();
         return std::unexpected("No MCP camera snapshot is pending");
     }
-    ESP_LOGI(TAG, "MCP camera operation=%lu explain begin",
-             static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()));
+    ESP_LOGI(TAG, "MCP camera explain begin");
     auto result = Esp32Camera::Explain(question);
-    CameraDiagnostics::SetStage(CameraDiagnosticStage::kResultReady);
     if (result) {
-        ESP_LOGI(TAG, "MCP camera operation=%lu explain done",
-                 static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()));
+        ESP_LOGI(TAG, "MCP camera explain done");
     } else {
-        ESP_LOGE(TAG, "MCP camera operation=%lu explain failed",
-                 static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()));
+        ESP_LOGE(TAG, "MCP camera explain failed");
     }
     return result;
-}
-
-void DeskRobotCamera::OnMcpResultSerialized() {
-    if (!mcp_operation_active_.load()) {
-        return;
-    }
-    CameraDiagnostics::SetStage(CameraDiagnosticStage::kResultSerialized);
 }
 
 void DeskRobotCamera::OnMcpResponseSent() {
     if (!mcp_operation_active_.load()) {
         return;
     }
-    CameraDiagnostics::SetStage(CameraDiagnosticStage::kResponseSent);
-    ESP_LOGI(TAG, "MCP camera operation=%lu response sent",
-             static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()));
-    CameraDiagnostics::CompleteOperation();
-    mcp_diagnostic_operation_id_ = 0;
+    ESP_LOGI(TAG, "MCP camera response sent");
     EndMcpOperation();
 }
 

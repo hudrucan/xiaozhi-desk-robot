@@ -12,6 +12,9 @@
 
 #include <esp_system.h>
 #include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 #include <mbedtls/base64.h>
 
 #include "cjson_utils.h"
@@ -268,7 +271,6 @@ private:
     std::string description_;
     PropertyList properties_;
     ToolCallback callback_;
-    std::function<void()> result_serialized_callback_;
     std::function<void()> response_sent_callback_;
     ToolExecutionMode execution_mode_ = ToolExecutionMode::kMainTask;
     bool user_only_ = false;
@@ -282,16 +284,8 @@ public:
     void set_user_only(bool user_only) { user_only_ = user_only; }
     void set_assistant_only(bool assistant_only) { assistant_only_ = assistant_only; }
     void set_execution_mode(ToolExecutionMode mode) { execution_mode_ = mode; }
-    void set_result_serialized_callback(std::function<void()> callback) {
-        result_serialized_callback_ = std::move(callback);
-    }
     void set_response_sent_callback(std::function<void()> callback) {
         response_sent_callback_ = std::move(callback);
-    }
-    void NotifyResultSerialized() const {
-        if (result_serialized_callback_) {
-            result_serialized_callback_();
-        }
     }
     void NotifyResponseSent() const {
         if (response_sent_callback_) {
@@ -492,8 +486,11 @@ private:
                       const ResponseSender& response_sender);
     void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments,
                     ResponseSender response_sender);
+    static void WorkerTask(void* context);
 
     std::vector<std::unique_ptr<McpTool>> tools_;
+    QueueHandle_t worker_queue_ = nullptr;
+    TaskHandle_t worker_task_ = nullptr;
 };
 
 #endif  // MCP_SERVER_H

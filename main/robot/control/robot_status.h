@@ -64,8 +64,4 @@ struct RobotStatus {
     int64_t uptime_sec = 0;
     size_t free_internal_bytes = 0;
     size_t free_psram_bytes = 0;
-    std::string last_reset_reason = "unknown";
-    bool camera_operation_interrupted = false;
-    std::string last_camera_stage = "none";
-    uint32_t last_camera_operation_id = 0;
 };

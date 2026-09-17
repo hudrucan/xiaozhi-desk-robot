@@ -24,9 +24,39 @@
 
 #define TAG "MCP"
 
-McpServer::McpServer() {}
+McpServer::McpServer() {
+    constexpr UBaseType_t kWorkerQueueLength = 2;
+    constexpr uint32_t kWorkerStackSize = 12288;
+
+    worker_queue_ = xQueueCreate(kWorkerQueueLength, sizeof(std::function<void()>*));
+    if (worker_queue_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create MCP worker queue");
+        return;
+    }
+    const BaseType_t created = xTaskCreateWithCaps(
+        WorkerTask, "mcp_tool", kWorkerStackSize, this, 1, &worker_task_, MALLOC_CAP_SPIRAM);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create persistent MCP worker");
+        vQueueDelete(worker_queue_);
+        worker_queue_ = nullptr;
+        worker_task_ = nullptr;
+    }
+}
 
 McpServer::~McpServer() = default;
+
+void McpServer::WorkerTask(void* context) {
+    auto* server = static_cast<McpServer*>(context);
+    while (true) {
+        std::function<void()>* raw_call = nullptr;
+        if (xQueueReceive(server->worker_queue_, &raw_call, portMAX_DELAY) != pdTRUE ||
+            raw_call == nullptr) {
+            continue;
+        }
+        std::unique_ptr<std::function<void()>> call(raw_call);
+        (*call)();
+    }
+}
 
 void McpServer::AddCommonTools() {
     // *Important* To speed up the response time, we add the common tools to the beginning of
@@ -117,8 +147,6 @@ void McpServer::AddCommonTools() {
                 }
                 return std::move(*result);
             });
-        camera_tool->set_result_serialized_callback(
-            [camera]() { camera->OnMcpResultSerialized(); });
         camera_tool->set_response_sent_callback([camera]() { camera->OnMcpResponseSent(); });
         camera_tool->set_execution_mode(ToolExecutionMode::kWorkerTask);
         AddTool(std::move(camera_tool));
@@ -648,7 +676,6 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
             ReplyError(id, result.error(), response_sender, std::move(on_sent));
             return;
         }
-        tool->NotifyResultSerialized();
         ReplyResult(id, *result, response_sender, std::move(on_sent));
     };
 
@@ -657,23 +684,13 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         return;
     }
 
-    constexpr uint32_t kWorkerStackSize = 12288;
     auto* worker_call = new (std::nothrow) std::function<void()>(std::move(execute_call));
     if (worker_call == nullptr) {
         ReplyError(id, "Failed to allocate MCP worker", worker_failure_sender);
         return;
     }
-    const BaseType_t created = xTaskCreateWithCaps(
-        [](void* context) {
-            std::unique_ptr<std::function<void()>> call(
-                static_cast<std::function<void()>*>(context));
-            (*call)();
-            call.reset();
-            vTaskDeleteWithCaps(nullptr);
-        },
-        "mcp_tool", kWorkerStackSize, worker_call, 1, nullptr, MALLOC_CAP_SPIRAM);
-    if (created != pdPASS) {
+    if (worker_queue_ == nullptr || xQueueSend(worker_queue_, &worker_call, 0) != pdTRUE) {
         delete worker_call;
-        ReplyError(id, "Failed to start MCP worker", worker_failure_sender);
+        ReplyError(id, "MCP worker is unavailable", worker_failure_sender);
     }
 }
