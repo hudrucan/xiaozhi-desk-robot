@@ -59,9 +59,11 @@ private:
     EnvironmentDerived derived_;
 
     mutable std::mutex status_mutex_;
+    std::mutex lifecycle_mutex_;
     EnvironmentStatus status_;
     std::atomic_bool running_{false};
     std::atomic<TaskHandle_t> task_{nullptr};
+    bool task_idle_ = true;
 
     Aht20Phase aht20_phase_ = Aht20Phase::kIdle;
     int64_t aht20_ready_us_ = 0;

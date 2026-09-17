@@ -20,36 +20,44 @@ void EnvironmentController::TaskEntry(void* arg) {
 }
 
 void EnvironmentController::RunTask() {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ENVIRONMENT_START_DELAY_MS));
-    if (running_.load(std::memory_order_acquire)) {
-        int64_t now_us = esp_timer_get_time();
-        InitializeAht20(now_us, false);
-        vTaskDelay(pdMS_TO_TICKS(20));
-        now_us = esp_timer_get_time();
-        InitializeBmp280(now_us, false);
-        vTaskDelay(pdMS_TO_TICKS(20));
-        now_us = esp_timer_get_time();
-        InitializeBh1750(now_us, false);
-    }
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ENVIRONMENT_START_DELAY_MS));
+        if (running_.load(std::memory_order_acquire)) {
+            int64_t now_us = esp_timer_get_time();
+            InitializeAht20(now_us, false);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            now_us = esp_timer_get_time();
+            InitializeBmp280(now_us, false);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            now_us = esp_timer_get_time();
+            InitializeBh1750(now_us, false);
+        }
 
-    while (running_.load(std::memory_order_acquire)) {
-        const int64_t now_us = esp_timer_get_time();
-        ServiceAht20(now_us);
-        ServiceBmp280(now_us);
-        ServiceBh1750(now_us);
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ENVIRONMENT_SERVICE_PERIOD_MS));
-    }
+        while (running_.load(std::memory_order_acquire)) {
+            const int64_t now_us = esp_timer_get_time();
+            ServiceAht20(now_us);
+            ServiceBmp280(now_us);
+            ServiceBh1750(now_us);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ENVIRONMENT_SERVICE_PERIOD_MS));
+        }
 
-    {
-        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
-        aht20_.Shutdown();
-        bmp280_.Shutdown();
-        bh1750_.Shutdown();
+        {
+            std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+            if (bus_mutex_ != nullptr) {
+                std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+                aht20_.Shutdown();
+                bmp280_.Shutdown();
+                bh1750_.Shutdown();
+            }
+            bus_ = nullptr;
+            bus_mutex_ = nullptr;
+            task_idle_ = true;
+        }
+
+        // The PSRAM-backed worker remains allocated for the lifetime of the
+        // controller. Start() wakes the same task for a later sensor session.
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
-    bus_ = nullptr;
-    bus_mutex_ = nullptr;
-    task_.store(nullptr, std::memory_order_release);
-    vTaskDeleteWithCaps(nullptr);
 }
 
 void EnvironmentController::InitializeAht20(int64_t now_us, bool reprobe) {

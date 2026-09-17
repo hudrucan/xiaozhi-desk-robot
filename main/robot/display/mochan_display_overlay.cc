@@ -277,7 +277,7 @@ void MochanDisplay::UpdateTyping(int64_t now_us) {
     // Normal playback reveals at most one glyph per display frame. Preserve a
     // small credit backlog so coarse audio-buffer updates catch up smoothly on
     // subsequent frames rather than appearing as a visible burst.
-    const int max_glyphs_per_frame = finishing_after_audio ? 2 : 1;
+    const int max_glyphs_per_frame = finishing_after_audio ? 6 : 3;
     typing_glyph_credit_ = std::min<int64_t>(
         typing_glyph_credit_ + progress_us * rate,
         kTypingCreditLimitGlyphs * kTypingCreditScale);

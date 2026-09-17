@@ -174,7 +174,10 @@ void AudioService::Start() {
         [](void* arg) {
             AudioService* audio_service = (AudioService*)arg;
             audio_service->OpusCodecTask();
-            vTaskDeleteWithCaps(NULL);
+            // Stop() is only used on the reboot path. Keep the PSRAM-backed task
+            // suspended until restart instead of invoking IDF's self-delete helper,
+            // which creates a temporary internal-RAM cleanup task.
+            while (true) vTaskSuspend(nullptr);
         },
         "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_, MALLOC_CAP_SPIRAM);
     if (opus_task_created != pdPASS) {
