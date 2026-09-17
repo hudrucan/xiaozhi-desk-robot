@@ -169,6 +169,39 @@ void RobotMcpTools::Register(RobotController& controller) {
                    ",\"edge_mm\":" + std::to_string(cliff.edge_mm) + "}";
         });
 #endif
+    mcp_server.AddTool(
+        "self.environment.get",
+        "Get cached ambient temperature, humidity, pressure, and illuminance. Each measurement "
+        "has independent availability and validity so partial sensor failures remain visible.",
+        PropertyList(), [&controller](const PropertyList&) -> ToolResult {
+            cJSON* result = cJSON_CreateObject();
+            if (result == nullptr) {
+                return std::unexpected("Out of memory");
+            }
+            const EnvironmentStatus environment = controller.GetStatus().environment;
+            cJSON_AddBoolToObject(result, "aht20_available", environment.aht20_available);
+            cJSON_AddBoolToObject(result, "bmp280_available", environment.bmp280_available);
+            cJSON_AddBoolToObject(result, "bh1750_available", environment.bh1750_available);
+            cJSON_AddBoolToObject(result, "temperature_valid", environment.temperature_valid);
+            cJSON_AddBoolToObject(result, "humidity_valid", environment.humidity_valid);
+            cJSON_AddBoolToObject(result, "pressure_valid", environment.pressure_valid);
+            cJSON_AddBoolToObject(result, "illuminance_valid", environment.illuminance_valid);
+            if (environment.temperature_valid) {
+                cJSON_AddNumberToObject(result, "temperature_c", environment.temperature_c);
+            }
+            if (environment.humidity_valid) {
+                cJSON_AddNumberToObject(result, "humidity_percent",
+                                        environment.humidity_percent);
+            }
+            if (environment.pressure_valid) {
+                cJSON_AddNumberToObject(result, "pressure_hpa", environment.pressure_hpa);
+            }
+            if (environment.illuminance_valid) {
+                cJSON_AddNumberToObject(result, "illuminance_lux",
+                                        environment.illuminance_lux);
+            }
+            return result;
+        });
 #ifdef INA219_I2C_ADDRESS
     mcp_server.AddTool(
         "self.battery.get_status",
