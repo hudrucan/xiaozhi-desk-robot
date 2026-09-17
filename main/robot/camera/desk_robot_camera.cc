@@ -7,24 +7,37 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 
+#include "board.h"
+#include "display.h"
+
 #define TAG "DeskRobotCamera"
 
 DeskRobotCamera::DeskRobotCamera(const camera_config_t& config) : Esp32Camera(config) {}
 
 bool DeskRobotCamera::Capture() {
-    std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
-    if (!lock.try_lock_for(std::chrono::seconds(7))) {
-        ESP_LOGE(TAG, "MCP camera capture timed out waiting for live preview");
-        return false;
-    }
-    bool expected_inactive = false;
-    if (!mcp_operation_active_.compare_exchange_strong(expected_inactive, true)) {
+    bool preview_preempted = false;
+    if (!BeginMcpOperation(preview_preempted)) {
         ESP_LOGW(TAG, "MCP camera capture rejected: another operation is active");
         return false;
     }
+    if (preview_preempted) {
+        HidePreviewImage();
+    }
+
+    std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(7))) {
+        ESP_LOGE(TAG, "MCP camera capture timed out waiting for live preview");
+        EndMcpOperation();
+        return false;
+    }
+    // A preview capture that was already inside the hardware critical section
+    // may have posted its display image after the first hide.
+    if (preview_preempted) {
+        HidePreviewImage();
+    }
     if (mcp_capture_pending_) {
         ESP_LOGW(TAG, "MCP camera capture rejected: previous snapshot is still pending");
-        mcp_operation_active_ = false;
+        EndMcpOperation();
         return false;
     }
     mcp_diagnostic_operation_id_ =
@@ -41,22 +54,92 @@ bool DeskRobotCamera::Capture() {
     if (!captured) {
         CameraDiagnostics::CompleteOperation();
         mcp_diagnostic_operation_id_ = 0;
-        mcp_operation_active_ = false;
+        EndMcpOperation();
     }
     return captured;
 }
 
-bool DeskRobotCamera::CapturePreview() {
-    std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::try_to_lock);
-    if (!lock.owns_lock() || mcp_capture_pending_) {
+bool DeskRobotCamera::StartWebLive() {
+    bool hide_mochan = false;
+    {
+        std::lock_guard<std::mutex> lock(ownership_mutex_);
+        if (mcp_operation_active_.load()) {
+            return false;
+        }
+        hide_mochan = preview_mode_.load() == PreviewMode::kMochanPreview;
+        preview_mode_.store(PreviewMode::kWebLive);
+    }
+    if (hide_mochan) {
+        HidePreviewImage();
+    }
+    return true;
+}
+
+void DeskRobotCamera::StopWebLive() {
+    std::lock_guard<std::mutex> lock(ownership_mutex_);
+    if (preview_mode_.load() == PreviewMode::kWebLive) {
+        preview_mode_.store(PreviewMode::kOff);
+    }
+}
+
+bool DeskRobotCamera::StartMochanPreview() {
+    std::lock_guard<std::mutex> lock(ownership_mutex_);
+    if (mcp_operation_active_.load()) {
         return false;
     }
-    return Esp32Camera::Capture();
+    preview_mode_.store(PreviewMode::kMochanPreview);
+    return true;
+}
+
+void DeskRobotCamera::StopMochanPreview() {
+    bool hide_preview = false;
+    {
+        std::lock_guard<std::mutex> lock(ownership_mutex_);
+        if (preview_mode_.load() == PreviewMode::kMochanPreview) {
+            preview_mode_.store(PreviewMode::kOff);
+            hide_preview = true;
+        }
+    }
+    if (hide_preview) {
+        HidePreviewImage();
+    }
+}
+
+void DeskRobotCamera::ForceOff() {
+    bool hide_preview = false;
+    {
+        std::lock_guard<std::mutex> lock(ownership_mutex_);
+        hide_preview = preview_mode_.load() == PreviewMode::kMochanPreview;
+        preview_mode_.store(PreviewMode::kOff);
+    }
+    if (hide_preview) {
+        HidePreviewImage();
+    }
+}
+
+bool DeskRobotCamera::CapturePreview() {
+    std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::try_to_lock);
+    if (!lock.owns_lock() || mcp_operation_active_.load() || !IsMochanPreviewActive()) {
+        return false;
+    }
+    const bool captured = Esp32Camera::Capture();
+    ReturnCurrentFrame();
+    if (!IsMochanPreviewActive()) {
+        HidePreviewImage();
+        return false;
+    }
+    return captured;
 }
 
 bool DeskRobotCamera::SendSnapshot(const JpegSender& sender) {
+    // A browser capture takes ownership from Mochan. The browser live loop is
+    // still snapshot-based until the MJPEG phase, so its first frame performs
+    // the same one-way preemption and preview is not auto-resumed.
+    if (IsMochanPreviewActive()) {
+        StopMochanPreview();
+    }
     std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
-    if (!lock.try_lock_for(std::chrono::seconds(7)) || mcp_capture_pending_) {
+    if (!lock.try_lock_for(std::chrono::seconds(7)) || mcp_operation_active_.load()) {
         return false;
     }
     if (!Esp32Camera::CaptureForWeb()) {
@@ -64,7 +147,9 @@ bool DeskRobotCamera::SendSnapshot(const JpegSender& sender) {
     }
     const uint8_t* data = nullptr;
     size_t length = 0;
-    return Esp32Camera::GetCurrentJpeg(data, length) && sender(data, length);
+    const bool sent = Esp32Camera::GetCurrentJpeg(data, length) && sender(data, length);
+    ReturnCurrentFrame();
+    return sent;
 }
 
 bool DeskRobotCamera::IsAvailable() const { return Esp32Camera::IsAvailable(); }
@@ -73,7 +158,7 @@ std::expected<std::string, std::string> DeskRobotCamera::Explain(const std::stri
     if (!mcp_capture_pending_.exchange(false)) {
         CameraDiagnostics::CompleteOperation();
         mcp_diagnostic_operation_id_ = 0;
-        mcp_operation_active_ = false;
+        EndMcpOperation();
         return std::unexpected("No MCP camera snapshot is pending");
     }
     ESP_LOGI(TAG, "MCP camera operation=%lu explain begin",
@@ -106,5 +191,29 @@ void DeskRobotCamera::OnMcpResponseSent() {
              static_cast<unsigned long>(mcp_diagnostic_operation_id_.load()));
     CameraDiagnostics::CompleteOperation();
     mcp_diagnostic_operation_id_ = 0;
-    mcp_operation_active_ = false;
+    EndMcpOperation();
+}
+
+bool DeskRobotCamera::BeginMcpOperation(bool& preview_preempted) {
+    std::lock_guard<std::mutex> lock(ownership_mutex_);
+    if (mcp_operation_active_.load()) {
+        preview_preempted = false;
+        return false;
+    }
+    preview_preempted = preview_mode_.load() != PreviewMode::kOff;
+    preview_mode_.store(PreviewMode::kOff);
+    mcp_operation_active_.store(true);
+    return true;
+}
+
+void DeskRobotCamera::EndMcpOperation() {
+    std::lock_guard<std::mutex> lock(ownership_mutex_);
+    mcp_operation_active_.store(false);
+}
+
+void DeskRobotCamera::HidePreviewImage() {
+    auto* display = Board::GetInstance().GetDisplay();
+    if (display != nullptr) {
+        display->SetPreviewImage(nullptr);
+    }
 }

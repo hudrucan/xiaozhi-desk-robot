@@ -14,6 +14,9 @@ public:
     virtual bool SetVFlip(bool enabled) = 0;
     virtual bool SetSwapBytes(bool enabled) { return false; }  // Optional, default no-op
     virtual std::expected<std::string, std::string> Explain(const std::string& question) = 0;
+    // Stops persistent preview consumers only. A transient MCP capture owns its
+    // own lifecycle and must not be cancelled by this hook.
+    virtual void ForceOff() {}
     virtual void OnMcpResultSerialized() {}
     virtual void OnMcpResponseSent() {}
 };

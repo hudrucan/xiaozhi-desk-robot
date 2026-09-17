@@ -66,9 +66,9 @@ public:
 
 protected:
     bool CaptureOwnedJpeg();
+    void ReturnCurrentFrame();
 
 private:
     bool CaptureInternal(bool update_preview);
-    void ReturnCurrentFrame();
     void LogHttpDiagnostics(const char* stage, int64_t request_start_us) const;
 };

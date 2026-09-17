@@ -149,7 +149,8 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
 bool Esp32Camera::Capture() { return CaptureInternal(true); }
 
 bool Esp32Camera::CaptureOwnedJpeg() {
-    if (!CaptureInternal(true)) {
+    // MCP still capture is not a display-preview mode.
+    if (!CaptureInternal(false)) {
         return false;
     }
 

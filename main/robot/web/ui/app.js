@@ -88,6 +88,9 @@ function bindRobotControls() {
       if (name === "reboot" && !confirm(
         "Reboot the robot now? Motors will stop and this page will disconnect briefly.",
       )) return;
+      if (name === "live_camera" && browserLive) {
+        stopBrowserLive("Switching to screen preview", true);
+      }
       action(name);
     };
   });

@@ -108,7 +108,6 @@ private:
     std::atomic_int microphone_gain_{1};
     std::atomic_int status_light_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
-    std::atomic_bool live_camera_enabled_{false};
     std::atomic_bool motor_activity_active_{false};
     std::atomic_int drive_duration_ms_{kDefaultDriveDurationMs};
     std::atomic_bool emotion_movement_enabled_{false};
@@ -874,7 +873,9 @@ private:
 
     void ReturnToIdle() {
         motors_.EmergencyStop();
-        live_camera_enabled_.store(false);
+        if (camera_ != nullptr) {
+            camera_->ForceOff();
+        }
         if (live_camera_task_ != nullptr) {
             xTaskNotifyGive(live_camera_task_);
         }
@@ -1157,29 +1158,18 @@ private:
     }
 
     void RunLiveCameraTask() {
-        bool preview_visible = false;
         while (true) {
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            while (live_camera_enabled_.load()) {
+            while (camera_->IsMochanPreviewActive()) {
                 if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
-                    if (camera_->CapturePreview()) {
-                        preview_visible = true;
-                    }
+                    camera_->CapturePreview();
                     vTaskDelay(pdMS_TO_TICKS(250));
                 } else {
                     // Live preview is intentionally one-shot per idle session.
                     // Starting a conversation turns the mode off; returning to
                     // idle requires an explicit toggle from the local UI.
-                    live_camera_enabled_.store(false);
-                    if (preview_visible) {
-                        display_->SetPreviewImage(nullptr);
-                        preview_visible = false;
-                    }
+                    camera_->ForceOff();
                 }
-            }
-            if (preview_visible) {
-                display_->SetPreviewImage(nullptr);
-                preview_visible = false;
             }
         }
     }
@@ -1197,10 +1187,17 @@ private:
         if (live_camera_task_ == nullptr) {
             return false;
         }
-        const bool enabled = !live_camera_enabled_.load();
-        live_camera_enabled_.store(enabled);
+        if (camera_->IsMochanPreviewActive()) {
+            camera_->StopMochanPreview();
+            xTaskNotifyGive(live_camera_task_);
+            return false;
+        }
+        if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle ||
+            !camera_->StartMochanPreview()) {
+            return false;
+        }
         xTaskNotifyGive(live_camera_task_);
-        return enabled;
+        return true;
     }
 
     bool Move(MotorController::Direction direction, int duration_ms, MovePolicy policy) override {
@@ -1369,7 +1366,7 @@ private:
         status.auto_brightness_maximum = auto_brightness.maximum_percent;
         status.status_light_brightness = status_light_brightness_.load();
         status.live_camera_available = live_camera_task_ != nullptr;
-        status.live_camera = live_camera_enabled_.load();
+        status.live_camera = camera_ != nullptr && camera_->IsMochanPreviewActive();
         status.motor_speed = motors_.GetSpeedPercent();
         status.drive_duration_ms = drive_duration_ms_.load(std::memory_order_relaxed);
         status.emotion_movement_enabled =

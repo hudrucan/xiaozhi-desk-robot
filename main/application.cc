@@ -128,6 +128,12 @@ void Application::Initialize() {
 
     // Add state change listeners
     state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
+        if (new_state != kDeviceStateIdle) {
+            auto* camera = Board::GetInstance().GetCamera();
+            if (camera != nullptr) {
+                camera->ForceOff();
+            }
+        }
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
 

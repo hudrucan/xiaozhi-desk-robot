@@ -37,7 +37,7 @@ function renderCoreStatus(status) {
   const chatActive = ["connecting", "listening", "speaking"].includes(status.state);
   lastState = status.state || "unknown";
   robotActive = !idle || motorsActive;
-  if (!idle && browserLive) stopBrowserLive("Paused until Idle", true);
+  if (!idle && browserLive) stopBrowserLive("Live preview stopped outside Idle", true);
 
   const visibleState = status.state === "listening" && !status.asr_ready
     ? status.asr_preparing ? "preparing ASR" : "processing"
@@ -200,17 +200,22 @@ function renderDisplayStatus(status) {
 function renderCameraStatus(status) {
   Object.assign(statusCache, status);
   const idle = lastState === "idle";
-  $("#camera").textContent = !status.camera_available
+  const available = !!status.camera_available;
+  const previewAvailable = available && idle;
+  $("#camera").textContent = !available
     ? "Offline"
     : status.live_camera
-      ? idle ? "Screen preview" : "Preview paused"
+      ? "Screen preview"
       : status.camera_flipped ? "Flipped" : "Normal";
   $("#liveCamera").classList.toggle("on", !!status.live_camera);
   $("#liveCamera").textContent = status.live_camera
-    ? idle ? "Stop screen preview" : "Preview paused"
+    ? "Stop screen preview"
     : "Screen preview";
+  $("#takeSnapshot").disabled = !previewAvailable;
+  $("#browserLive").disabled = !previewAvailable;
+  $("#liveCamera").disabled = !previewAvailable;
   $("#cameraFlip").classList.toggle("on", !!status.camera_flipped);
-  $("#cameraHealth").textContent = status.camera_available ? "Ready" : "Offline";
+  $("#cameraHealth").textContent = available ? "Ready" : "Offline";
 }
 
 function renderAudioStatus(status) {
