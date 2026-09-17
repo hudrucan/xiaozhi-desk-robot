@@ -113,17 +113,30 @@ list(APPEND INCLUDE_DIRS
 # point at the temporary build context instead of this component's source directory.
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set(ROBOT_WEB_UI_DIR "${CMAKE_CURRENT_LIST_DIR}/robot/web/ui")
+    set(ROBOT_WEB_JS_FILES
+        "${ROBOT_WEB_UI_DIR}/js/core.js"
+        "${ROBOT_WEB_UI_DIR}/js/oled.js"
+        "${ROBOT_WEB_UI_DIR}/js/chat_asr.js"
+        "${ROBOT_WEB_UI_DIR}/js/status.js"
+        "${ROBOT_WEB_UI_DIR}/js/camera_logs.js"
+        "${ROBOT_WEB_UI_DIR}/app.js"
+    )
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${ROBOT_WEB_UI_DIR}/index.html"
         "${ROBOT_WEB_UI_DIR}/style.css"
-        "${ROBOT_WEB_UI_DIR}/app.js"
+        ${ROBOT_WEB_JS_FILES}
     )
     file(READ "${ROBOT_WEB_UI_DIR}/index.html" ROBOT_WEB_CONTROL_PAGE)
     file(READ "${ROBOT_WEB_UI_DIR}/style.css" ROBOT_WEB_CONTROL_STYLE)
-    file(READ "${ROBOT_WEB_UI_DIR}/app.js" ROBOT_WEB_CONTROL_SCRIPT)
+    set(ROBOT_WEB_CONTROL_SCRIPT "")
+    foreach(ROBOT_WEB_JS_FILE IN LISTS ROBOT_WEB_JS_FILES)
+        file(READ "${ROBOT_WEB_JS_FILE}" ROBOT_WEB_CONTROL_FRAGMENT)
+        string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_FRAGMENT "${ROBOT_WEB_CONTROL_FRAGMENT}")
+        string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_FRAGMENT "${ROBOT_WEB_CONTROL_FRAGMENT}")
+        string(APPEND ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_FRAGMENT}\n")
+    endforeach()
     string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
     string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
-    string(REPLACE "\r\n" "\n" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
     string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
     string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
     string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
