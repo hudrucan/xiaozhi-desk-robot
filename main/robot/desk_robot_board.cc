@@ -520,7 +520,7 @@ private:
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode = CAMERA_GRAB_LATEST;
-        camera_ = new DeskRobotCamera(config);
+        camera_ = new DeskRobotCamera(config, primary_i2c_.mutex());
 
         const bool flipped = robot_settings_.GetCameraFlipped();
         camera_flipped_.store(flipped);
@@ -581,7 +581,8 @@ private:
     }
 
     void InitializeDistanceSensor() {
-        cliff_sensor_.Initialize(primary_i2c_.handle(), robot_settings_.GetCliffEdgeMm(), this,
+        cliff_sensor_.Initialize(primary_i2c_.handle(), primary_i2c_.mutex(),
+                                 robot_settings_.GetCliffEdgeMm(), this,
                                  &DeskRobotBoard::OnCliffDetected);
     }
 #endif
@@ -1200,6 +1201,28 @@ private:
         return true;
     }
 
+    bool StartWebCameraStream() override {
+        return camera_ != nullptr &&
+               Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
+               camera_->StartWebLive();
+    }
+
+    bool IsWebCameraStreamEnabled() const override {
+        return camera_ != nullptr && camera_->IsWebLiveActive();
+    }
+
+    bool SendWebCameraFrame(const SnapshotSender& sender) override {
+        return camera_ != nullptr &&
+               Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
+               camera_->SendWebLiveFrame(sender);
+    }
+
+    void StopWebCameraStream() override {
+        if (camera_ != nullptr) {
+            camera_->StopWebLive();
+        }
+    }
+
     bool Move(MotorController::Direction direction, int duration_ms, MovePolicy policy) override {
         const int safe_duration = std::clamp(duration_ms, 50, 2000);
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -1367,6 +1390,7 @@ private:
         status.status_light_brightness = status_light_brightness_.load();
         status.live_camera_available = live_camera_task_ != nullptr;
         status.live_camera = camera_ != nullptr && camera_->IsMochanPreviewActive();
+        status.web_camera_live = camera_ != nullptr && camera_->IsWebLiveActive();
         status.motor_speed = motors_.GetSpeedPercent();
         status.drive_duration_ms = drive_duration_ms_.load(std::memory_order_relaxed);
         status.emotion_movement_enabled =
@@ -1488,7 +1512,7 @@ public:
         // Start best-effort environment probing only after board construction returns to the
         // application loop. The controller adds a further delay before touching the primary bus.
         Application::GetInstance().Schedule([this]() {
-            if (!environment_controller_.Start(primary_i2c_.handle(), this,
+            if (!environment_controller_.Start(primary_i2c_.handle(), primary_i2c_.mutex(), this,
                                                &DeskRobotBoard::OnAmbientLight)) {
                 ESP_LOGW(TAG, "Failed to start environment controller");
             }

@@ -19,7 +19,8 @@ public:
     using LightCallback = void (*)(void* context, bool valid, float illuminance_lux,
                                    int64_t timestamp_us);
 
-    bool Start(i2c_master_bus_handle_t bus, void* light_context = nullptr,
+    bool Start(i2c_master_bus_handle_t bus, std::mutex& bus_mutex,
+               void* light_context = nullptr,
                LightCallback light_callback = nullptr);
     void Stop();
     EnvironmentStatus GetStatus() const;
@@ -51,6 +52,7 @@ private:
     static const char* SensorName(Sensor sensor);
 
     i2c_master_bus_handle_t bus_ = nullptr;
+    std::mutex* bus_mutex_ = nullptr;
     Aht20Sensor aht20_;
     Bmp280Sensor bmp280_;
     Bh1750Sensor bh1750_;

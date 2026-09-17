@@ -49,9 +49,10 @@ private:
     size_t encode_buf_size_ = 0;
     std::mutex mcp_snapshot_mutex_;
     OwnedJpeg mcp_snapshot_;
+    std::mutex* shared_i2c_mutex_ = nullptr;
 
 public:
-    Esp32Camera(const camera_config_t& config);
+    Esp32Camera(const camera_config_t& config, std::mutex* shared_i2c_mutex = nullptr);
     ~Esp32Camera();
 
     virtual void SetExplainUrl(const std::string& url, const std::string& token) override;

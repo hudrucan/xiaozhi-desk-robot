@@ -202,17 +202,27 @@ function renderCameraStatus(status) {
   const idle = lastState === "idle";
   const available = !!status.camera_available;
   const previewAvailable = available && idle;
+  if (browserLive && status.web_camera_live) {
+    browserLiveConfirmed = true;
+    $("#snapshotMeta").textContent = "MJPEG live";
+  } else if (browserLive && browserLiveConfirmed && !status.web_camera_live) {
+    stopBrowserLive("Live preview stopped", true);
+  }
   $("#camera").textContent = !available
     ? "Offline"
-    : status.live_camera
+    : status.web_camera_live
+      ? "Web live"
+      : status.live_camera
       ? "Screen preview"
       : status.camera_flipped ? "Flipped" : "Normal";
   $("#liveCamera").classList.toggle("on", !!status.live_camera);
   $("#liveCamera").textContent = status.live_camera
     ? "Stop screen preview"
     : "Screen preview";
-  $("#takeSnapshot").disabled = !previewAvailable;
-  $("#browserLive").disabled = !previewAvailable;
+  $("#browserLive").classList.toggle("on", !!status.web_camera_live);
+  $("#browserLive").textContent = status.web_camera_live ? "Stop live" : "Live";
+  $("#takeSnapshot").disabled = !previewAvailable || !!status.web_camera_live;
+  $("#browserLive").disabled = !previewAvailable && !browserLive;
   $("#liveCamera").disabled = !previewAvailable;
   $("#cameraFlip").classList.toggle("on", !!status.camera_flipped);
   $("#cameraHealth").textContent = available ? "Ready" : "Offline";

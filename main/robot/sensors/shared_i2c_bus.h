@@ -17,8 +17,10 @@ public:
     bool StartDeferredInitialization(void* context, DeferredInitializer initializer);
     i2c_master_bus_handle_t handle() const { return bus_; }
 
-    // Cooperative lock for project-owned multi-step operations and lifecycle work.
-    // Camera SCCB does not use this lock; ESP-IDF serializes master transactions.
+    // Cooperative lock for each device's logical transaction and lifecycle work.
+    // ESP-IDF serializes individual transfers only; callers hold this lock across
+    // multi-transfer camera/sensor operations. A device failure must be recovered
+    // through that device handle and must never reset or delete this shared bus.
     std::mutex& mutex() { return mutex_; }
 
 private:

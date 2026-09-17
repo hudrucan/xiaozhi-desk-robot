@@ -105,7 +105,7 @@ function bindRobotControls() {
 }
 
 function bindCameraAndLogControls() {
-  $("#takeSnapshot").onclick = () => captureSnapshot(false);
+  $("#takeSnapshot").onclick = captureSnapshot;
   $("#browserLive").onclick = toggleBrowserLive;
   pauseLog.onclick = toggleLogPause;
   $("#clearLog").onclick = clearLogs;

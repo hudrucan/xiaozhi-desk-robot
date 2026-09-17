@@ -87,7 +87,12 @@ static constexpr bool kConfiguredVFlip = false;
 #endif
 #endif
 
-Esp32Camera::Esp32Camera(const camera_config_t& config) {
+Esp32Camera::Esp32Camera(const camera_config_t& config, std::mutex* shared_i2c_mutex)
+    : shared_i2c_mutex_(shared_i2c_mutex) {
+    std::unique_lock<std::mutex> i2c_lock;
+    if (shared_i2c_mutex_ != nullptr) {
+        i2c_lock = std::unique_lock<std::mutex>(*shared_i2c_mutex_);
+    }
     constexpr std::array<int, 3> kProbeRetryDelayMs = {0, 100, 250};
     esp_err_t err = ESP_FAIL;
     for (size_t attempt = 0; attempt < kProbeRetryDelayMs.size(); ++attempt) {
@@ -135,6 +140,10 @@ Esp32Camera::~Esp32Camera() {
             heap_caps_free(encode_buf_);
             encode_buf_ = nullptr;
             encode_buf_size_ = 0;
+        }
+        std::unique_lock<std::mutex> i2c_lock;
+        if (shared_i2c_mutex_ != nullptr) {
+            i2c_lock = std::unique_lock<std::mutex>(*shared_i2c_mutex_);
         }
         esp_camera_deinit();
         streaming_on_ = false;
@@ -291,6 +300,10 @@ void Esp32Camera::ReturnCurrentFrame() {
 }
 
 bool Esp32Camera::SetHMirror(bool enabled) {
+    std::unique_lock<std::mutex> i2c_lock;
+    if (shared_i2c_mutex_ != nullptr) {
+        i2c_lock = std::unique_lock<std::mutex>(*shared_i2c_mutex_);
+    }
     sensor_t* s = esp_camera_sensor_get();
     if (!s) {
         return false;
@@ -300,6 +313,10 @@ bool Esp32Camera::SetHMirror(bool enabled) {
 }
 
 bool Esp32Camera::SetVFlip(bool enabled) {
+    std::unique_lock<std::mutex> i2c_lock;
+    if (shared_i2c_mutex_ != nullptr) {
+        i2c_lock = std::unique_lock<std::mutex>(*shared_i2c_mutex_);
+    }
     sensor_t* s = esp_camera_sensor_get();
     if (!s) {
         return false;

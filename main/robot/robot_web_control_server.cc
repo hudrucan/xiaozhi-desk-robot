@@ -6,7 +6,10 @@
 
 #include <esp_log.h>
 #include <esp_log_write.h>
+#include <esp_heap_caps.h>
 #include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <algorithm>
 #include <array>
@@ -16,6 +19,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <memory>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -31,6 +36,11 @@ constexpr size_t kChatRequestMaxBytes = 4 * 1024;
 constexpr size_t kAsrConfigRequestMaxBytes = 2 * 1024;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
+constexpr uint32_t kCameraStreamTaskStackSize = 8192;
+constexpr TickType_t kCameraStreamFrameDelay = pdMS_TO_TICKS(80);
+constexpr char kCameraStreamContentType[] =
+    "multipart/x-mixed-replace;boundary=xiaozhi-camera-frame";
+constexpr char kCameraStreamBoundary[] = "--xiaozhi-camera-frame\r\n";
 
 std::array<char, kLogBufferSize> log_buffer = {};
 std::mutex log_mutex;
@@ -251,6 +261,11 @@ std::string EncodeJson(cJSON* root, const char* fallback) {
 
 }  // namespace
 
+struct RobotWebControlServer::CameraStreamContext {
+    RobotWebControlServer* server;
+    httpd_req_t* request;
+};
+
 RobotWebControlServer::RobotWebControlServer(RobotController& controller,
                                              ChatProbeHandler chat_probe_handler)
     : controller_(controller),
@@ -282,6 +297,7 @@ bool RobotWebControlServer::Start(int port) {
     config.backlog_conn = 2;
     config.max_uri_handlers = 24;
     config.stack_size = 6144;
+    config.send_wait_timeout = 2;
 
     if (httpd_start(&server_, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start local control server on port %d", port);
@@ -311,6 +327,18 @@ bool RobotWebControlServer::Start(int port) {
         .uri = "/api/camera/snapshot",
         .method = HTTP_GET,
         .handler = HandleSnapshot,
+        .user_ctx = this,
+    };
+    const httpd_uri_t camera_stream = {
+        .uri = "/api/camera/stream",
+        .method = HTTP_GET,
+        .handler = HandleCameraStream,
+        .user_ctx = this,
+    };
+    const httpd_uri_t camera_mode = {
+        .uri = "/api/camera/mode",
+        .method = HTTP_POST,
+        .handler = HandleCameraMode,
         .user_ctx = this,
     };
     const httpd_uri_t chat_probe = {
@@ -355,6 +383,8 @@ bool RobotWebControlServer::Start(int port) {
         httpd_register_uri_handler(server_, &action) != ESP_OK ||
         httpd_register_uri_handler(server_, &logs) != ESP_OK ||
         httpd_register_uri_handler(server_, &snapshot) != ESP_OK ||
+        httpd_register_uri_handler(server_, &camera_mode) != ESP_OK ||
+        httpd_register_uri_handler(server_, &camera_stream) != ESP_OK ||
         httpd_register_uri_handler(server_, &get_conversation) != ESP_OK ||
         httpd_register_uri_handler(server_, &chat_probe) != ESP_OK ||
         httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK ||
@@ -371,6 +401,7 @@ bool RobotWebControlServer::Start(int port) {
 
 void RobotWebControlServer::Stop() {
     if (server_ != nullptr) {
+        controller_.StopWebCameraStream();
         httpd_stop(server_);
         server_ = nullptr;
     }
@@ -771,6 +802,166 @@ esp_err_t RobotWebControlServer::HandleSnapshot(httpd_req_t* request) {
     }
     return SendJson(request, "503 Service Unavailable",
                     R"({"ok":false,"message":"Camera capture failed or robot is busy"})");
+}
+
+esp_err_t RobotWebControlServer::HandleCameraMode(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (request->content_len <= 0 || request->content_len > 64) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid camera mode request"})");
+    }
+
+    std::array<char, 65> body = {};
+    size_t received = 0;
+    while (received < static_cast<size_t>(request->content_len)) {
+        const int result =
+            httpd_req_recv(request, body.data() + received, request->content_len - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(result);
+    }
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), received);
+    const cJSON* mode =
+        root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "mode") : nullptr;
+    if (!cJSON_IsString(mode) || mode->valuestring == nullptr) {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Missing camera mode"})");
+    }
+
+    const std::string requested_mode = mode->valuestring;
+    cJSON_Delete(root);
+    if (requested_mode == "web") {
+        if (!self->controller_.StartWebCameraStream()) {
+            return SendJson(request, "409 Conflict",
+                            R"({"ok":false,"message":"Web Live requires Idle and an available camera"})");
+        }
+        return SendJson(request, "200 OK", R"({"ok":true,"mode":"web"})");
+    }
+    if (requested_mode == "off") {
+        self->controller_.StopWebCameraStream();
+        constexpr int kStopWaitSteps = 150;
+        for (int step = 0;
+             step < kStopWaitSteps && self->camera_stream_task_active_.load(); ++step) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        if (self->camera_stream_task_active_.load()) {
+            return SendJson(request, "503 Service Unavailable",
+                            R"({"ok":false,"message":"Camera stream is still stopping"})");
+        }
+        return SendJson(request, "200 OK", R"({"ok":true,"mode":"off"})");
+    }
+    return SendJson(request, "400 Bad Request",
+                    R"({"ok":false,"message":"Mode must be web or off"})");
+}
+
+esp_err_t RobotWebControlServer::HandleCameraStream(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (!self->controller_.IsWebCameraStreamEnabled()) {
+        return SendJson(request, "503 Service Unavailable",
+                        R"({"ok":false,"message":"Web Live is off"})");
+    }
+
+    bool expected_inactive = false;
+    if (!self->camera_stream_task_active_.compare_exchange_strong(expected_inactive, true)) {
+        return SendJson(request, "409 Conflict",
+                        R"({"ok":false,"message":"A camera stream client is already active"})");
+    }
+
+    auto context = std::unique_ptr<CameraStreamContext>(
+        new (std::nothrow) CameraStreamContext{self, nullptr});
+    if (context == nullptr) {
+        self->camera_stream_task_active_.store(false);
+        return SendJson(request, "503 Service Unavailable",
+                        R"({"ok":false,"message":"Unable to allocate camera stream"})");
+    }
+
+    esp_err_t result = httpd_req_async_handler_begin(request, &context->request);
+    if (result != ESP_OK) {
+        self->camera_stream_task_active_.store(false);
+        return SendJson(request, "503 Service Unavailable",
+                        R"({"ok":false,"message":"Unable to start camera stream"})");
+    }
+
+    CameraStreamContext* task_context = context.release();
+    const BaseType_t created =
+        xTaskCreateWithCaps(CameraStreamTask, "camera_mjpeg", kCameraStreamTaskStackSize,
+                            task_context, 1, nullptr, MALLOC_CAP_SPIRAM);
+    if (created != pdPASS) {
+        httpd_req_async_handler_complete(task_context->request);
+        delete task_context;
+        self->camera_stream_task_active_.store(false);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+void RobotWebControlServer::CameraStreamTask(void* context) {
+    std::unique_ptr<CameraStreamContext> stream(
+        static_cast<CameraStreamContext*>(context));
+    ESP_LOGI(TAG, "Web MJPEG stream started");
+    const esp_err_t result = stream->server->RunCameraStream(stream->request);
+    stream->server->camera_stream_task_active_.store(false);
+    const esp_err_t completed = httpd_req_async_handler_complete(stream->request);
+    ESP_LOGI(TAG, "Web MJPEG stream stopped result=%s complete=%s",
+             esp_err_to_name(result), esp_err_to_name(completed));
+    stream.reset();
+    vTaskDeleteWithCaps(nullptr);
+}
+
+esp_err_t RobotWebControlServer::RunCameraStream(httpd_req_t* request) {
+    esp_err_t result = httpd_resp_set_type(request, kCameraStreamContentType);
+    if (result != ESP_OK) {
+        return result;
+    }
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store, no-cache, must-revalidate");
+    httpd_resp_set_hdr(request, "Access-Control-Allow-Origin", "*");
+
+    size_t frame_count = 0;
+    while (result == ESP_OK) {
+        const bool sent = controller_.SendWebCameraFrame(
+            [&](const uint8_t* data, size_t length) {
+                char part_header[96];
+                const int header_length = std::snprintf(
+                    part_header, sizeof(part_header),
+                    "Content-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n", length);
+                if (header_length <= 0 ||
+                    static_cast<size_t>(header_length) >= sizeof(part_header)) {
+                    result = ESP_ERR_INVALID_SIZE;
+                    return false;
+                }
+                result = httpd_resp_send_chunk(request, kCameraStreamBoundary,
+                                               sizeof(kCameraStreamBoundary) - 1);
+                if (result == ESP_OK) {
+                    result = httpd_resp_send_chunk(request, part_header,
+                                                   static_cast<size_t>(header_length));
+                }
+                if (result == ESP_OK) {
+                    result = httpd_resp_send_chunk(
+                        request, reinterpret_cast<const char*>(data), length);
+                }
+                if (result == ESP_OK) {
+                    result = httpd_resp_send_chunk(request, "\r\n", 2);
+                }
+                return result == ESP_OK;
+            });
+        if (!sent) {
+            break;
+        }
+        ++frame_count;
+        vTaskDelay(kCameraStreamFrameDelay);
+    }
+
+    if (result == ESP_OK) {
+        httpd_resp_send_chunk(request, nullptr, 0);
+    }
+    ESP_LOGI(TAG, "Web MJPEG frames=%zu", frame_count);
+    return result;
 }
 
 esp_err_t RobotWebControlServer::SendJson(httpd_req_t* request, const char* status,

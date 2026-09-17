@@ -31,6 +31,7 @@ struct RobotStatus {
     int status_light_brightness = 0;
     bool live_camera_available = false;
     bool live_camera = false;
+    bool web_camera_live = false;
 
     int motor_speed = 0;
     int drive_duration_ms = 0;

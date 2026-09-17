@@ -19,7 +19,7 @@ public:
         kMochanPreview,
     };
 
-    explicit DeskRobotCamera(const camera_config_t& config);
+    DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex);
 
     bool Capture() override;
     bool StartWebLive();
@@ -28,10 +28,14 @@ public:
     void StopMochanPreview();
     void ForceOff() override;
     PreviewMode preview_mode() const { return preview_mode_.load(); }
+    bool IsWebLiveActive() const {
+        return preview_mode_.load() == PreviewMode::kWebLive;
+    }
     bool IsMochanPreviewActive() const {
         return preview_mode_.load() == PreviewMode::kMochanPreview;
     }
     bool CapturePreview();
+    bool SendWebLiveFrame(const JpegSender& sender);
     bool SendSnapshot(const JpegSender& sender);
     bool IsAvailable() const;
     std::expected<std::string, std::string> Explain(const std::string& question) override;

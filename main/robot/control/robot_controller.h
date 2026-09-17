@@ -26,6 +26,10 @@ public:
     virtual bool ToggleDisplayFlip() = 0;
     virtual bool ToggleStatusLight() = 0;
     virtual bool ToggleLiveCamera() = 0;
+    virtual bool StartWebCameraStream() = 0;
+    virtual bool IsWebCameraStreamEnabled() const = 0;
+    virtual bool SendWebCameraFrame(const SnapshotSender& sender) = 0;
+    virtual void StopWebCameraStream() = 0;
     virtual bool SendSnapshot(const SnapshotSender& sender) = 0;
 
     virtual SecondaryOled::Config GetSecondaryDisplayConfig() const = 0;

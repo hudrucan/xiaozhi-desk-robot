@@ -14,11 +14,13 @@ extern "C" {
 
 #define TAG "CliffSensor"
 
-bool CliffSensor::Initialize(i2c_master_bus_handle_t bus, int edge_mm, void* callback_context,
-                             CliffCallback callback) {
+bool CliffSensor::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, int edge_mm,
+                             void* callback_context, CliffCallback callback) {
     SetEdgeMm(edge_mm);
     callback_context_ = callback_context;
     cliff_callback_ = callback;
+    bus_mutex_ = &bus_mutex;
+    std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
     if (i2c_master_probe(bus, DISTANCE_SENSOR_I2C_ADDRESS, 100) != ESP_OK) {
         ESP_LOGW(TAG, "VL53L0X not detected at 0x%02x", DISTANCE_SENSOR_I2C_ADDRESS);
         return false;
@@ -26,22 +28,8 @@ bool CliffSensor::Initialize(i2c_master_bus_handle_t bus, int edge_mm, void* cal
     vl53l0x_handle_t sensor = sensor_;
     esp_err_t error = vl53l0x_create(&sensor, bus);
     sensor_ = sensor;
-    if (error == ESP_OK) {
-        error = vl53l0x_init(sensor);
-    }
-    if (error == ESP_OK) {
-        vl53l0x_ref_spad_calibration_t spad_calibration = {};
-        error = vl53l0x_perform_ref_spad_management(sensor, &spad_calibration);
-        if (error == ESP_OK) {
-            error = vl53l0x_set_reference_spads(sensor, &spad_calibration);
-        }
-    }
-    if (error == ESP_OK) {
-        vl53l0x_ref_calibration_t reference_calibration = {};
-        error = vl53l0x_perform_ref_calibration(sensor, &reference_calibration);
-    }
-    if (error == ESP_OK) {
-        error = vl53l0x_set_profile(sensor, VL53L0X_PROFILE_DEFAULT);
+    if (error == ESP_OK && !ConfigureSensor(sensor)) {
+        error = ESP_FAIL;
     }
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "VL53L0X initialization failed: %s", esp_err_to_name(error));
@@ -61,16 +49,67 @@ bool CliffSensor::Initialize(i2c_master_bus_handle_t bus, int edge_mm, void* cal
     return true;
 }
 
+bool CliffSensor::ConfigureSensor(vl53l0x* sensor) {
+    esp_err_t error = vl53l0x_init(sensor);
+    if (error == ESP_OK) {
+        vl53l0x_ref_spad_calibration_t spad_calibration = {};
+        error = vl53l0x_perform_ref_spad_management(sensor, &spad_calibration);
+        if (error == ESP_OK) {
+            error = vl53l0x_set_reference_spads(sensor, &spad_calibration);
+        }
+    }
+    if (error == ESP_OK) {
+        vl53l0x_ref_calibration_t reference_calibration = {};
+        error = vl53l0x_perform_ref_calibration(sensor, &reference_calibration);
+    }
+    if (error == ESP_OK) {
+        error = vl53l0x_set_profile(sensor, VL53L0X_PROFILE_DEFAULT);
+    }
+    return error == ESP_OK;
+}
+
+bool CliffSensor::RecoverSensor(vl53l0x* sensor) {
+    ESP_LOGW(TAG, "Recovering VL53L0X device without resetting shared I2C bus");
+    if (vl53l0x_reset(sensor) != ESP_OK || !ConfigureSensor(sensor)) {
+        ESP_LOGE(TAG, "VL53L0X device recovery failed");
+        return false;
+    }
+    ESP_LOGI(TAG, "VL53L0X device recovered");
+    return true;
+}
+
 void CliffSensor::TaskEntry(void* arg) { static_cast<CliffSensor*>(arg)->RunTask(); }
 
 void CliffSensor::RunTask() {
     vl53l0x_handle_t sensor = sensor_;
     TickType_t last_wake_time = xTaskGetTickCount();
     uint8_t unsafe_samples = 0;
+    uint8_t consecutive_failures = 0;
     while (true) {
         vl53l0x_data_t reading = {};
-        const esp_err_t error = vl53l0x_single_measure(sensor, &reading);
+        esp_err_t error = ESP_FAIL;
+        {
+            std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+            error = vl53l0x_single_measure(sensor, &reading);
+            if (error != ESP_OK) {
+                // The component's single-shot helper leaves its internal
+                // `measuring` flag set when PAL/I2C exits early. Clear the
+                // device interrupt/state first; escalate to a VL53-only soft
+                // reset after repeated failures. Never reset the shared bus.
+                ++consecutive_failures;
+                const esp_err_t clear_error = vl53l0x_clear_interrupt_mask(sensor);
+                if (clear_error == ESP_OK) {
+                    ESP_LOGW(TAG, "VL53L0X measurement state cleared");
+                }
+                if (consecutive_failures >= 3) {
+                    RecoverSensor(sensor);
+                    consecutive_failures = 0;
+                    last_wake_time = xTaskGetTickCount();
+                }
+            }
+        }
         if (error == ESP_OK) {
+            consecutive_failures = 0;
             distance_mm_.store(reading.distance_mm);
             distance_valid_.store(reading.valid && reading.distance_mm > 0);
         } else {

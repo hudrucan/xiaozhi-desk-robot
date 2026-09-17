@@ -40,17 +40,25 @@ void EnvironmentController::RunTask() {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ENVIRONMENT_SERVICE_PERIOD_MS));
     }
 
-    aht20_.Shutdown();
-    bmp280_.Shutdown();
-    bh1750_.Shutdown();
+    {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        aht20_.Shutdown();
+        bmp280_.Shutdown();
+        bh1750_.Shutdown();
+    }
     bus_ = nullptr;
+    bus_mutex_ = nullptr;
     task_.store(nullptr, std::memory_order_release);
     vTaskDelete(nullptr);
 }
 
 void EnvironmentController::InitializeAht20(int64_t now_us, bool reprobe) {
     SetInitializing(Sensor::kAht20);
-    const bool ready = aht20_.Initialize(bus_);
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        ready = aht20_.Initialize(bus_);
+    }
     SetInitializationResult(Sensor::kAht20, ready, now_us, reprobe);
     aht20_phase_ = Aht20Phase::kIdle;
     next_aht20_sample_us_ = ready ? now_us : 0;
@@ -58,14 +66,22 @@ void EnvironmentController::InitializeAht20(int64_t now_us, bool reprobe) {
 
 void EnvironmentController::InitializeBmp280(int64_t now_us, bool reprobe) {
     SetInitializing(Sensor::kBmp280);
-    const bool ready = bmp280_.Initialize(bus_);
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        ready = bmp280_.Initialize(bus_);
+    }
     SetInitializationResult(Sensor::kBmp280, ready, now_us, reprobe);
     next_bmp280_sample_us_ = ready ? now_us + MillisecondsToMicroseconds(50) : 0;
 }
 
 void EnvironmentController::InitializeBh1750(int64_t now_us, bool reprobe) {
     SetInitializing(Sensor::kBh1750);
-    const bool ready = bh1750_.Initialize(bus_);
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        ready = bh1750_.Initialize(bus_);
+    }
     SetInitializationResult(Sensor::kBh1750, ready, now_us, reprobe);
     next_bh1750_sample_us_ =
         ready ? now_us + MillisecondsToMicroseconds(BH1750_INITIAL_CONVERSION_TIME_MS) : 0;
@@ -84,9 +100,15 @@ void EnvironmentController::ServiceAht20(int64_t now_us) {
             return;
         }
         Aht20Sensor::Reading reading;
-        if (aht20_.ReadMeasurement(reading)) {
+        bool success = false;
+        {
+            std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+            success = aht20_.ReadMeasurement(reading);
+        }
+        if (success) {
             PublishAht20(reading, now_us);
         } else if (RecordFailure(Sensor::kAht20, now_us)) {
+            std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
             aht20_.Shutdown();
         }
         aht20_phase_ = Aht20Phase::kIdle;
@@ -94,11 +116,17 @@ void EnvironmentController::ServiceAht20(int64_t now_us) {
         return;
     }
     if (now_us >= next_aht20_sample_us_) {
-        if (aht20_.TriggerMeasurement()) {
+        bool triggered = false;
+        {
+            std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+            triggered = aht20_.TriggerMeasurement();
+        }
+        if (triggered) {
             aht20_phase_ = Aht20Phase::kWaitingForMeasurement;
             aht20_ready_us_ = now_us + MillisecondsToMicroseconds(AHT20_CONVERSION_TIME_MS);
         } else {
             if (RecordFailure(Sensor::kAht20, now_us)) {
+                std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
                 aht20_.Shutdown();
             }
             next_aht20_sample_us_ = now_us + MillisecondsToMicroseconds(AHT20_SAMPLE_PERIOD_MS);
@@ -118,9 +146,15 @@ void EnvironmentController::ServiceBmp280(int64_t now_us) {
         return;
     }
     Bmp280Sensor::Reading reading;
-    if (bmp280_.Read(reading)) {
+    bool success = false;
+    {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        success = bmp280_.Read(reading);
+    }
+    if (success) {
         PublishBmp280(reading, now_us);
     } else if (RecordFailure(Sensor::kBmp280, now_us)) {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
         bmp280_.Shutdown();
     }
     next_bmp280_sample_us_ = now_us + MillisecondsToMicroseconds(BMP280_SAMPLE_PERIOD_MS);
@@ -138,13 +172,19 @@ void EnvironmentController::ServiceBh1750(int64_t now_us) {
         return;
     }
     float lux = 0.0f;
-    if (bh1750_.ReadLux(lux)) {
+    bool success = false;
+    {
+        std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+        success = bh1750_.ReadLux(lux);
+    }
+    if (success) {
         PublishBh1750(lux, now_us);
     } else {
         if (light_callback_ != nullptr) {
             light_callback_(light_context_, false, 0.0f, now_us);
         }
         if (RecordFailure(Sensor::kBh1750, now_us)) {
+            std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
             bh1750_.Shutdown();
         }
     }

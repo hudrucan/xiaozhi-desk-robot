@@ -5,6 +5,7 @@
 
 #include <esp_http_server.h>
 
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -36,11 +37,16 @@ private:
     static esp_err_t HandleLogs(httpd_req_t* request);
     static esp_err_t HandleAction(httpd_req_t* request);
     static esp_err_t HandleSnapshot(httpd_req_t* request);
+    static esp_err_t HandleCameraMode(httpd_req_t* request);
+    static esp_err_t HandleCameraStream(httpd_req_t* request);
     static esp_err_t HandleChatProbe(httpd_req_t* request);
     static esp_err_t HandleClearConversation(httpd_req_t* request);
     static esp_err_t HandleSaveAsrConfig(httpd_req_t* request);
     static esp_err_t HandleClearGeminiApiKey(httpd_req_t* request);
     static esp_err_t SendJson(httpd_req_t* request, const char* status, const std::string& body);
+    struct CameraStreamContext;
+    static void CameraStreamTask(void* context);
+    esp_err_t RunCameraStream(httpd_req_t* request);
     std::string BuildDomainStatus(const char* uri);
     std::string BuildConversationStatus();
     std::string BuildAsrStatus();
@@ -50,6 +56,7 @@ private:
     RobotWebAdapter robot_adapter_;
     RobotWebStatus robot_status_;
     ChatProbeHandler chat_probe_handler_;
+    std::atomic_bool camera_stream_task_active_{false};
 
     struct ConversationMessage {
         uint32_t id;

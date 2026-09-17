@@ -1,22 +1,23 @@
 function clearSnapshot() {
+  const image = $("#snapshotImage");
+  image.onload = null;
+  image.onerror = null;
   if (snapshotUrl) {
     URL.revokeObjectURL(snapshotUrl);
     snapshotUrl = "";
   }
-  $("#snapshotImage").removeAttribute("src");
+  image.removeAttribute("src");
   $("#snapshot").classList.remove("has-image");
 }
 
-async function captureSnapshot(silent = false) {
+async function captureSnapshot() {
   if (snapshotPending) return;
   snapshotPending = true;
   const button = $("#takeSnapshot");
   const metadata = $("#snapshotMeta");
   button.disabled = true;
-  if (!silent) {
-    button.textContent = "Capturing…";
-    metadata.textContent = "Waiting for camera";
-  }
+  button.textContent = "Capturing…";
+  metadata.textContent = "Waiting for camera";
   try {
     const response = await fetch("/api/camera/snapshot?ts=" + Date.now(), { cache: "no-store" });
     if (!response.ok) {
@@ -27,7 +28,6 @@ async function captureSnapshot(silent = false) {
       throw Error(message);
     }
     const blob = await response.blob();
-    if (silent && !browserLive) return;
     if (snapshotUrl) URL.revokeObjectURL(snapshotUrl);
     snapshotUrl = URL.createObjectURL(blob);
     const image = $("#snapshotImage");
@@ -39,38 +39,67 @@ async function captureSnapshot(silent = false) {
     $("#snapshot").classList.add("has-image");
   } catch (error) {
     metadata.textContent = error.message;
-    if (!silent) notify(error.message);
-    stopBrowserLive(error.message, true);
+    notify(error.message);
   } finally {
     snapshotPending = false;
     button.disabled = false;
     button.textContent = "Take photo";
-    if (browserLive) liveTimer = setTimeout(() => captureSnapshot(true), 850);
   }
 }
 
 function stopBrowserLive(message, clear = false) {
   browserLive = false;
-  clearTimeout(liveTimer);
+  browserLiveConfirmed = false;
   $("#browserLive").classList.remove("on");
   $("#browserLive").textContent = "Live";
   if (clear) clearSnapshot();
   if (message) $("#snapshotMeta").textContent = message;
 }
 
-function toggleBrowserLive() {
-  if (browserLive) {
+async function setWebCameraMode(mode) {
+  try {
+    const response = await fetch("/api/camera/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw Error(result.message || "Camera mode failed");
+    statusCache.web_camera_live = mode === "web";
+    queueDomains(["camera"], 120);
+    return true;
+  } catch (error) {
+    notify(error.message || "Camera mode failed");
+    return false;
+  }
+}
+
+async function toggleBrowserLive() {
+  if (browserLive || statusCache.web_camera_live) {
     stopBrowserLive("Live preview stopped", true);
+    await setWebCameraMode("off");
     return;
   }
   if (lastState !== "idle") {
     notify("Browser live view is available only while Idle");
     return;
   }
+  if (!await setWebCameraMode("web")) return;
   browserLive = true;
+  browserLiveConfirmed = false;
   $("#browserLive").classList.add("on");
   $("#browserLive").textContent = "Stop live";
-  captureSnapshot(true);
+  clearSnapshot();
+  const image = $("#snapshotImage");
+  image.onerror = () => {
+    if (browserLive) {
+      stopBrowserLive("Live preview disconnected", true);
+      setWebCameraMode("off");
+    }
+  };
+  image.src = "/api/camera/stream?ts=" + Date.now();
+  $("#snapshot").classList.add("has-image");
+  $("#snapshotMeta").textContent = "Connecting to MJPEG stream";
 }
 
 const logOutput = $("#logOutput");

@@ -13,7 +13,8 @@
 
 #define TAG "DeskRobotCamera"
 
-DeskRobotCamera::DeskRobotCamera(const camera_config_t& config) : Esp32Camera(config) {}
+DeskRobotCamera::DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex)
+    : Esp32Camera(config, &shared_i2c_mutex) {}
 
 bool DeskRobotCamera::Capture() {
     bool preview_preempted = false;
@@ -66,6 +67,9 @@ bool DeskRobotCamera::StartWebLive() {
         std::lock_guard<std::mutex> lock(ownership_mutex_);
         if (mcp_operation_active_.load()) {
             return false;
+        }
+        if (preview_mode_.load() == PreviewMode::kWebLive) {
+            return true;
         }
         hide_mochan = preview_mode_.load() == PreviewMode::kMochanPreview;
         preview_mode_.store(PreviewMode::kWebLive);
@@ -132,12 +136,31 @@ bool DeskRobotCamera::CapturePreview() {
     return captured;
 }
 
+bool DeskRobotCamera::SendWebLiveFrame(const JpegSender& sender) {
+    std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(7)) || mcp_operation_active_.load() ||
+        !IsWebLiveActive()) {
+        return false;
+    }
+    if (!Esp32Camera::CaptureForWeb()) {
+        return false;
+    }
+    const uint8_t* data = nullptr;
+    size_t length = 0;
+    const bool sent = IsWebLiveActive() &&
+                      Esp32Camera::GetCurrentJpeg(data, length) && sender(data, length);
+    ReturnCurrentFrame();
+    return sent;
+}
+
 bool DeskRobotCamera::SendSnapshot(const JpegSender& sender) {
-    // A browser capture takes ownership from Mochan. The browser live loop is
-    // still snapshot-based until the MJPEG phase, so its first frame performs
-    // the same one-way preemption and preview is not auto-resumed.
+    // A manual browser snapshot takes ownership from Mochan. It remains a
+    // one-shot operation and does not enter or resume a persistent preview mode.
     if (IsMochanPreviewActive()) {
         StopMochanPreview();
+    }
+    if (IsWebLiveActive()) {
+        return false;
     }
     std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
     if (!lock.try_lock_for(std::chrono::seconds(7)) || mcp_operation_active_.load()) {

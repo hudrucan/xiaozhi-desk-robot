@@ -4,8 +4,8 @@
 
 #define TAG "Environment"
 
-bool EnvironmentController::Start(i2c_master_bus_handle_t bus, void* light_context,
-                                  LightCallback light_callback) {
+bool EnvironmentController::Start(i2c_master_bus_handle_t bus, std::mutex& bus_mutex,
+                                  void* light_context, LightCallback light_callback) {
     if (running_.load(std::memory_order_acquire)) {
         return true;
     }
@@ -14,6 +14,7 @@ bool EnvironmentController::Start(i2c_master_bus_handle_t bus, void* light_conte
     }
 
     bus_ = bus;
+    bus_mutex_ = &bus_mutex;
     light_context_ = light_context;
     light_callback_ = light_callback;
     running_.store(true, std::memory_order_release);
@@ -21,6 +22,7 @@ bool EnvironmentController::Start(i2c_master_bus_handle_t bus, void* light_conte
     if (xTaskCreate(TaskEntry, "environment", 6144, this, 1, &task) != pdPASS) {
         running_.store(false, std::memory_order_release);
         bus_ = nullptr;
+        bus_mutex_ = nullptr;
         ESP_LOGE(TAG, "Failed to create environment task");
         return false;
     }
