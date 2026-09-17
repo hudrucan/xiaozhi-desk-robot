@@ -22,12 +22,14 @@ const domainConfig = {
 };
 
 function domainInterval(name) {
-  if (["core", "motors", "sensors"].includes(name)) return robotActive ? 300 : 900;
+  if (name === "core") return robotActive ? 400 : 1000;
+  if (name === "motors") return motorsActive ? 250 : 1000;
+  if (name === "sensors") return motorsActive ? 300 : 1000;
   if (["battery", "camera", "audio"].includes(name)) return 1000;
   if (name === "environment") return 1500;
-  if (name === "system") return 4000;
+  if (name === "system") return 5000;
   if (name === "chat") return ["Sending", "Waiting", "Speaking"].includes(chatBackendState)
-    ? 400 : 1200;
+    ? 500 : 1500;
   return null;
 }
 

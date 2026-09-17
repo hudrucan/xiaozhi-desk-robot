@@ -42,7 +42,7 @@ constexpr char kCameraStreamContentType[] =
     "multipart/x-mixed-replace;boundary=xiaozhi-camera-frame";
 constexpr char kCameraStreamBoundary[] = "--xiaozhi-camera-frame\r\n";
 
-std::array<char, kLogBufferSize> log_buffer = {};
+char* log_buffer = nullptr;
 std::mutex log_mutex;
 size_t log_buffer_start = 0;
 size_t log_buffer_size = 0;
@@ -57,9 +57,12 @@ void AppendLog(const char* data, size_t length) {
     }
 
     std::lock_guard<std::mutex> lock(log_mutex);
+    if (log_buffer == nullptr) {
+        return;
+    }
     log_stream_end += length;
     if (length >= kLogBufferSize) {
-        std::memcpy(log_buffer.data(), data + length - kLogBufferSize, kLogBufferSize);
+        std::memcpy(log_buffer, data + length - kLogBufferSize, kLogBufferSize);
         log_buffer_start = 0;
         log_buffer_size = kLogBufferSize;
         log_stream_start = log_stream_end - kLogBufferSize;
@@ -76,9 +79,9 @@ void AppendLog(const char* data, size_t length) {
 
     const size_t write_at = (log_buffer_start + log_buffer_size) % kLogBufferSize;
     const size_t first_length = std::min(length, kLogBufferSize - write_at);
-    std::memcpy(log_buffer.data() + write_at, data, first_length);
+    std::memcpy(log_buffer + write_at, data, first_length);
     if (first_length < length) {
-        std::memcpy(log_buffer.data(), data + first_length, length - first_length);
+        std::memcpy(log_buffer, data + first_length, length - first_length);
     }
     log_buffer_size += length;
 }
@@ -110,9 +113,18 @@ int CaptureLogVprintf(const char* format, va_list args) {
 }
 
 void InstallLogCapture() {
-    if (!log_capture_installed.exchange(true)) {
-        previous_log_vprintf.store(esp_log_set_vprintf(CaptureLogVprintf));
+    std::lock_guard<std::mutex> lock(log_mutex);
+    if (log_capture_installed.load()) {
+        return;
     }
+    log_buffer = static_cast<char*>(
+        heap_caps_calloc(kLogBufferSize, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (log_buffer == nullptr) {
+        ESP_LOGE(TAG, "Web log capture disabled: PSRAM allocation failed");
+        return;
+    }
+    previous_log_vprintf.store(esp_log_set_vprintf(CaptureLogVprintf));
+    log_capture_installed.store(true);
 }
 
 bool DecodeUtf8Codepoint(const std::string& text, size_t& offset, uint32_t& codepoint) {
@@ -212,6 +224,11 @@ void AppendUtf8Bounded(std::string& destination, const std::string& text, size_t
 
 std::string ReadLogs(uint64_t requested_cursor, uint64_t& next_cursor, bool& reset) {
     std::lock_guard<std::mutex> lock(log_mutex);
+    if (log_buffer == nullptr) {
+        next_cursor = 0;
+        reset = false;
+        return "[web log capture unavailable]\n";
+    }
     reset = requested_cursor < log_stream_start || requested_cursor > log_stream_end;
     const uint64_t cursor = reset ? log_stream_start : requested_cursor;
     const size_t length = std::min(static_cast<size_t>(log_stream_end - cursor), kLogReadChunkSize);
@@ -225,9 +242,9 @@ std::string ReadLogs(uint64_t requested_cursor, uint64_t& next_cursor, bool& res
         result.append("[older logs dropped]\n");
     }
     const size_t first_length = std::min(length, kLogBufferSize - read_at);
-    result.append(log_buffer.data() + read_at, first_length);
+    result.append(log_buffer + read_at, first_length);
     if (first_length < length) {
-        result.append(log_buffer.data(), length - first_length);
+        result.append(log_buffer, length - first_length);
     }
     return result;
 }

@@ -49,7 +49,7 @@ void EnvironmentController::RunTask() {
     bus_ = nullptr;
     bus_mutex_ = nullptr;
     task_.store(nullptr, std::memory_order_release);
-    vTaskDelete(nullptr);
+    vTaskDeleteWithCaps(nullptr);
 }
 
 void EnvironmentController::InitializeAht20(int64_t now_us, bool reprobe) {

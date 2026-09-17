@@ -1,5 +1,6 @@
 #include "environment_controller.h"
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 
 #define TAG "Environment"
@@ -19,11 +20,12 @@ bool EnvironmentController::Start(i2c_master_bus_handle_t bus, std::mutex& bus_m
     light_callback_ = light_callback;
     running_.store(true, std::memory_order_release);
     TaskHandle_t task = nullptr;
-    if (xTaskCreate(TaskEntry, "environment", 6144, this, 1, &task) != pdPASS) {
+    if (xTaskCreateWithCaps(TaskEntry, "environment", 6144, this, 1, &task,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         running_.store(false, std::memory_order_release);
         bus_ = nullptr;
         bus_mutex_ = nullptr;
-        ESP_LOGE(TAG, "Failed to create environment task");
+        ESP_LOGE(TAG, "Failed to create environment task in PSRAM");
         return false;
     }
     task_.store(task, std::memory_order_release);

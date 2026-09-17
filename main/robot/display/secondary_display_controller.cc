@@ -4,6 +4,7 @@
 #include "config/hardware_config.h"
 #include "settings.h"
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -149,9 +150,10 @@ bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mu
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &temporary_text_reset_timer_));
 
-    if (xTaskCreate(TaskEntry, "status_oled", 8192, this, 2, &task_) != pdPASS) {
+    if (xTaskCreateWithCaps(TaskEntry, "status_oled", 8192, this, 2, &task_,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         task_ = nullptr;
-        ESP_LOGE(TAG, "Failed to create secondary OLED task");
+        ESP_LOGE(TAG, "Failed to create secondary OLED task in PSRAM");
         return false;
     }
     return true;

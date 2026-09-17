@@ -1,4 +1,5 @@
 #include "audio_service.h"
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <algorithm>
@@ -167,14 +168,19 @@ void AudioService::Start() {
         "audio_output", 2048, this, 4, &audio_output_task_handle_);
 #endif
 
-    /* Start the opus codec task */
-    xTaskCreate(
+    /* The codec worker is persistent and does not perform flash/NVS operations. Keep its large
+     * stack in PSRAM while leaving the realtime input/output task stacks internal. */
+    const BaseType_t opus_task_created = xTaskCreateWithCaps(
         [](void* arg) {
             AudioService* audio_service = (AudioService*)arg;
             audio_service->OpusCodecTask();
-            vTaskDelete(NULL);
+            vTaskDeleteWithCaps(NULL);
         },
-        "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_);
+        "opus_codec", 2048 * 12, this, 2, &opus_codec_task_handle_, MALLOC_CAP_SPIRAM);
+    if (opus_task_created != pdPASS) {
+        opus_codec_task_handle_ = nullptr;
+        ESP_LOGE(TAG, "Failed to create Opus codec task in PSRAM");
+    }
 }
 
 void AudioService::Stop() {

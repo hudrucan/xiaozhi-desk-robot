@@ -26,9 +26,13 @@ constexpr int kResponseTextScale = 210;
 // paced reveal, with faster catch-up only after the voice has drained.
 constexpr int kTypingGlyphsPerSecond = 28;
 constexpr int kTypingFinishingGlyphsPerSecond = 48;
-constexpr int64_t kTypingUpdateIntervalUs = 66000;
+// Sample text progress on every 30 FPS face frame. Audio commonly advances in
+// larger PCM chunks, so spread accumulated glyph credit across frames instead
+// of revealing several characters in a single 66 ms step.
+constexpr int64_t kTypingUpdateIntervalUs = 33000;
 constexpr int64_t kTypingCreditScale = 1000000;
 constexpr int64_t kTypingMaxElapsedUs = 100000;
+constexpr int kTypingCreditLimitGlyphs = 6;
 constexpr char kTag[] = "MochanDisplay";
 
 std::string ResponseDisplayText(const char* content) {
@@ -270,9 +274,13 @@ void MochanDisplay::UpdateTyping(int64_t now_us) {
     const bool finishing_after_audio = typing_finishing_ && audio.IsPlaybackIdle();
     const int64_t progress_us = finishing_after_audio ? elapsed_us : played_us;
     const int rate = finishing_after_audio ? kTypingFinishingGlyphsPerSecond : kTypingGlyphsPerSecond;
-    constexpr int max_glyphs_per_frame = 6;
+    // Normal playback reveals at most one glyph per display frame. Preserve a
+    // small credit backlog so coarse audio-buffer updates catch up smoothly on
+    // subsequent frames rather than appearing as a visible burst.
+    const int max_glyphs_per_frame = finishing_after_audio ? 2 : 1;
     typing_glyph_credit_ = std::min<int64_t>(
-        typing_glyph_credit_ + progress_us * rate, max_glyphs_per_frame * kTypingCreditScale);
+        typing_glyph_credit_ + progress_us * rate,
+        kTypingCreditLimitGlyphs * kTypingCreditScale);
     int glyphs_to_reveal = static_cast<int>(typing_glyph_credit_ / kTypingCreditScale);
     glyphs_to_reveal = std::min(glyphs_to_reveal, max_glyphs_per_frame);
     typing_glyph_credit_ -= static_cast<int64_t>(glyphs_to_reveal) * kTypingCreditScale;

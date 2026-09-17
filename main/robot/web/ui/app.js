@@ -122,4 +122,4 @@ bindOledPreviewToggle();
 restoreLogs();
 startStatusPolling();
 fetchLogs();
-setInterval(fetchLogs, 650);
+setInterval(fetchLogs, 1000);
