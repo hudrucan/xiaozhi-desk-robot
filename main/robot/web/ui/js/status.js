@@ -229,6 +229,11 @@ function renderSystemStatus(status) {
   $("#ip").textContent = status.ip || "—";
   $("#sram").textContent = fmtBytes(status.free_internal_bytes);
   $("#psram").textContent = fmtBytes(status.free_psram_bytes);
+  $("#lastReset").textContent = (status.last_reset_reason || "unknown").replaceAll("_", " ");
+  $("#cameraRecovery").textContent = status.camera_operation_interrupted
+    ? (status.last_camera_stage || "unknown").replaceAll("_", " ") +
+      " · #" + (status.last_camera_operation_id || 0)
+    : "Clean";
 }
 
 function environmentStateLabel(state) {

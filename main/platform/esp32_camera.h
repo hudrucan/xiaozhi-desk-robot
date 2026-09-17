@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -18,6 +19,24 @@ struct JpegChunk {
     size_t len;
 };
 
+struct OwnedJpeg {
+    uint8_t* data = nullptr;
+    size_t length = 0;
+    int width = 0;
+    int height = 0;
+
+    OwnedJpeg() = default;
+    ~OwnedJpeg();
+    OwnedJpeg(const OwnedJpeg&) = delete;
+    OwnedJpeg& operator=(const OwnedJpeg&) = delete;
+    OwnedJpeg(OwnedJpeg&& other) noexcept;
+    OwnedJpeg& operator=(OwnedJpeg&& other) noexcept;
+
+    bool CopyFrom(const camera_fb_t& frame);
+    void Reset();
+    explicit operator bool() const { return data != nullptr && length > 0; }
+};
+
 class Esp32Camera : public Camera {
 private:
     bool streaming_on_ = false;
@@ -28,6 +47,8 @@ private:
     camera_fb_t* current_fb_ = nullptr;
     uint8_t* encode_buf_ = nullptr;  // Buffer for JPEG encoding (with optional byte swap)
     size_t encode_buf_size_ = 0;
+    std::mutex mcp_snapshot_mutex_;
+    OwnedJpeg mcp_snapshot_;
 
 public:
     Esp32Camera(const camera_config_t& config);
@@ -43,6 +64,11 @@ public:
     virtual bool SetSwapBytes(bool enabled) override;
     virtual std::expected<std::string, std::string> Explain(const std::string& question) override;
 
+protected:
+    bool CaptureOwnedJpeg();
+
 private:
     bool CaptureInternal(bool update_preview);
+    void ReturnCurrentFrame();
+    void LogHttpDiagnostics(const char* stage, int64_t request_start_us) const;
 };

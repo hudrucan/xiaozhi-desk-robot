@@ -32,5 +32,11 @@ cJSON* RobotWebStatus::CreateSystem() {
     cJSON_AddNumberToObject(root, "uptime_sec", status.uptime_sec);
     cJSON_AddNumberToObject(root, "free_internal_bytes", status.free_internal_bytes);
     cJSON_AddNumberToObject(root, "free_psram_bytes", status.free_psram_bytes);
+    cJSON_AddStringToObject(root, "last_reset_reason", status.last_reset_reason.c_str());
+    cJSON_AddBoolToObject(root, "camera_operation_interrupted",
+                          status.camera_operation_interrupted);
+    cJSON_AddStringToObject(root, "last_camera_stage", status.last_camera_stage.c_str());
+    cJSON_AddNumberToObject(root, "last_camera_operation_id",
+                            status.last_camera_operation_id);
     return root;
 }

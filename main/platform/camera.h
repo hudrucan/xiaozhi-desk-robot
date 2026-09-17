@@ -14,6 +14,8 @@ public:
     virtual bool SetVFlip(bool enabled) = 0;
     virtual bool SetSwapBytes(bool enabled) { return false; }  // Optional, default no-op
     virtual std::expected<std::string, std::string> Explain(const std::string& question) = 0;
+    virtual void OnMcpResultSerialized() {}
+    virtual void OnMcpResponseSent() {}
 };
 
 #endif  // CAMERA_H

@@ -49,9 +49,15 @@
               <div class="device-row">
                 <span>Camera health</span><b id="cameraHealth">—</b>
               </div>
+              <div class="device-row">
+                <span>Last reset</span><b id="lastReset">—</b>
+              </div>
+              <div class="device-row">
+                <span>Camera recovery</span><b id="cameraRecovery">—</b>
+              </div>
             </div>
           </section>
-              <section class="card">
+          <section class="card">
             <div class="section-title">
               <strong>Environment</strong
               ><span id="environmentSummary">Waiting</span>
@@ -221,6 +227,13 @@
           </section>
         </div>
         <div class="column center-column">
+          <section id="safety" class="card safety">
+            <div>
+              <b>Table edge detected</b
+              ><small>Forward and turns are locked. Reverse only.</small>
+            </div>
+            <button data-stop>STOP</button>
+          </section>
           <section class="card">
             <div class="section-title">
               <strong>Drive</strong><span id="durationLabel">250 ms</span>
@@ -515,13 +528,6 @@
                   ><span id="chatCount" class="chat-count">0 / 512</span>
                 </div>
               </div>
-            </section>
-            <section id="safety" class="card safety">
-              <div>
-                <b>Table edge detected</b
-                ><small>Forward and turns are locked. Reverse only.</small>
-              </div>
-              <button data-stop>STOP</button>
             </section>
             <section class="card">
               <div class="section-title">

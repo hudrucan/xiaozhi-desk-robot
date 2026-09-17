@@ -1274,14 +1274,17 @@ void Application::RegisterMcpBroadcastCallback(std::function<void(const std::str
     mcp_broadcast_callback_ = std::move(callback);
 }
 
-void Application::SendMcpMessage(const std::string& payload) {
+void Application::SendMcpMessage(const std::string& payload, std::function<void()> on_sent) {
     // Always schedule to run in main task for thread safety
-    Schedule([this, payload]() {
+    Schedule([this, payload, on_sent = std::move(on_sent)]() {
         if (protocol_) {
             protocol_->SendMcpMessage(payload);
         }
         if (mcp_broadcast_callback_) {
             mcp_broadcast_callback_(payload);
+        }
+        if (on_sent) {
+            on_sent();
         }
     });
 }

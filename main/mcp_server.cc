@@ -7,9 +7,12 @@
 #include <esp_app_desc.h>
 #include <esp_log.h>
 #include <esp_pthread.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <new>
 
 #include "application.h"
 #include "board.h"
@@ -90,28 +93,34 @@ void McpServer::AddCommonTools() {
 
     auto camera = board.GetCamera();
     if (camera) {
-        AddTool("self.camera.take_photo",
-                "Always remember you have a camera. If the user asks you to see something, use "
-                "this tool to take a photo and then explain it.\n"
-                "Args:\n"
-                "  `question`: The question that you want to ask about the photo.\n"
-                "Return:\n"
-                "  A JSON object that provides the photo information.",
-                PropertyList({Property("question", kPropertyTypeString)}),
-                [camera](const PropertyList& properties) -> ToolResult {
-                    // Lower the priority to do the camera capture
-                    TaskPriorityReset priority_reset(1);
+        auto camera_tool = std::make_unique<McpTool>(
+            "self.camera.take_photo",
+            "Always remember you have a camera. If the user asks you to see something, use "
+            "this tool to take a photo and then explain it.\n"
+            "Args:\n"
+            "  `question`: The question that you want to ask about the photo.\n"
+            "Return:\n"
+            "  A JSON object that provides the photo information.",
+            PropertyList({Property("question", kPropertyTypeString)}),
+            [camera](const PropertyList& properties) -> ToolResult {
+                // Lower the priority to do the camera capture
+                TaskPriorityReset priority_reset(1);
 
-                    if (!camera->Capture()) {
-                        return std::unexpected("Failed to capture photo");
-                    }
-                    auto question = properties["question"].value<std::string>();
-                    auto result = camera->Explain(question);
-                    if (!result) {
-                        return std::unexpected(std::move(result.error()));
-                    }
-                    return std::move(*result);
-                });
+                if (!camera->Capture()) {
+                    return std::unexpected("Failed to capture photo");
+                }
+                auto question = properties["question"].value<std::string>();
+                auto result = camera->Explain(question);
+                if (!result) {
+                    return std::unexpected(std::move(result.error()));
+                }
+                return std::move(*result);
+            });
+        camera_tool->set_result_serialized_callback(
+            [camera]() { camera->OnMcpResultSerialized(); });
+        camera_tool->set_response_sent_callback([camera]() { camera->OnMcpResponseSent(); });
+        camera_tool->set_execution_mode(ToolExecutionMode::kWorkerTask);
+        AddTool(std::move(camera_tool));
     }
 #endif
 
@@ -478,25 +487,31 @@ void McpServer::ParseMessage(const cJSON* json, ResponseSender response_sender) 
     }
 }
 
-void McpServer::SendResponse(const std::string& payload, const ResponseSender& response_sender) {
+void McpServer::SendResponse(const std::string& payload, const ResponseSender& response_sender,
+                             std::function<void()> on_sent) {
     if (response_sender) {
         response_sender(payload);
+        if (on_sent) {
+            on_sent();
+        }
     } else {
-        Application::GetInstance().SendMcpMessage(payload);
+        Application::GetInstance().SendMcpMessage(payload, std::move(on_sent));
     }
 }
 
 void McpServer::ReplyResult(int id, const std::string& result,
-                            const ResponseSender& response_sender) {
+                            const ResponseSender& response_sender,
+                            std::function<void()> on_sent) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
     payload += std::to_string(id) + ",\"result\":";
     payload += result;
     payload += "}";
-    SendResponse(payload, response_sender);
+    SendResponse(payload, response_sender, std::move(on_sent));
 }
 
 void McpServer::ReplyError(int id, int code, const std::string& message,
-                           const ResponseSender& response_sender) {
+                           const ResponseSender& response_sender,
+                           std::function<void()> on_sent) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
     payload += std::to_string(id);
     payload += ",\"error\":{\"code\":";
@@ -504,12 +519,13 @@ void McpServer::ReplyError(int id, int code, const std::string& message,
     payload += ",\"message\":\"";
     payload += message;
     payload += "\"}}";
-    SendResponse(payload, response_sender);
+    SendResponse(payload, response_sender, std::move(on_sent));
 }
 
 void McpServer::ReplyError(int id, const std::string& message,
-                           const ResponseSender& response_sender) {
-    ReplyError(id, -32603, message, response_sender);
+                           const ResponseSender& response_sender,
+                           std::function<void()> on_sent) {
+    ReplyError(id, -32603, message, response_sender, std::move(on_sent));
 }
 
 void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_only_tools,
@@ -621,16 +637,42 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         }
     }
 
-    // Use main thread to call the tool
-    auto& app = Application::GetInstance();
-    app.Schedule([this, id, tool, arguments = std::move(arguments),
-                  response_sender = std::move(response_sender)]() {
+    ResponseSender worker_failure_sender = response_sender;
+    auto execute_call = [this, id, tool, arguments = std::move(arguments),
+                         response_sender = std::move(response_sender)]() {
         auto result = tool->Call(arguments);
+        auto on_sent = [tool]() { tool->NotifyResponseSent(); };
         if (!result) {
             ESP_LOGE(TAG, "tools/call: %s", result.error().c_str());
-            ReplyError(id, result.error(), response_sender);
+            ReplyError(id, result.error(), response_sender, std::move(on_sent));
             return;
         }
-        ReplyResult(id, *result, response_sender);
-    });
+        tool->NotifyResultSerialized();
+        ReplyResult(id, *result, response_sender, std::move(on_sent));
+    };
+
+    if (tool->execution_mode() == ToolExecutionMode::kMainTask) {
+        Application::GetInstance().Schedule(std::move(execute_call));
+        return;
+    }
+
+    constexpr uint32_t kWorkerStackSize = 12288;
+    auto* worker_call = new (std::nothrow) std::function<void()>(std::move(execute_call));
+    if (worker_call == nullptr) {
+        ReplyError(id, "Failed to allocate MCP worker", worker_failure_sender);
+        return;
+    }
+    const BaseType_t created = xTaskCreate(
+        [](void* context) {
+            std::unique_ptr<std::function<void()>> call(
+                static_cast<std::function<void()>*>(context));
+            (*call)();
+            call.reset();
+            vTaskDelete(nullptr);
+        },
+        "mcp_tool", kWorkerStackSize, worker_call, 1, nullptr);
+    if (created != pdPASS) {
+        delete worker_call;
+        ReplyError(id, "Failed to start MCP worker", worker_failure_sender);
+    }
 }

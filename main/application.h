@@ -118,7 +118,7 @@ public:
     void RegisterTextChatCallback(
         std::function<void(const std::string&, const std::string&)> callback);
     bool CanEnterSleepMode();
-    void SendMcpMessage(const std::string& payload);
+    void SendMcpMessage(const std::string& payload, std::function<void()> on_sent = {});
     void RegisterMcpBroadcastCallback(std::function<void(const std::string&)> callback);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }

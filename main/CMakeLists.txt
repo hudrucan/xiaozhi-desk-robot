@@ -69,6 +69,7 @@ set(BUILTIN_ICON_FONT font_material_symbols_20_4)
 
 list(APPEND SOURCES
     "robot/desk_robot_board.cc"
+    "robot/camera/camera_diagnostics.cc"
     "robot/camera/desk_robot_camera.cc"
     "robot/control/robot_controller.cc"
     "robot/control/robot_settings.cc"

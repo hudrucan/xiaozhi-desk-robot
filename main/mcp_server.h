@@ -58,6 +58,11 @@ using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*>;
 using ToolResult = std::expected<ReturnValue, std::string>;
 using ToolCallback = std::function<ToolResult(const PropertyList&)>;
 
+enum class ToolExecutionMode {
+    kMainTask,
+    kWorkerTask,
+};
+
 enum PropertyType { kPropertyTypeBoolean, kPropertyTypeInteger, kPropertyTypeString };
 
 class Property {
@@ -263,6 +268,9 @@ private:
     std::string description_;
     PropertyList properties_;
     ToolCallback callback_;
+    std::function<void()> result_serialized_callback_;
+    std::function<void()> response_sent_callback_;
+    ToolExecutionMode execution_mode_ = ToolExecutionMode::kMainTask;
     bool user_only_ = false;
     bool assistant_only_ = false;
 
@@ -273,11 +281,29 @@ public:
 
     void set_user_only(bool user_only) { user_only_ = user_only; }
     void set_assistant_only(bool assistant_only) { assistant_only_ = assistant_only; }
+    void set_execution_mode(ToolExecutionMode mode) { execution_mode_ = mode; }
+    void set_result_serialized_callback(std::function<void()> callback) {
+        result_serialized_callback_ = std::move(callback);
+    }
+    void set_response_sent_callback(std::function<void()> callback) {
+        response_sent_callback_ = std::move(callback);
+    }
+    void NotifyResultSerialized() const {
+        if (result_serialized_callback_) {
+            result_serialized_callback_();
+        }
+    }
+    void NotifyResponseSent() const {
+        if (response_sent_callback_) {
+            response_sent_callback_();
+        }
+    }
     inline const std::string& name() const { return name_; }
     inline const std::string& description() const { return description_; }
     inline const PropertyList& properties() const { return properties_; }
     inline bool user_only() const { return user_only_; }
     inline bool assistant_only() const { return assistant_only_; }
+    inline ToolExecutionMode execution_mode() const { return execution_mode_; }
 
     std::string to_json() const {
         std::vector<std::string> required = properties_.GetRequired();
@@ -453,11 +479,14 @@ private:
 
     void ParseCapabilities(const cJSON* capabilities);
 
-    void SendResponse(const std::string& payload, const ResponseSender& response_sender);
-    void ReplyResult(int id, const std::string& result, const ResponseSender& response_sender);
-    void ReplyError(int id, const std::string& message, const ResponseSender& response_sender);
+    void SendResponse(const std::string& payload, const ResponseSender& response_sender,
+                      std::function<void()> on_sent = {});
+    void ReplyResult(int id, const std::string& result, const ResponseSender& response_sender,
+                     std::function<void()> on_sent = {});
+    void ReplyError(int id, const std::string& message, const ResponseSender& response_sender,
+                    std::function<void()> on_sent = {});
     void ReplyError(int id, int code, const std::string& message,
-                    const ResponseSender& response_sender);
+                    const ResponseSender& response_sender, std::function<void()> on_sent = {});
 
     void GetToolsList(int id, const std::string& cursor, bool list_user_only_tools,
                       const ResponseSender& response_sender);

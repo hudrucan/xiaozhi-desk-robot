@@ -3,10 +3,15 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <img_converters.h>
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
+#include <utility>
 
 #include "board.h"
+#include "camera/camera_diagnostics.h"
 #include "display.h"
 #include "esp32_camera.h"
 #include "esp_timer.h"
@@ -17,6 +22,57 @@
 #include "system_info.h"
 
 #define TAG "Esp32Camera"
+
+OwnedJpeg::~OwnedJpeg() { Reset(); }
+
+OwnedJpeg::OwnedJpeg(OwnedJpeg&& other) noexcept
+    : data(std::exchange(other.data, nullptr)),
+      length(std::exchange(other.length, 0)),
+      width(std::exchange(other.width, 0)),
+      height(std::exchange(other.height, 0)) {}
+
+OwnedJpeg& OwnedJpeg::operator=(OwnedJpeg&& other) noexcept {
+    if (this != &other) {
+        Reset();
+        data = std::exchange(other.data, nullptr);
+        length = std::exchange(other.length, 0);
+        width = std::exchange(other.width, 0);
+        height = std::exchange(other.height, 0);
+    }
+    return *this;
+}
+
+bool OwnedJpeg::CopyFrom(const camera_fb_t& frame) {
+    Reset();
+    if (frame.format != PIXFORMAT_JPEG || frame.buf == nullptr || frame.len == 0) {
+        return false;
+    }
+
+    data = static_cast<uint8_t*>(
+        heap_caps_malloc(frame.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (data == nullptr) {
+        data = static_cast<uint8_t*>(heap_caps_malloc(frame.len, MALLOC_CAP_8BIT));
+    }
+    if (data == nullptr) {
+        return false;
+    }
+
+    memcpy(data, frame.buf, frame.len);
+    length = frame.len;
+    width = frame.width;
+    height = frame.height;
+    return true;
+}
+
+void OwnedJpeg::Reset() {
+    if (data != nullptr) {
+        heap_caps_free(data);
+    }
+    data = nullptr;
+    length = 0;
+    width = 0;
+    height = 0;
+}
 
 #if CONFIG_XIAOZHI_CAMERA_MIRROR_CONFIGURED
 #if CONFIG_XIAOZHI_CAMERA_HMIRROR
@@ -32,9 +88,28 @@ static constexpr bool kConfiguredVFlip = false;
 #endif
 
 Esp32Camera::Esp32Camera(const camera_config_t& config) {
-    esp_err_t err = esp_camera_init(&config);
+    constexpr std::array<int, 3> kProbeRetryDelayMs = {0, 100, 250};
+    esp_err_t err = ESP_FAIL;
+    for (size_t attempt = 0; attempt < kProbeRetryDelayMs.size(); ++attempt) {
+        if (kProbeRetryDelayMs[attempt] > 0) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kProbeRetryDelayMs[attempt]));
+        }
+        err = esp_camera_init(&config);
+        if (err == ESP_OK) {
+            if (attempt > 0) {
+                ESP_LOGI(TAG, "Camera initialized after %zu probe attempts", attempt + 1);
+            }
+            break;
+        }
+        ESP_LOGW(TAG, "esp_camera_init attempt %zu/%zu failed: %s (0x%x)", attempt + 1,
+                 kProbeRetryDelayMs.size(), esp_err_to_name(err), err);
+        if (err != ESP_ERR_NOT_SUPPORTED) {
+            break;
+        }
+    }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_camera_init failed with error 0x%x", err);
+        ESP_LOGE(TAG, "esp_camera_init failed: %s (0x%x)", esp_err_to_name(err), err);
         return;
     }
 
@@ -55,10 +130,7 @@ Esp32Camera::Esp32Camera(const camera_config_t& config) {
 
 Esp32Camera::~Esp32Camera() {
     if (streaming_on_) {
-        if (current_fb_) {
-            esp_camera_fb_return(current_fb_);
-            current_fb_ = nullptr;
-        }
+        ReturnCurrentFrame();
         if (encode_buf_) {
             heap_caps_free(encode_buf_);
             encode_buf_ = nullptr;
@@ -75,6 +147,30 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
 }
 
 bool Esp32Camera::Capture() { return CaptureInternal(true); }
+
+bool Esp32Camera::CaptureOwnedJpeg() {
+    if (!CaptureInternal(true)) {
+        return false;
+    }
+
+    OwnedJpeg snapshot;
+    const bool copied = current_fb_ != nullptr && snapshot.CopyFrom(*current_fb_);
+    ReturnCurrentFrame();
+    if (!copied) {
+        ESP_LOGE(TAG, "Failed to copy MCP JPEG into owned memory");
+        return false;
+    }
+
+    const int width = snapshot.width;
+    const int height = snapshot.height;
+    const size_t length = snapshot.length;
+    {
+        std::lock_guard<std::mutex> lock(mcp_snapshot_mutex_);
+        mcp_snapshot_ = std::move(snapshot);
+    }
+    ESP_LOGI(TAG, "MCP JPEG copied: %dx%d, len=%zu", width, height, length);
+    return true;
+}
 
 bool Esp32Camera::CaptureForWeb() { return CaptureInternal(false); }
 
@@ -184,6 +280,13 @@ bool Esp32Camera::CaptureInternal(bool update_preview) {
     return true;
 }
 
+void Esp32Camera::ReturnCurrentFrame() {
+    if (current_fb_ != nullptr) {
+        esp_camera_fb_return(current_fb_);
+        current_fb_ = nullptr;
+    }
+}
+
 bool Esp32Camera::SetHMirror(bool enabled) {
     sensor_t* s = esp_camera_sensor_get();
     if (!s) {
@@ -207,12 +310,30 @@ bool Esp32Camera::SetSwapBytes(bool enabled) {
     return true;
 }
 
+void Esp32Camera::LogHttpDiagnostics(const char* stage, int64_t request_start_us) const {
+    const size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t internal_largest =
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    const UBaseType_t stack_words = uxTaskGetStackHighWaterMark(nullptr);
+    const int64_t elapsed_ms = (esp_timer_get_time() - request_start_us) / 1000;
+    ESP_LOGI(TAG,
+             "MCP HTTP stage=%s elapsed=%lldms internal=%zu/%zu psram=%zu/%zu stack=%u words",
+             stage, static_cast<long long>(elapsed_ms), internal_free, internal_largest,
+             psram_free, psram_largest, static_cast<unsigned>(stack_words));
+}
+
 std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& question) {
+    OwnedJpeg owned_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mcp_snapshot_mutex_);
+        owned_snapshot = std::move(mcp_snapshot_);
+    }
     if (explain_url_.empty()) {
         return std::unexpected("Image explain URL or token is not set");
     }
-
-    if (current_fb_ == nullptr) {
+    if (!owned_snapshot && current_fb_ == nullptr) {
         return std::unexpected("No camera frame captured");
     }
 
@@ -220,10 +341,22 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
     // fixed Content-Length instead of chunked transfer encoding: some image
     // explain endpoints accept the TCP connection but never consume a chunked
     // multipart request, leaving the MCP call pending indefinitely.
-    if (current_fb_->format == PIXFORMAT_JPEG) {
+    if (owned_snapshot || current_fb_->format == PIXFORMAT_JPEG) {
+        const int64_t request_start_us = esp_timer_get_time();
+        const uint8_t* jpeg_data = owned_snapshot ? owned_snapshot.data : current_fb_->buf;
+        const size_t jpeg_length = owned_snapshot ? owned_snapshot.length : current_fb_->len;
+        const int jpeg_width = owned_snapshot ? owned_snapshot.width : current_fb_->width;
+        const int jpeg_height = owned_snapshot ? owned_snapshot.height : current_fb_->height;
         auto network = Board::GetInstance().GetNetwork();
         auto http = network->CreateHttp(3);
         http->SetTimeout(20000);
+
+        auto close_http = [&]() {
+            CameraDiagnostics::SetStage(CameraDiagnosticStage::kHttpClose);
+            LogHttpDiagnostics("before_close", request_start_us);
+            http->Close();
+            LogHttpDiagnostics("after_close", request_start_us);
+        };
 
         const std::string boundary = "----ESP32_CAMERA_BOUNDARY";
         std::string question_field;
@@ -241,7 +374,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
 
         const std::string multipart_footer = "\r\n--" + boundary + "--\r\n";
         const size_t content_length = question_field.size() + file_header.size() +
-                                      current_fb_->len + multipart_footer.size();
+                                      jpeg_length + multipart_footer.size();
 
         http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
         http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
@@ -254,23 +387,34 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
         // An engaged but empty content value makes HttpClient use raw writes
         // after Open(), while the explicit Content-Length describes the body.
         http->SetContent(std::string{});
-        ESP_LOGI(TAG, "JPEG upload begin: image=%zu bytes, body=%zu bytes", current_fb_->len,
+        ESP_LOGI(TAG, "JPEG upload begin: image=%dx%d %zu bytes, body=%zu bytes", jpeg_width,
+                 jpeg_height, jpeg_length,
                  content_length);
-        if (!http->Open("POST", explain_url_)) {
-            ESP_LOGE(TAG, "Failed to connect to explain URL");
-            return std::unexpected("Failed to connect to explain URL");
+        CameraDiagnostics::SetStage(CameraDiagnosticStage::kHttpOpen);
+        LogHttpDiagnostics("before_open", request_start_us);
+        auto opened = http->Open("POST", explain_url_);
+        if (!opened) {
+            LogHttpDiagnostics("open_failed", request_start_us);
+            const std::string error = opened.error().ToString();
+            ESP_LOGE(TAG, "Failed to connect to explain URL: %s", error.c_str());
+            return std::unexpected("Failed to connect to explain URL: " + error);
         }
+        LogHttpDiagnostics("after_open", request_start_us);
 
-        auto write_part = [&http](const char* name, const char* data, size_t length) {
+        std::string upload_error;
+        auto write_part = [&http, &upload_error](const char* name, const char* data,
+                                                 size_t length) {
             auto write_result = http->Write(data, length);
             if (!write_result) {
-                ESP_LOGE(TAG, "JPEG upload %s failed: %s", name,
-                         write_result.error().ToString().c_str());
+                upload_error = "JPEG upload " + std::string(name) + " failed: " +
+                               write_result.error().ToString();
+                ESP_LOGE(TAG, "%s", upload_error.c_str());
                 return false;
             }
 
             const int written = *write_result;
             if (written != static_cast<int>(length)) {
+                upload_error = "JPEG upload " + std::string(name) + " was partial";
                 ESP_LOGE(TAG, "JPEG upload %s failed: wrote %d/%zu bytes", name, written,
                          length);
                 return false;
@@ -279,39 +423,82 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
             return true;
         };
 
+        CameraDiagnostics::SetStage(CameraDiagnosticStage::kUpload);
+        LogHttpDiagnostics("before_upload", request_start_us);
         const bool uploaded =
             write_part("question", question_field.data(), question_field.size()) &&
             write_part("header", file_header.data(), file_header.size()) &&
-            write_part("image", reinterpret_cast<const char*>(current_fb_->buf),
-                       current_fb_->len) &&
+            write_part("image", reinterpret_cast<const char*>(jpeg_data), jpeg_length) &&
             write_part("footer", multipart_footer.data(), multipart_footer.size());
         if (!uploaded) {
-            http->Close();
-            return std::unexpected("Failed to upload photo");
+            LogHttpDiagnostics("upload_failed", request_start_us);
+            close_http();
+            if (upload_error.empty()) {
+                upload_error = "Failed to upload photo";
+            }
+            return std::unexpected(std::move(upload_error));
         }
+        LogHttpDiagnostics("after_upload", request_start_us);
 
         ESP_LOGI(TAG, "JPEG upload complete; waiting for response");
+        CameraDiagnostics::SetStage(CameraDiagnosticStage::kWaitStatus);
+        LogHttpDiagnostics("before_status", request_start_us);
         auto status_code = http->GetStatusCode();
         if (!status_code) {
+            LogHttpDiagnostics("status_failed", request_start_us);
             ESP_LOGE(TAG, "Failed to read HTTP status: %s",
                      status_code.error().ToString().c_str());
-            http->Close();
-            return std::unexpected("Failed to upload photo");
+            const std::string error = status_code.error().ToString();
+            close_http();
+            return std::unexpected("Failed to read image explain HTTP status: " + error);
         }
+        LogHttpDiagnostics("after_status", request_start_us);
         if (*status_code != 200) {
             ESP_LOGE(TAG, "Failed to upload photo, status code: %d", *status_code);
-            http->Close();
-            return std::unexpected("Failed to upload photo");
+            close_http();
+            return std::unexpected("Image explain returned HTTP " +
+                                   std::to_string(*status_code));
         }
 
-        std::string result = http->ReadAll();
-        http->Close();
+        CameraDiagnostics::SetStage(CameraDiagnosticStage::kReadResponse);
+        LogHttpDiagnostics("before_read", request_start_us);
+        constexpr size_t kMaxResponseBytes = 64 * 1024;
+        std::string result;
+        const size_t declared_length = http->GetBodyLength();
+        if (declared_length > kMaxResponseBytes) {
+            close_http();
+            return std::unexpected("Image explain response is too large");
+        }
+        if (declared_length > 0) {
+            result.reserve(declared_length);
+        }
+
+        std::array<char, 1024> response_buffer;
+        while (true) {
+            auto bytes_read = http->Read(response_buffer.data(), response_buffer.size());
+            if (!bytes_read) {
+                const std::string error = bytes_read.error().ToString();
+                LogHttpDiagnostics("read_failed", request_start_us);
+                close_http();
+                return std::unexpected("Failed to read image explain response: " + error);
+            }
+            if (*bytes_read == 0) {
+                break;
+            }
+            if (result.size() + static_cast<size_t>(*bytes_read) > kMaxResponseBytes) {
+                close_http();
+                return std::unexpected("Image explain response is too large");
+            }
+            result.append(response_buffer.data(), static_cast<size_t>(*bytes_read));
+        }
+        LogHttpDiagnostics("after_read", request_start_us);
+        close_http();
         if (result.empty()) {
             ESP_LOGE(TAG, "Image explain returned an empty response");
             return std::unexpected("Image explain returned an empty response");
         }
-        ESP_LOGI(TAG, "Explain image size=%zu, question=%s\n%s", current_fb_->len,
-                 question.c_str(), result.c_str());
+        ESP_LOGI(TAG, "Explain image size=%dx%d %zu bytes, question=%s\n%s", jpeg_width,
+                 jpeg_height, jpeg_length, question.c_str(), result.c_str());
         return result;
     }
 
