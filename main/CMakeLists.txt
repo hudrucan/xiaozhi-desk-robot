@@ -89,6 +89,8 @@ list(APPEND SOURCES
     "robot/sensors/aht20_sensor.cc"
     "robot/sensors/bh1750_sensor.cc"
     "robot/sensors/bmp280_sensor.cc"
+    "robot/sensors/environment_controller.cc"
+    "robot/sensors/environment_controller_sampling.cc"
     "robot/sensors/shared_i2c_bus.cc"
     "robot/sensors/cliff_sensor.cc"
     "robot/sensors/mpu6050_motion_sensor.cc"
