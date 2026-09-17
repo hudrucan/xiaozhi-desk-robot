@@ -4,6 +4,7 @@
 #include "config/tuning.h"
 #include "control/robot_controller.h"
 #include "mcp_server.h"
+#include "sensors/environment_derived.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -186,6 +187,12 @@ void RobotMcpTools::Register(RobotController& controller) {
             cJSON_AddBoolToObject(result, "humidity_valid", environment.humidity_valid);
             cJSON_AddBoolToObject(result, "pressure_valid", environment.pressure_valid);
             cJSON_AddBoolToObject(result, "illuminance_valid", environment.illuminance_valid);
+            cJSON_AddStringToObject(result, "light_level",
+                                    LightLevelName(environment.light_level));
+            cJSON_AddStringToObject(result, "comfort_level",
+                                    ComfortLevelName(environment.comfort_level));
+            cJSON_AddStringToObject(result, "pressure_trend",
+                                    PressureTrendName(environment.pressure_trend));
             if (environment.temperature_valid) {
                 cJSON_AddNumberToObject(result, "temperature_c", environment.temperature_c);
             }

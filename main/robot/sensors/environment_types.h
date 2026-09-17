@@ -9,6 +9,31 @@ enum class SensorState : uint8_t {
     kDegraded,
 };
 
+enum class LightLevel : uint8_t {
+    kUnavailable,
+    kDark,
+    kDim,
+    kNormal,
+    kBright,
+    kVeryBright,
+};
+
+enum class ComfortLevel : uint8_t {
+    kUnavailable,
+    kDry,
+    kComfortable,
+    kHumid,
+    kHot,
+    kCold,
+};
+
+enum class PressureTrend : uint8_t {
+    kUnavailable,
+    kFalling,
+    kStable,
+    kRising,
+};
+
 struct SensorHealth {
     SensorState state = SensorState::kMissing;
     bool sample_valid = false;
@@ -37,6 +62,10 @@ struct EnvironmentStatus {
     float humidity_percent = 0.0f;
     float pressure_hpa = 0.0f;
     float illuminance_lux = 0.0f;
+
+    LightLevel light_level = LightLevel::kUnavailable;
+    ComfortLevel comfort_level = ComfortLevel::kUnavailable;
+    PressureTrend pressure_trend = PressureTrend::kUnavailable;
 
     int64_t temperature_last_good_us = 0;
     int64_t humidity_last_good_us = 0;

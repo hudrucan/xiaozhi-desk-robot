@@ -4,6 +4,7 @@
 #include "bh1750_sensor.h"
 #include "bmp280_sensor.h"
 #include "environment_types.h"
+#include "environment_derived.h"
 
 #include <driver/i2c_master.h>
 #include <freertos/FreeRTOS.h>
@@ -49,6 +50,7 @@ private:
     Aht20Sensor aht20_;
     Bmp280Sensor bmp280_;
     Bh1750Sensor bh1750_;
+    EnvironmentDerived derived_;
 
     mutable std::mutex status_mutex_;
     EnvironmentStatus status_;

@@ -126,6 +126,7 @@ public:
         int pressure_tenths_hpa = 0;
         bool illuminance_valid = false;
         int illuminance_lux = 0;
+        std::string light_level = "unavailable";
     };
 
     bool Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, uint8_t address, int width,

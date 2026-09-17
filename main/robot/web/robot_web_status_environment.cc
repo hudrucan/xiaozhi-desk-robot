@@ -1,6 +1,7 @@
 #include "robot_web_status.h"
 
 #include "control/robot_controller.h"
+#include "sensors/environment_derived.h"
 
 #include <cJSON.h>
 
@@ -67,5 +68,15 @@ cJSON* RobotWebStatus::CreateEnvironment() {
         cJSON_Delete(root);
         return nullptr;
     }
+    cJSON* summary = cJSON_AddObjectToObject(root, "summary");
+    if (summary == nullptr) {
+        cJSON_Delete(root);
+        return nullptr;
+    }
+    cJSON_AddStringToObject(summary, "light_level", LightLevelName(environment.light_level));
+    cJSON_AddStringToObject(summary, "comfort_level",
+                            ComfortLevelName(environment.comfort_level));
+    cJSON_AddStringToObject(summary, "pressure_trend",
+                            PressureTrendName(environment.pressure_trend));
     return root;
 }

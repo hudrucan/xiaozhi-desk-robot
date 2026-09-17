@@ -639,6 +639,7 @@ private:
         telemetry.illuminance_valid = environment.illuminance_valid;
         telemetry.illuminance_lux =
             static_cast<int>(std::lround(environment.illuminance_lux));
+        telemetry.light_level = LightLevelName(environment.light_level);
     }
 
     void InitializeSecondaryOled() {

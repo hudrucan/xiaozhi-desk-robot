@@ -32,22 +32,6 @@ std::string FormatInteger(int value, const char* suffix) {
     return text;
 }
 
-const char* LightLevel(int lux) {
-    if (lux < 15) {
-        return "dark";
-    }
-    if (lux < 60) {
-        return "dim";
-    }
-    if (lux < 350) {
-        return "normal";
-    }
-    if (lux < 700) {
-        return "bright";
-    }
-    return "very bright";
-}
-
 }  // namespace
 
 void SecondaryOled::RenderEnvironmentSingleLineWidgetLocked(
@@ -86,8 +70,9 @@ void SecondaryOled::RenderEnvironmentSingleLineWidgetLocked(
             const std::string lux = telemetry_.illuminance_valid
                                         ? FormatInteger(telemetry_.illuminance_lux, "lx")
                                         : "--lx";
-            const std::string level =
-                telemetry_.illuminance_valid ? LightLevel(telemetry_.illuminance_lux) : "unknown";
+            const std::string level = telemetry_.illuminance_valid
+                                          ? telemetry_.light_level
+                                          : "unavailable";
             const auto mode = static_cast<LightMode>(std::min<uint8_t>(widget.mode, 2));
             primary = mode == LightMode::kLux
                           ? lux
@@ -167,7 +152,7 @@ void SecondaryOled::RenderEnvironmentWidgetLocked(
                                     ? FormatInteger(telemetry_.illuminance_lux, "lx")
                                     : "--lx";
         const std::string level =
-            telemetry_.illuminance_valid ? LightLevel(telemetry_.illuminance_lux) : "unknown";
+            telemetry_.illuminance_valid ? telemetry_.light_level : "unavailable";
         const auto mode = static_cast<LightMode>(std::min<uint8_t>(widget.mode, 2));
         if (mode == LightMode::kLuxAndLevel) {
             DrawIconTwoLinesFitted(left, placement.y, content_width, placement.height, kLightIcon,

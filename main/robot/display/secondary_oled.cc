@@ -370,7 +370,8 @@ void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
                          telemetry.pressure_valid != telemetry_.pressure_valid ||
                          telemetry.pressure_tenths_hpa != telemetry_.pressure_tenths_hpa ||
                          telemetry.illuminance_valid != telemetry_.illuminance_valid ||
-                         telemetry.illuminance_lux != telemetry_.illuminance_lux;
+                         telemetry.illuminance_lux != telemetry_.illuminance_lux ||
+                         telemetry.light_level != telemetry_.light_level;
     if (changed || pulse_triggered) {
         telemetry_ = telemetry;
         dirty_ = true;

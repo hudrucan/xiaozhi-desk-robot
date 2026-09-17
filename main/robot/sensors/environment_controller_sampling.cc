@@ -195,6 +195,9 @@ bool EnvironmentController::RecordFailure(Sensor sensor, int64_t now_us) {
             health.next_probe_us =
                 now_us + MillisecondsToMicroseconds(ENVIRONMENT_REPROBE_PERIOD_MS);
             SetAvailable(sensor, false);
+            if (sensor == Sensor::kBmp280) {
+                derived_.ResetPressure();
+            }
             became_missing = true;
         } else {
             health.state = SensorState::kDegraded;
@@ -227,6 +230,7 @@ void EnvironmentController::PublishAht20(const Aht20Sensor::Reading& reading, in
         health.sample_valid = true;
         health.consecutive_failures = 0;
         health.last_good_us = now_us;
+        derived_.UpdateClimate(status_);
     }
     if (recovered) {
         ESP_LOGI(TAG, "AHT20 read recovered");
@@ -246,6 +250,7 @@ void EnvironmentController::PublishBmp280(const Bmp280Sensor::Reading& reading, 
         health.sample_valid = true;
         health.consecutive_failures = 0;
         health.last_good_us = now_us;
+        derived_.UpdatePressure(status_, now_us);
     }
     if (recovered) {
         ESP_LOGI(TAG, "BMP280 read recovered");
@@ -265,6 +270,7 @@ void EnvironmentController::PublishBh1750(float lux, int64_t now_us) {
         health.sample_valid = true;
         health.consecutive_failures = 0;
         health.last_good_us = now_us;
+        derived_.UpdateLight(status_);
     }
     if (recovered) {
         ESP_LOGI(TAG, "BH1750 read recovered");
@@ -302,12 +308,21 @@ void EnvironmentController::SetSampleValid(Sensor sensor, bool valid) {
         case Sensor::kAht20:
             status_.temperature_valid = valid;
             status_.humidity_valid = valid;
+            if (!valid) {
+                status_.comfort_level = ComfortLevel::kUnavailable;
+            }
             break;
         case Sensor::kBmp280:
             status_.pressure_valid = valid;
+            if (!valid) {
+                status_.pressure_trend = PressureTrend::kUnavailable;
+            }
             break;
         case Sensor::kBh1750:
             status_.illuminance_valid = valid;
+            if (!valid) {
+                status_.light_level = LightLevel::kUnavailable;
+            }
             break;
     }
 }
