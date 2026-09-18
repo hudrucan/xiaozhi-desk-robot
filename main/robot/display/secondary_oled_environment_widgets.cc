@@ -68,11 +68,11 @@ void SecondaryOled::RenderEnvironmentSingleLineWidgetLocked(
         }
         case WidgetType::kLight: {
             const std::string lux = telemetry_.illuminance_valid
-                                        ? FormatInteger(telemetry_.illuminance_lux, "lx")
+                                        ? FormatInteger(telemetry_.illuminance_lux, " lx")
                                         : "--lx";
             const std::string level = telemetry_.illuminance_valid
                                           ? telemetry_.light_level
-                                          : "unavailable";
+                                          : "Unknown";
             const auto mode = static_cast<LightMode>(std::min<uint8_t>(widget.mode, 2));
             primary = mode == LightMode::kLux
                           ? lux
@@ -155,10 +155,10 @@ void SecondaryOled::RenderEnvironmentWidgetLocked(
 
     if (widget.type == WidgetType::kLight) {
         const std::string lux = telemetry_.illuminance_valid
-                                    ? FormatInteger(telemetry_.illuminance_lux, "lx")
+                                    ? FormatInteger(telemetry_.illuminance_lux, " lx")
                                     : "--lx";
         const std::string level =
-            telemetry_.illuminance_valid ? telemetry_.light_level : "unavailable";
+            telemetry_.illuminance_valid ? telemetry_.light_level : "Unknown";
         const auto mode = static_cast<LightMode>(std::min<uint8_t>(widget.mode, 2));
         if (mode == LightMode::kLuxAndLevel) {
             DrawIconTwoLinesFitted(left, placement.y, content_width, placement.height, kLightIcon,

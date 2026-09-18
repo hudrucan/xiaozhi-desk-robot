@@ -55,13 +55,13 @@ std::string FormatCapacityMah(uint32_t capacity_uah) {
     char text[16] = {};
     const uint32_t capacity_mah =
         static_cast<uint32_t>((static_cast<uint64_t>(capacity_uah) + 500) / 1000);
-    std::snprintf(text, sizeof(text), "%lumAh", static_cast<unsigned long>(capacity_mah));
+    std::snprintf(text, sizeof(text), "%lu mAh", static_cast<unsigned long>(capacity_mah));
     return text;
 }
 
 std::string FormatRemainingMah(uint32_t remaining_mah) {
     char text[16] = {};
-    std::snprintf(text, sizeof(text), "%lumAh", static_cast<unsigned long>(remaining_mah));
+    std::snprintf(text, sizeof(text), "%lu mAh", static_cast<unsigned long>(remaining_mah));
     return text;
 }
 
@@ -355,7 +355,7 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
                                               : "--mAh";
             if (roomy) {
                 DrawIconTwoLinesFitted(left, top, content_width, content_height, kBatteryIcon,
-                                       "Remaining", remaining, FontSize::kRegular, allow_icon);
+                                       "", remaining, FontSize::kRegular, allow_icon);
             } else {
                 DrawIconTextFitted(left, top, content_width, content_height, kBatteryIcon,
                                    remaining, FontSize::kEmphasis, allow_icon);
