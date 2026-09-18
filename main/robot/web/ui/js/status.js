@@ -204,6 +204,10 @@ function renderCameraStatus(status) {
   const idle = lastState === "idle";
   const available = !!status.camera_available;
   const previewAvailable = available && idle;
+  if (status.camera_sensor && status.camera_profile) {
+    $("#cameraSettingsSummary").textContent = status.camera_sensor + " · " +
+      status.camera_profile.replace("_", " ") + " · " + (status.camera_mode || "off");
+  }
   if (browserLive && status.web_camera_live) {
     browserLiveConfirmed = true;
     $("#snapshotMeta").textContent = "MJPEG live";
@@ -212,6 +216,8 @@ function renderCameraStatus(status) {
   }
   $("#camera").textContent = !available
     ? "Offline"
+    : status.camera_mode === "mcp"
+      ? "MCP capture"
     : status.web_camera_live
       ? "Web live"
       : status.live_camera

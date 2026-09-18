@@ -37,6 +37,28 @@ struct OwnedJpeg {
     explicit operator bool() const { return data != nullptr && length > 0; }
 };
 
+struct CameraSensorControls {
+    int brightness = 0;
+    int contrast = 0;
+    int saturation = 0;
+    bool auto_exposure = true;
+    bool aec2 = false;
+    int ae_level = 0;
+    int manual_exposure = 300;
+    bool auto_gain = true;
+    int manual_gain = 0;
+    gainceiling_t gain_ceiling = GAINCEILING_2X;
+    bool auto_white_balance = true;
+    bool awb_gain = true;
+    int white_balance_mode = 0;
+    bool black_pixel_correction = false;
+    bool white_pixel_correction = true;
+    bool gamma = true;
+    bool lens_correction = true;
+    bool mirror = false;
+    bool flip = false;
+};
+
 class Esp32Camera : public Camera {
 private:
     bool streaming_on_ = false;
@@ -57,18 +79,22 @@ public:
 
     virtual void SetExplainUrl(const std::string& url, const std::string& token) override;
     virtual bool Capture() override;
+    bool CaptureForPreview();
     bool CaptureForWeb();
     bool GetCurrentJpeg(const uint8_t*& data, size_t& length) const;
     bool IsAvailable() const { return streaming_on_; }
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual bool SetSwapBytes(bool enabled) override;
+    bool ApplySensorControls(const CameraSensorControls& controls);
+    bool ApplyCaptureSettings(framesize_t frame_size, int jpeg_quality);
+    int SensorPid() const;
     virtual std::expected<std::string, std::string> Explain(const std::string& question) override;
 
 protected:
-    bool CaptureOwnedJpeg();
+    bool CaptureOwnedJpeg(bool fresh_frame = true);
     void ReturnCurrentFrame();
 
 private:
-    bool CaptureInternal(bool update_preview);
+    bool CaptureInternal(bool update_preview, bool fresh_frame);
 };

@@ -129,6 +129,28 @@ CameraSettingsConfig CameraSettingsStore::Normalize(CameraSettingsConfig config)
         NormalizeEnum(config.sensor.gain_ceiling, CameraGainCeiling::k128x,
                       CameraGainCeiling::k2x);
     config.sensor.white_balance_mode = std::clamp(config.sensor.white_balance_mode, 0, 4);
+    if (config.sensor.profile != CameraImageProfile::kCustom) {
+        const bool mirror = config.sensor.mirror;
+        const bool flip = config.sensor.flip;
+        CameraSensorSettings preset;
+        preset.profile = config.sensor.profile;
+        preset.mirror = mirror;
+        preset.flip = flip;
+        if (preset.profile == CameraImageProfile::kLowLight) {
+            preset.auto_exposure = true;
+            preset.aec2 = true;
+            preset.ae_level = 1;
+            preset.auto_gain = true;
+            preset.gain_ceiling = CameraGainCeiling::k16x;
+            preset.auto_white_balance = true;
+            preset.awb_gain = true;
+            preset.black_pixel_correction = true;
+            preset.white_pixel_correction = true;
+            preset.gamma = true;
+            preset.lens_correction = true;
+        }
+        config.sensor = preset;
+    }
     config.web.resolution = NormalizeWebResolution(config.web.resolution);
     config.web.jpeg_quality = std::clamp(config.web.jpeg_quality, 4, 63);
     config.web.fps = std::clamp(config.web.fps, 1, 10);

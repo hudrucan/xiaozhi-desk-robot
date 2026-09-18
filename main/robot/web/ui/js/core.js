@@ -96,6 +96,7 @@ async function action(name, extra = {}) {
     if (!response.ok || !result.ok) throw Error(result.message || "Command failed");
     notify(result.message || "Done");
     queueDomains(domainsForAction(name), 120);
+    if (name === "camera_flip") loadCameraSettings();
   } catch (error) {
     notify(error.message || "Robot is offline");
   }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "web/robot_web_adapter.h"
+#include "web/robot_web_camera_settings.h"
 #include "web/robot_web_status.h"
 
 #include <esp_http_server.h>
@@ -39,6 +40,9 @@ private:
     static esp_err_t HandleSnapshot(httpd_req_t* request);
     static esp_err_t HandleCameraMode(httpd_req_t* request);
     static esp_err_t HandleCameraStream(httpd_req_t* request);
+    static esp_err_t HandleGetCameraSettings(httpd_req_t* request);
+    static esp_err_t HandleSaveCameraSettings(httpd_req_t* request);
+    static esp_err_t HandleResetCameraSettings(httpd_req_t* request);
     static esp_err_t HandleChatProbe(httpd_req_t* request);
     static esp_err_t HandleClearConversation(httpd_req_t* request);
     static esp_err_t HandleSaveAsrConfig(httpd_req_t* request);
@@ -54,6 +58,7 @@ private:
     httpd_handle_t server_ = nullptr;
     RobotController& controller_;
     RobotWebAdapter robot_adapter_;
+    RobotWebCameraSettings camera_settings_;
     RobotWebStatus robot_status_;
     ChatProbeHandler chat_probe_handler_;
     std::atomic_bool camera_stream_task_active_{false};

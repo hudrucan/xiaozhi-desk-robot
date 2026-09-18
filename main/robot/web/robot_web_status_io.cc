@@ -58,6 +58,9 @@ cJSON* RobotWebStatus::CreateCamera() {
     cJSON_AddBoolToObject(root, "live_camera_available", status.live_camera_available);
     cJSON_AddBoolToObject(root, "live_camera", status.live_camera);
     cJSON_AddBoolToObject(root, "web_camera_live", status.web_camera_live);
+    cJSON_AddStringToObject(root, "camera_sensor", status.camera_sensor.c_str());
+    cJSON_AddStringToObject(root, "camera_mode", status.camera_mode.c_str());
+    cJSON_AddStringToObject(root, "camera_profile", status.camera_profile.c_str());
     return root;
 }
 

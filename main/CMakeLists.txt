@@ -43,6 +43,7 @@ list(APPEND SOURCES
     "platform/backlight.cc"
     "platform/button.cc"
     "platform/esp32_camera.cc"
+    "platform/esp32_camera_explain.cc"
 )
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/platform)
 
@@ -101,6 +102,7 @@ list(APPEND SOURCES
     "robot/sensors/mpu6050_motion_sensor.cc"
     "robot/robot_web_control_server.cc"
     "robot/web/robot_web_adapter.cc"
+    "robot/web/robot_web_camera_settings.cc"
     "robot/web/robot_web_status_core.cc"
     "robot/web/robot_web_status_environment.cc"
     "robot/web/robot_web_status_hardware.cc"

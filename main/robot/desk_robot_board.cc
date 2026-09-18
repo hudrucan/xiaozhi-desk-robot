@@ -519,17 +519,18 @@ private:
         config.ledc_timer = LEDC_TIMER_0;
         config.ledc_channel = LEDC_CHANNEL_0;
         config.pixel_format = PIXFORMAT_JPEG;
-        config.frame_size = FRAMESIZE_VGA;
+        // Allocate framebuffers for the sensor's maximum mode once. Runtime
+        // consumers then switch down to their persisted Web/Mochan/MCP profile
+        // without reallocating or reinitializing the shared camera/I2C bus.
+        config.frame_size = FRAMESIZE_UXGA;
         config.jpeg_quality = 12;
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode = CAMERA_GRAB_LATEST;
-        camera_ = new DeskRobotCamera(config, primary_i2c_.mutex());
+        camera_ = new DeskRobotCamera(config, primary_i2c_.mutex(), camera_settings);
 
         const bool flipped = camera_settings.sensor.mirror && camera_settings.sensor.flip;
         camera_flipped_.store(flipped);
-        camera_->SetHMirror(camera_settings.sensor.mirror);
-        camera_->SetVFlip(camera_settings.sensor.flip);
     }
 
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -658,12 +659,12 @@ private:
 #endif
 
     void ApplyCameraFlip(bool flipped) {
-        camera_->SetHMirror(flipped);
-        camera_->SetVFlip(flipped);
-        camera_settings_.SetOrientation(flipped, flipped);
-        // Retain the original key as a deliberate migration fallback for
-        // firmware versions that do not know the camera settings schema.
-        robot_settings_.SetCameraFlipped(flipped);
+        CameraSettingsConfig settings = camera_settings_.Get();
+        settings.sensor.mirror = flipped;
+        settings.sensor.flip = flipped;
+        if (!ApplyCameraSettings(settings)) {
+            camera_flipped_.store(!flipped);
+        }
     }
 
     bool QueueCameraFlip() {
@@ -1224,6 +1225,10 @@ private:
                camera_->SendWebLiveFrame(sender);
     }
 
+    int GetWebCameraFrameIntervalMs() const override {
+        return camera_ != nullptr ? camera_->WebFrameIntervalMs() : 200;
+    }
+
     void StopWebCameraStream() override {
         if (camera_ != nullptr) {
             camera_->StopWebLive();
@@ -1284,6 +1289,52 @@ private:
     bool SendSnapshot(const SnapshotSender& sender) override {
         return Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
                camera_ != nullptr && camera_->SendSnapshot(sender);
+    }
+
+    CameraSettingsConfig GetCameraSettings() const override {
+        return camera_settings_.Get();
+    }
+
+    bool ApplyCameraSettings(const CameraSettingsConfig& requested) override {
+        if (camera_ == nullptr) {
+            return false;
+        }
+        const CameraSettingsConfig settings = CameraSettingsStore::Normalize(requested);
+        const DeskRobotCamera::PreviewMode previous_mode = camera_->preview_mode();
+        if (!camera_->ApplySettings(settings)) {
+            return false;
+        }
+        camera_settings_.Save(settings);
+        const bool flipped = settings.sensor.mirror && settings.sensor.flip;
+        camera_flipped_.store(flipped);
+        // Keep the legacy orientation key as a downgrade/migration fallback.
+        robot_settings_.SetCameraFlipped(flipped);
+
+        if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+            return true;
+        }
+        // Web settings are applied through the HTTP route, which owns the
+        // stream-client stop/restart handshake. Do not revive a headless Web
+        // mode after its MJPEG client has already disconnected.
+        if (previous_mode == DeskRobotCamera::PreviewMode::kWebLive) {
+            return true;
+        }
+        if (previous_mode == DeskRobotCamera::PreviewMode::kMochanPreview) {
+            const bool started = camera_->StartMochanPreview();
+            if (started && live_camera_task_ != nullptr) {
+                xTaskNotifyGive(live_camera_task_);
+            }
+            return started;
+        }
+        return true;
+    }
+
+    bool ResetCameraSettings() override {
+        return ApplyCameraSettings(CameraSettingsStore::Defaults(false));
+    }
+
+    std::string GetCameraSensorName() const override {
+        return camera_ != nullptr ? camera_->SensorName() : "Unavailable";
     }
 
     SecondaryOled::Config GetSecondaryDisplayConfig() const override {
@@ -1398,6 +1449,23 @@ private:
         status.live_camera_available = live_camera_task_ != nullptr;
         status.live_camera = camera_ != nullptr && camera_->IsMochanPreviewActive();
         status.web_camera_live = camera_ != nullptr && camera_->IsWebLiveActive();
+        status.camera_sensor = camera_ != nullptr ? camera_->SensorName() : "Unavailable";
+        status.camera_mode = camera_ != nullptr && camera_->IsMcpOperationActive()
+                                 ? "mcp"
+                                 : status.web_camera_live
+                                       ? "web"
+                                       : status.live_camera ? "mochan" : "off";
+        switch (camera_settings_.Get().sensor.profile) {
+            case CameraImageProfile::kLowLight:
+                status.camera_profile = "low_light";
+                break;
+            case CameraImageProfile::kCustom:
+                status.camera_profile = "custom";
+                break;
+            default:
+                status.camera_profile = "normal";
+                break;
+        }
         status.motor_speed = motors_.GetSpeedPercent();
         status.drive_duration_ms = drive_duration_ms_.load(std::memory_order_relaxed);
         status.emotion_movement_enabled =

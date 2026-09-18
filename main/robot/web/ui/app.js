@@ -107,6 +107,25 @@ function bindRobotControls() {
 function bindCameraAndLogControls() {
   $("#takeSnapshot").onclick = captureSnapshot;
   $("#browserLive").onclick = toggleBrowserLive;
+  $("#cameraProfile").onchange = setCameraAdvancedState;
+  cameraAdvancedIds.forEach((id) => {
+    $("#" + id).onchange = () => {
+      $("#cameraProfile").value = "custom";
+      setCameraAdvancedState();
+    };
+  });
+  $("#cameraAutoExposure").onchange = () => {
+    $("#cameraProfile").value = "custom";
+    setCameraAdvancedState();
+  };
+  $("#cameraAutoGain").onchange = () => {
+    $("#cameraProfile").value = "custom";
+    setCameraAdvancedState();
+  };
+  $("#cameraSettingsApply").onclick = () => saveCameraSettings(false);
+  $("#cameraSettingsReset").onclick = () => {
+    if (confirm("Reset all camera settings to safe defaults?")) saveCameraSettings(true);
+  };
   pauseLog.onclick = toggleLogPause;
   $("#clearLog").onclick = clearLogs;
   $("#downloadLog").onclick = downloadLogs;
@@ -118,6 +137,7 @@ bindChatAndAsrControls();
 bindRangeControls();
 bindRobotControls();
 bindCameraAndLogControls();
+loadCameraSettings();
 bindOledPreviewToggle();
 restoreLogs();
 startStatusPolling();

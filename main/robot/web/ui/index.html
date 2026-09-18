@@ -558,6 +558,70 @@
                   <div id="snapshotMeta" class="camera-meta">Camera ready</div>
                 </div>
               </div>
+              <details class="camera-settings-panel">
+                <summary>Camera settings <span id="cameraSettingsSummary">OV2640 · Normal</span></summary>
+                <div class="camera-settings-grid">
+                  <label class="field"><span>Image profile</span><select id="cameraProfile">
+                    <option value="normal">Normal</option><option value="low_light">Low light</option>
+                    <option value="custom">Custom</option>
+                  </select></label>
+                  <div></div>
+                  <div class="camera-settings-group"><b>Web stream</b></div>
+                  <label class="field"><span>Resolution</span><select id="cameraWebResolution">
+                    <option value="qvga">QVGA · 320×240</option><option value="hvga">HVGA · 480×320</option>
+                    <option value="vga">VGA · 640×480</option><option value="svga">SVGA · 800×600</option>
+                  </select></label>
+                  <label class="field"><span>JPEG quality · 4–63, lower is better</span><input id="cameraWebQuality" type="number" min="4" max="63" step="1" /></label>
+                  <label class="field"><span>FPS limit · 1–10</span><input id="cameraWebFps" type="number" min="1" max="10" step="1" /></label>
+                  <div class="camera-settings-group"><b>Screen preview</b></div>
+                  <label class="field"><span>Source resolution</span><select id="cameraMochanResolution">
+                    <option value="auto">Auto</option><option value="qvga">QVGA</option>
+                    <option value="hvga">HVGA</option><option value="vga">VGA</option>
+                  </select></label>
+                  <div class="camera-settings-group"><b>MCP photo</b></div>
+                  <label class="field"><span>Resolution</span><select id="cameraMcpResolution">
+                    <option value="vga">VGA · 640×480</option><option value="svga">SVGA · 800×600</option>
+                    <option value="xga">XGA · 1024×768</option><option value="sxga">SXGA · 1280×1024</option>
+                    <option value="uxga">UXGA · 1600×1200</option>
+                  </select></label>
+                  <label class="field"><span>JPEG quality · 4–63, lower is better</span><input id="cameraMcpQuality" type="number" min="4" max="63" step="1" /></label>
+                  <label class="camera-check"><input id="cameraMcpFresh" type="checkbox" /><span>Fresh frame</span></label>
+                </div>
+                <details class="camera-advanced">
+                  <summary>Advanced sensor controls</summary>
+                  <div class="camera-settings-grid">
+                    <label class="field"><span>Brightness</span><select id="cameraBrightness"><option>-2</option><option>-1</option><option>0</option><option>1</option><option>2</option></select></label>
+                    <label class="field"><span>Contrast</span><select id="cameraContrast"><option>-2</option><option>-1</option><option>0</option><option>1</option><option>2</option></select></label>
+                    <label class="field"><span>Saturation</span><select id="cameraSaturation"><option>-2</option><option>-1</option><option>0</option><option>1</option><option>2</option></select></label>
+                    <label class="field"><span>AE level</span><select id="cameraAeLevel"><option>-2</option><option>-1</option><option>0</option><option>1</option><option>2</option></select></label>
+                    <label class="camera-check"><input id="cameraAutoExposure" type="checkbox" /><span>Auto exposure</span></label>
+                    <label class="camera-check"><input id="cameraAec2" type="checkbox" /><span>AEC2</span></label>
+                    <label class="field"><span>Manual exposure</span><input id="cameraManualExposure" type="number" min="0" max="1200" /></label>
+                    <label class="camera-check"><input id="cameraAutoGain" type="checkbox" /><span>Auto gain</span></label>
+                    <label class="field"><span>Manual gain</span><input id="cameraManualGain" type="number" min="0" max="30" /></label>
+                    <label class="field"><span>Gain ceiling</span><select id="cameraGainCeiling">
+                      <option>2</option><option>4</option><option>8</option><option>16</option>
+                      <option>32</option><option>64</option><option>128</option>
+                    </select></label>
+                    <label class="camera-check"><input id="cameraAwb" type="checkbox" /><span>Auto white balance</span></label>
+                    <label class="camera-check"><input id="cameraAwbGain" type="checkbox" /><span>AWB gain</span></label>
+                    <label class="field"><span>White balance mode</span><select id="cameraWbMode">
+                      <option value="0">Auto</option><option value="1">Sunny</option><option value="2">Cloudy</option>
+                      <option value="3">Office</option><option value="4">Home</option>
+                    </select></label>
+                    <label class="camera-check"><input id="cameraBpc" type="checkbox" /><span>Black pixel correction</span></label>
+                    <label class="camera-check"><input id="cameraWpc" type="checkbox" /><span>White pixel correction</span></label>
+                    <label class="camera-check"><input id="cameraGamma" type="checkbox" /><span>Gamma</span></label>
+                    <label class="camera-check"><input id="cameraLenc" type="checkbox" /><span>Lens correction</span></label>
+                    <label class="camera-check"><input id="cameraMirror" type="checkbox" /><span>Mirror</span></label>
+                    <label class="camera-check"><input id="cameraFlipSetting" type="checkbox" /><span>Flip</span></label>
+                  </div>
+                </details>
+                <div class="camera-settings-actions">
+                  <button id="cameraSettingsApply" class="mini-button" disabled>Apply</button>
+                  <button id="cameraSettingsReset" class="mini-button danger-soft" disabled>Reset defaults</button>
+                </div>
+              </details>
             </section>
             <section class="card">
               <div class="section-title">

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "camera/camera_settings.h"
 #include "robot_status.h"
 
 #include <cstddef>
@@ -29,8 +30,13 @@ public:
     virtual bool StartWebCameraStream() = 0;
     virtual bool IsWebCameraStreamEnabled() const = 0;
     virtual bool SendWebCameraFrame(const SnapshotSender& sender) = 0;
+    virtual int GetWebCameraFrameIntervalMs() const = 0;
     virtual void StopWebCameraStream() = 0;
     virtual bool SendSnapshot(const SnapshotSender& sender) = 0;
+    virtual CameraSettingsConfig GetCameraSettings() const = 0;
+    virtual bool ApplyCameraSettings(const CameraSettingsConfig& settings) = 0;
+    virtual bool ResetCameraSettings() = 0;
+    virtual std::string GetCameraSensorName() const = 0;
 
     virtual SecondaryOled::Config GetSecondaryDisplayConfig() const = 0;
     virtual void SetSecondaryDisplayConfig(const SecondaryOled::Config& config) = 0;

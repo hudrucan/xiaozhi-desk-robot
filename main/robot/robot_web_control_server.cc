@@ -34,10 +34,10 @@ constexpr size_t kLogReadChunkSize = 4 * 1024;
 constexpr size_t kChatProbeMaxCodepoints = 512;
 constexpr size_t kChatRequestMaxBytes = 4 * 1024;
 constexpr size_t kAsrConfigRequestMaxBytes = 2 * 1024;
+constexpr size_t kCameraSettingsRequestMaxBytes = 4 * 1024;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
 constexpr uint32_t kCameraStreamTaskStackSize = 8192;
-constexpr TickType_t kCameraStreamFrameDelay = pdMS_TO_TICKS(80);
 constexpr char kCameraStreamContentType[] =
     "multipart/x-mixed-replace;boundary=xiaozhi-camera-frame";
 constexpr char kCameraStreamBoundary[] = "--xiaozhi-camera-frame\r\n";
@@ -287,6 +287,7 @@ RobotWebControlServer::RobotWebControlServer(RobotController& controller,
                                              ChatProbeHandler chat_probe_handler)
     : controller_(controller),
       robot_adapter_(controller),
+      camera_settings_(controller),
       robot_status_(controller),
       chat_probe_handler_(std::move(chat_probe_handler)) {
     BeginLogCapture();
@@ -358,6 +359,24 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleCameraMode,
         .user_ctx = this,
     };
+    const httpd_uri_t get_camera_settings = {
+        .uri = "/api/camera/settings",
+        .method = HTTP_GET,
+        .handler = HandleGetCameraSettings,
+        .user_ctx = this,
+    };
+    const httpd_uri_t save_camera_settings = {
+        .uri = "/api/camera/settings",
+        .method = HTTP_POST,
+        .handler = HandleSaveCameraSettings,
+        .user_ctx = this,
+    };
+    const httpd_uri_t reset_camera_settings = {
+        .uri = "/api/camera/settings",
+        .method = HTTP_DELETE,
+        .handler = HandleResetCameraSettings,
+        .user_ctx = this,
+    };
     const httpd_uri_t chat_probe = {
         .uri = "/api/chat",
         .method = HTTP_POST,
@@ -402,6 +421,9 @@ bool RobotWebControlServer::Start(int port) {
         httpd_register_uri_handler(server_, &snapshot) != ESP_OK ||
         httpd_register_uri_handler(server_, &camera_mode) != ESP_OK ||
         httpd_register_uri_handler(server_, &camera_stream) != ESP_OK ||
+        httpd_register_uri_handler(server_, &get_camera_settings) != ESP_OK ||
+        httpd_register_uri_handler(server_, &save_camera_settings) != ESP_OK ||
+        httpd_register_uri_handler(server_, &reset_camera_settings) != ESP_OK ||
         httpd_register_uri_handler(server_, &get_conversation) != ESP_OK ||
         httpd_register_uri_handler(server_, &chat_probe) != ESP_OK ||
         httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK ||
@@ -877,6 +899,59 @@ esp_err_t RobotWebControlServer::HandleCameraMode(httpd_req_t* request) {
                     R"({"ok":false,"message":"Mode must be web or off"})");
 }
 
+esp_err_t RobotWebControlServer::HandleGetCameraSettings(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    return SendJson(request, "200 OK", self->camera_settings_.Encode());
+}
+
+esp_err_t RobotWebControlServer::HandleSaveCameraSettings(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (request->content_len <= 0 ||
+        request->content_len > static_cast<int>(kCameraSettingsRequestMaxBytes)) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid camera settings request"})");
+    }
+    std::vector<char> body(static_cast<size_t>(request->content_len));
+    size_t received = 0;
+    while (received < body.size()) {
+        const int result = httpd_req_recv(request, body.data() + received,
+                                          body.size() - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return ESP_FAIL;
+        }
+        received += static_cast<size_t>(result);
+    }
+
+    CameraSettingsConfig settings;
+    std::string error;
+    if (!self->camera_settings_.Decode(body.data(), body.size(), settings, error)) {
+        cJSON* response = cJSON_CreateObject();
+        cJSON_AddBoolToObject(response, "ok", false);
+        cJSON_AddStringToObject(response, "message", error.c_str());
+        return SendJson(request, "400 Bad Request",
+                        EncodeJson(response, R"({"ok":false})"));
+    }
+    if (!self->controller_.ApplyCameraSettings(settings)) {
+        return SendJson(request, "409 Conflict",
+                        self->camera_settings_.Encode(false, "Camera is busy"));
+    }
+    return SendJson(request, "200 OK",
+                    self->camera_settings_.Encode(true, "Camera settings applied"));
+}
+
+esp_err_t RobotWebControlServer::HandleResetCameraSettings(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (!self->controller_.ResetCameraSettings()) {
+        return SendJson(request, "409 Conflict",
+                        self->camera_settings_.Encode(false, "Camera is busy"));
+    }
+    return SendJson(request, "200 OK",
+                    self->camera_settings_.Encode(true, "Camera defaults restored"));
+}
+
 esp_err_t RobotWebControlServer::HandleCameraStream(httpd_req_t* request) {
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
     if (!self->controller_.IsWebCameraStreamEnabled()) {
@@ -971,7 +1046,7 @@ esp_err_t RobotWebControlServer::RunCameraStream(httpd_req_t* request) {
             break;
         }
         ++frame_count;
-        vTaskDelay(kCameraStreamFrameDelay);
+        vTaskDelay(pdMS_TO_TICKS(controller_.GetWebCameraFrameIntervalMs()));
     }
 
     if (result == ESP_OK) {
