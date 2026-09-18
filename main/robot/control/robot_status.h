@@ -60,6 +60,8 @@ struct RobotStatus {
 
     bool oled_available = false;
     SecondaryOled::Config oled_config;
+    uint8_t oled_effective_contrast = 128;
+    bool oled_auto_contrast_available = false;
     uint8_t oled_page_count = 0;
 
     std::string version = "unknown";

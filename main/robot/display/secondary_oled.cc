@@ -201,6 +201,9 @@ bool SecondaryOled::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mute
 bool SecondaryOled::Configure(const Config& config) {
     std::lock_guard<std::mutex> lock(mutex_);
     Config normalized = config;
+    if (normalized.auto_contrast_maximum < normalized.auto_contrast_minimum) {
+        normalized.auto_contrast_maximum = normalized.auto_contrast_minimum;
+    }
     if (normalized.brand.empty()) {
         normalized.brand = "Desk Robot";
     }
@@ -236,23 +239,49 @@ bool SecondaryOled::Configure(const Config& config) {
         }
         flip_180_ = normalized.flip_180;
     }
-    if (io_ != nullptr && normalized.contrast != contrast_) {
+    const int requested_contrast =
+        contrast_ < 0 || !normalized.auto_contrast_enabled ? normalized.contrast : contrast_;
+    if (io_ != nullptr && requested_contrast != contrast_) {
         std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
-        const esp_err_t error =
-            esp_lcd_panel_io_tx_param(io_, kSsd1306SetContrast, &normalized.contrast, 1);
+        const uint8_t contrast = static_cast<uint8_t>(requested_contrast);
+        const esp_err_t error = esp_lcd_panel_io_tx_param(
+            io_, kSsd1306SetContrast, &contrast, 1);
         if (error != ESP_OK) {
             ESP_LOGW(TAG, "Cannot set SSD1306 contrast: %s", esp_err_to_name(error));
             return false;
         }
-        contrast_ = normalized.contrast;
+        contrast_ = requested_contrast;
     }
     config_ = std::move(normalized);
     config_.flip_180 = flip_180_;
-    config_.contrast = static_cast<uint8_t>(contrast_ >= 0 ? contrast_ : config_.contrast);
     RebuildLayoutLocked();
     current_page_ = 0;
     next_page_at_us_ = 0;
     dirty_ = true;
+    return true;
+}
+
+uint8_t SecondaryOled::GetEffectiveContrast() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return static_cast<uint8_t>(contrast_ >= 0 ? contrast_ : config_.contrast);
+}
+
+bool SecondaryOled::SetRuntimeContrast(uint8_t contrast) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (io_ == nullptr || bus_mutex_ == nullptr) {
+        return false;
+    }
+    if (contrast_ == contrast) {
+        return true;
+    }
+    std::lock_guard<std::mutex> bus_lock(*bus_mutex_);
+    const esp_err_t error =
+        esp_lcd_panel_io_tx_param(io_, kSsd1306SetContrast, &contrast, 1);
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot set runtime SSD1306 contrast: %s", esp_err_to_name(error));
+        return false;
+    }
+    contrast_ = contrast;
     return true;
 }
 

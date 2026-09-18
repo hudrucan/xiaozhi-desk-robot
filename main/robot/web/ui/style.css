@@ -579,6 +579,12 @@
       .screen-brightness-row {
         grid-template-columns: 102px minmax(70px, 1fr) 40px auto;
       }
+      .oled-auto-contrast-row {
+        grid-template-columns: minmax(130px, 1fr) auto auto;
+      }
+      .oled-auto-contrast-row .audio-value {
+        min-width: 62px;
+      }
       .brightness-auto {
         min-width: 0;
         padding: 7px 8px;
@@ -1480,6 +1486,9 @@
         .brightness-auto-short {
           display: inline;
         }
+        .oled-auto-contrast-row {
+          grid-template-columns: minmax(0, 1fr) auto auto;
+        }
       }
       @media (max-width: 380px) {
         .dpad {
@@ -1512,6 +1521,9 @@
         }
         .audio-row {
           grid-template-columns: 82px 1fr 34px;
+        }
+        .oled-auto-contrast-row {
+          grid-template-columns: minmax(0, 1fr) auto auto;
         }
         .screen-brightness-row {
           grid-template-columns: 72px minmax(54px, 1fr) 32px auto;

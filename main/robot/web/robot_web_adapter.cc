@@ -72,13 +72,29 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         return true;
     }
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-    if (action == "oled_flip" || action == "oled_contrast" || action == "oled_brand" ||
+    if (action == "oled_flip" || action == "oled_contrast" ||
+        action == "oled_auto_contrast" || action == "oled_auto_contrast_minimum" ||
+        action == "oled_auto_contrast_maximum" || action == "oled_brand" ||
         action == "oled_prefix") {
         SecondaryOled::Config config = controller_.GetSecondaryDisplayConfig();
         if (action == "oled_flip") {
             config.flip_180 = !config.flip_180;
         } else if (action == "oled_contrast") {
             config.contrast = static_cast<uint8_t>(std::clamp(value, 0, 255));
+        } else if (action == "oled_auto_contrast") {
+            config.auto_contrast_enabled = value != 0;
+        } else if (action == "oled_auto_contrast_minimum") {
+            config.auto_contrast_minimum =
+                static_cast<uint8_t>(std::clamp(value, 0, 255));
+            if (config.auto_contrast_maximum < config.auto_contrast_minimum) {
+                config.auto_contrast_maximum = config.auto_contrast_minimum;
+            }
+        } else if (action == "oled_auto_contrast_maximum") {
+            config.auto_contrast_maximum =
+                static_cast<uint8_t>(std::clamp(value, 0, 255));
+            if (config.auto_contrast_minimum > config.auto_contrast_maximum) {
+                config.auto_contrast_minimum = config.auto_contrast_maximum;
+            }
         } else if (action == "oled_brand") {
             config.brand = SecondaryDisplayController::NormalizeConfigText(text, "Desk Robot");
         } else {

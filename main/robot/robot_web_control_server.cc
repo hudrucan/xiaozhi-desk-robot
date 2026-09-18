@@ -681,7 +681,21 @@ esp_err_t RobotWebControlServer::HandleChatProbe(httpd_req_t* request) {
         NormalizeChatProbeText(text->valuestring, normalized, codepoint_count, message);
     cJSON_Delete(root);
     bool accepted = false;
+    uint32_t staged_message_id = 0;
     if (valid) {
+        // Publish Sending before Submit can schedule the main-task send. The
+        // resulting "sent"/"speaking" callbacks may run before Submit returns;
+        // writing Sending afterwards would regress the UI to a stale state.
+        {
+            std::lock_guard<std::mutex> lock(self->conversation_mutex_);
+            staged_message_id = self->next_conversation_id_++;
+            self->conversation_messages_.push_back(
+                {staged_message_id, "user", normalized});
+            self->TrimConversationLocked();
+            self->conversation_state_ = "Sending";
+            self->conversation_error_.clear();
+            self->assistant_message_open_ = false;
+        }
         accepted = self->chat_probe_handler_(normalized, message);
     }
     if (accepted) {
@@ -689,19 +703,21 @@ esp_err_t RobotWebControlServer::HandleChatProbe(httpd_req_t* request) {
     } else {
         ESP_LOGW(TAG, "TextChat rejected reason=%s", message.c_str());
     }
-    {
+    if (!accepted) {
         std::lock_guard<std::mutex> lock(self->conversation_mutex_);
-        if (accepted) {
-            self->conversation_messages_.push_back(
-                {self->next_conversation_id_++, "user", normalized});
-            self->TrimConversationLocked();
-            self->conversation_state_ = "Sending";
-            self->conversation_error_.clear();
-            self->assistant_message_open_ = false;
-        } else {
-            self->conversation_state_ = "Error";
-            self->conversation_error_ = message;
+        if (staged_message_id != 0) {
+            const auto staged = std::find_if(
+                self->conversation_messages_.begin(), self->conversation_messages_.end(),
+                [staged_message_id](const ConversationMessage& candidate) {
+                    return candidate.id == staged_message_id;
+                });
+            if (staged != self->conversation_messages_.end()) {
+                self->conversation_messages_.erase(staged);
+            }
         }
+        self->conversation_state_ = "Error";
+        self->conversation_error_ = message;
+        self->assistant_message_open_ = false;
     }
 
     cJSON* response = cJSON_CreateObject();

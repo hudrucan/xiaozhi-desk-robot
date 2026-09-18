@@ -448,7 +448,8 @@
             </div>
             <div class="threshold">
               <div class="threshold-head">
-                <span>OLED contrast</span><b id="oledContrastValue">50%</b>
+                <span>OLED contrast · manual / fallback</span
+                ><b id="oledContrastValue">50%</b>
               </div>
               <input
                 id="oledContrast"
@@ -458,6 +459,40 @@
                 step="1"
                 value="50"
               />
+            </div>
+            <div class="audio-row oled-auto-contrast-row">
+              <span class="audio-name"
+                ><b>OLED auto contrast</b><small>BH1750 ambient light</small></span
+              ><span class="audio-value" id="oledEffectiveContrast">—</span
+              ><label class="toggle brightness-auto"
+                ><input id="oledAutoContrast" type="checkbox" /><span
+                  class="brightness-auto-long">Automatic contrast</span
+                ><span class="brightness-auto-short">Auto</span></label
+              >
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>OLED auto minimum</b><small>Dark-room floor</small></span
+              ><input
+                id="oledAutoContrastMinimum"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="19"
+              /><span class="audio-value" id="oledAutoContrastMinimumValue">19%</span>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>OLED auto maximum</b><small>Bright-room ceiling</small></span
+              ><input
+                id="oledAutoContrastMaximum"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value="88"
+              /><span class="audio-value" id="oledAutoContrastMaximumValue">88%</span>
             </div>
             <div class="display-settings">
               <div class="oled-designer">

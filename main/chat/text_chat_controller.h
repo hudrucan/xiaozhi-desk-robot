@@ -35,7 +35,7 @@ public:
     bool OnTtsStop();
     void OnAssistantText(const std::string& text);
     std::string ResolveIncomingTranscript(const std::string& text);
-    void OnMcpMessage() const;
+    void OnMcpMessage();
 
 private:
     class WebChatMcpBridge {
@@ -70,6 +70,7 @@ private:
     void CompleteAfterPlayback();
     void ResumeListening();
     void ResetActiveState();
+    void RefreshDeadline();
 };
 
 #endif  // TEXT_CHAT_CONTROLLER_H_

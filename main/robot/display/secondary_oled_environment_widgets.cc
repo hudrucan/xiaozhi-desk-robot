@@ -121,6 +121,12 @@ void SecondaryOled::RenderEnvironmentWidgetLocked(
                                          : "--%";
         const auto mode = static_cast<ClimateMode>(std::min<uint8_t>(widget.mode, 2));
         if (mode == ClimateMode::kTemperatureAndHumidity) {
+            if (widget.size == WidgetSize::kLarge) {
+                DrawIconTextFitted(left, placement.y, content_width, placement.height,
+                                   kClimateIcon, temperature + " " + humidity,
+                                   FontSize::kEmphasis, allow_icon, 16);
+                return;
+            }
             DrawIconTwoLinesFitted(left, placement.y, content_width, placement.height,
                                    kClimateIcon, temperature, humidity, FontSize::kRegular,
                                    allow_icon);

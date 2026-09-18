@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr int64_t kTimeoutUs = 60LL * 1000 * 1000;
+constexpr int64_t kActivityTimeoutUs = 60LL * 1000 * 1000;
 constexpr int64_t kTtsStopGraceUs = 750LL * 1000;
 constexpr int64_t kAudioQuietGraceUs = 300LL * 1000;
 
@@ -148,6 +148,12 @@ void TextChatController::ResetActiveState() {
     tts_stop_us_.store(0);
 }
 
+void TextChatController::RefreshDeadline() {
+    if (pending_.load()) {
+        deadline_us_.store(esp_timer_get_time() + kActivityTimeoutUs);
+    }
+}
+
 void TextChatController::HandleClockTick() {
     if (tts_stopped_.load()) {
         CompleteAfterPlayback();
@@ -159,13 +165,24 @@ void TextChatController::HandleClockTick() {
         return;
     }
 
+    const bool response_started =
+        tts_active_.load() || assistant_started_.load() || audio_packets_.load() > 0;
     ResetActiveState();
     web_chat_bridge_.Clear();
-    ESP_LOGE(TAG, "Rejected reason=timeout");
-    Emit("error", "Protocol timeout: no TTS response");
+    const char* detail = response_started ? "Protocol timeout: TTS stream stalled"
+                                          : "Protocol timeout: no TTS response";
+    ESP_LOGE(TAG, "Rejected reason=%s", response_started ? "stream_timeout" : "timeout");
+    Emit("error", detail);
     if (application_.protocol_ && application_.protocol_->IsAudioChannelOpened()) {
+        if (response_started) {
+            application_.AbortSpeaking(kAbortReasonNone);
+            application_.audio_service_.ResetDecoder();
+        }
         if (resume_listening_) {
             ResumeListening();
+        } else if (application_.GetDeviceState() == kDeviceStateSpeaking) {
+            application_.listening_mode_ = application_.GetDefaultListeningMode();
+            application_.SetDeviceState(kDeviceStateListening);
         } else if (application_.GetDeviceState() == kDeviceStateListening) {
             application_.SetDeviceState(kDeviceStateIdle);
         }
@@ -202,6 +219,7 @@ void TextChatController::RecordIncomingAudio() {
     if (pending_.load() || tts_active_.load()) {
         audio_packets_.fetch_add(1);
         last_audio_us_.store(esp_timer_get_time());
+        RefreshDeadline();
     }
 }
 
@@ -213,6 +231,7 @@ void TextChatController::OnTtsStart() {
     if (pending_.load()) {
         tts_active_.store(true);
         tts_stopped_.store(false);
+        RefreshDeadline();
         ESP_LOGI(TAG, "TTS started");
     }
     Emit("speaking");
@@ -235,6 +254,7 @@ bool TextChatController::OnTtsStop() {
 
 void TextChatController::OnAssistantText(const std::string& text) {
     if (pending_.load()) {
+        RefreshDeadline();
         if (!assistant_started_.exchange(true)) {
             ESP_LOGI(TAG, "Assistant started");
         }
@@ -249,6 +269,7 @@ std::string TextChatController::ResolveIncomingTranscript(const std::string& tex
         return text;
     }
 
+    RefreshDeadline();
     ESP_LOGI(TAG, "Incoming STT text=%s", text.c_str());
     if (text != kMcpTrigger) {
         return text;
@@ -261,8 +282,9 @@ std::string TextChatController::ResolveIncomingTranscript(const std::string& tex
     return original;
 }
 
-void TextChatController::OnMcpMessage() const {
+void TextChatController::OnMcpMessage() {
     if (pending_.load()) {
+        RefreshDeadline();
         ESP_LOGI(TAG, "MCP message");
     }
 }
@@ -383,7 +405,7 @@ void TextChatController::Run(const std::string& text) {
     }
 
     application_.audio_service_.ResetDecoder();
-    deadline_us_.store(esp_timer_get_time() + kTimeoutUs);
+    RefreshDeadline();
 
     if (!resume_listening_) {
         application_.listening_mode_ = application_.GetDefaultListeningMode();

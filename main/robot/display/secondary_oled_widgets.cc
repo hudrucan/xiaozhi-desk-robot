@@ -233,6 +233,13 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
         return;
     }
 
+    // Climate owns its combined-value layout. Keep the large variant on one
+    // fitted line instead of relying on the generic single-line dispatch.
+    if (widget->type == WidgetType::kClimate && widget->size == WidgetSize::kLarge) {
+        RenderEnvironmentWidgetLocked(placement, *widget);
+        return;
+    }
+
     if (placement.height == 16 ||
         (placement.width == 128 && widget->size == WidgetSize::kLarge)) {
         RenderSingleLineWidgetLocked(placement, *widget);

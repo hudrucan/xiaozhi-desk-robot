@@ -26,6 +26,11 @@ function domainInterval(name) {
   if (name === "motors") return motorsActive ? 250 : 1000;
   if (name === "sensors") return motorsActive ? 300 : 1000;
   if (["battery", "camera", "audio"].includes(name)) return 1000;
+  if (name === "display") {
+    return statusCache.auto_brightness_enabled || statusCache.oled_auto_contrast_enabled
+      ? 1000
+      : null;
+  }
   if (name === "environment") return 1500;
   if (name === "system") return 5000;
   if (name === "chat") return ["Sending", "Waiting", "Speaking"].includes(chatBackendState)
@@ -177,7 +182,16 @@ function renderDisplayStatus(status) {
   const oled = $("#oledState");
   oled.className = "value health " + (status.oled_available ? "good" : "bad");
   oled.querySelector("span").textContent = status.oled_available ? "Ready" : "Offline";
-  setRange($("#screenBrightness"), status.screen_brightness, $("#screenValue"), "%");
+  const screenBrightness = Number(status.screen_brightness);
+  if (Number.isFinite(screenBrightness)) {
+    const screenInput = $("#screenBrightness");
+    if (document.activeElement !== screenInput) {
+      screenInput.value = screenBrightness;
+    }
+    if (status.auto_brightness_enabled || document.activeElement !== screenInput) {
+      $("#screenValue").textContent = screenBrightness + "%";
+    }
+  }
   if (document.activeElement !== $("#autoBrightness")) {
     $("#autoBrightness").checked = !!status.auto_brightness_enabled;
   }
@@ -193,6 +207,34 @@ function renderDisplayStatus(status) {
     const contrast = Math.round(Math.max(0, Math.min(255, status.oled_contrast)) * 100 / 255);
     setRange($("#oledContrast"), contrast, $("#oledContrastValue"), "%");
   }
+  if (document.activeElement !== $("#oledAutoContrast")) {
+    $("#oledAutoContrast").checked = !!status.oled_auto_contrast_enabled;
+  }
+  if (Number.isFinite(status.oled_auto_contrast_minimum)) {
+    const minimum = Math.round(
+      Math.max(0, Math.min(255, status.oled_auto_contrast_minimum)) * 100 / 255,
+    );
+    setRange($("#oledAutoContrastMinimum"), minimum,
+      $("#oledAutoContrastMinimumValue"), "%");
+  }
+  if (Number.isFinite(status.oled_auto_contrast_maximum)) {
+    const maximum = Math.round(
+      Math.max(0, Math.min(255, status.oled_auto_contrast_maximum)) * 100 / 255,
+    );
+    setRange($("#oledAutoContrastMaximum"), maximum,
+      $("#oledAutoContrastMaximumValue"), "%");
+  }
+  if (Number.isFinite(status.oled_effective_contrast)) {
+    const effective = Math.round(
+      Math.max(0, Math.min(255, status.oled_effective_contrast)) * 100 / 255,
+    );
+    const source = status.oled_auto_contrast_enabled
+      ? status.oled_auto_contrast_available ? " live" : " fallback"
+      : " manual";
+    $("#oledEffectiveContrast").textContent = effective + "%" + source;
+  }
+  $("#oledAutoContrastMinimum").disabled = !status.oled_auto_contrast_enabled;
+  $("#oledAutoContrastMaximum").disabled = !status.oled_auto_contrast_enabled;
   $("#lightsAction").classList.toggle("on", (status.status_light_brightness || 0) > 0);
   $("#displayFlip").classList.toggle("on", !!status.display_flipped);
   $("#oledFlip").classList.toggle("on", !!status.oled_flipped);

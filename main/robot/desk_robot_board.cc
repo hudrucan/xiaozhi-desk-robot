@@ -1009,6 +1009,9 @@ private:
                                int64_t timestamp_us) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
         self->camera_image_policy_.UpdateAmbientLight(valid, illuminance_lux, timestamp_us);
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+        self->secondary_display_.UpdateAmbientLight(valid, illuminance_lux, timestamp_us);
+#endif
         if (!valid) {
             self->auto_brightness_policy_.ResetReading();
             return;
@@ -1507,6 +1510,9 @@ private:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         status.oled_available = secondary_display_.IsAvailable();
         status.oled_config = secondary_display_.GetConfig();
+        status.oled_effective_contrast = secondary_display_.GetEffectiveContrast();
+        status.oled_auto_contrast_available =
+            secondary_display_.IsAmbientLightAvailable();
         status.oled_page_count = secondary_display_.GetPageCount();
 #endif
         const esp_app_desc_t* app_desc = esp_app_get_description();

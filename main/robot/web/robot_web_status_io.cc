@@ -24,6 +24,16 @@ cJSON* RobotWebStatus::CreateDisplay() {
     cJSON_AddBoolToObject(root, "oled_available", status.oled_available);
     cJSON_AddBoolToObject(root, "oled_flipped", status.oled_config.flip_180);
     cJSON_AddNumberToObject(root, "oled_contrast", status.oled_config.contrast);
+    cJSON_AddBoolToObject(root, "oled_auto_contrast_enabled",
+                          status.oled_config.auto_contrast_enabled);
+    cJSON_AddNumberToObject(root, "oled_auto_contrast_minimum",
+                            status.oled_config.auto_contrast_minimum);
+    cJSON_AddNumberToObject(root, "oled_auto_contrast_maximum",
+                            status.oled_config.auto_contrast_maximum);
+    cJSON_AddNumberToObject(root, "oled_effective_contrast",
+                            status.oled_effective_contrast);
+    cJSON_AddBoolToObject(root, "oled_auto_contrast_available",
+                          status.oled_auto_contrast_available);
     cJSON_AddNumberToObject(root, "oled_page_count", status.oled_page_count);
     cJSON_AddStringToObject(root, "oled_brand", status.oled_config.brand.c_str());
     cJSON_AddStringToObject(root, "oled_distance_prefix",

@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "config/hardware_config.h"
+#include "config/tuning.h"
 #include "settings.h"
 
 #include <esp_heap_caps.h>
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <utility>
 
 #define TAG "SecondaryDisplay"
@@ -124,6 +126,14 @@ bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mu
     config.flip_180 = settings.GetBool("oled_flip", SECONDARY_OLED_FLIP_180);
     config.contrast = static_cast<uint8_t>(
         std::clamp(static_cast<int>(settings.GetInt("oled_contrast", 128)), 0, 255));
+    config.auto_contrast_enabled = settings.GetBool("oled_ac", false);
+    config.auto_contrast_minimum = static_cast<uint8_t>(std::clamp(
+        static_cast<int>(settings.GetInt("oled_acmin", OLED_AUTO_CONTRAST_DEFAULT_MIN)), 0, 255));
+    config.auto_contrast_maximum = static_cast<uint8_t>(std::clamp(
+        static_cast<int>(settings.GetInt("oled_acmax", OLED_AUTO_CONTRAST_DEFAULT_MAX)), 0, 255));
+    if (config.auto_contrast_maximum < config.auto_contrast_minimum) {
+        config.auto_contrast_maximum = config.auto_contrast_minimum;
+    }
     config.brand = settings.GetString("oled_brand", "Desk Robot");
     config.distance_prefix = settings.GetString("oled_prefix", "Dist");
     const bool migrate_widgets = LoadWidgets(settings, config);
@@ -184,6 +194,9 @@ void SecondaryDisplayController::PersistConfig(const SecondaryOled::Config& conf
     Settings settings("desk_robot", true);
     settings.SetBool("oled_flip", config.flip_180);
     settings.SetInt("oled_contrast", config.contrast);
+    settings.SetBool("oled_ac", config.auto_contrast_enabled);
+    settings.SetInt("oled_acmin", config.auto_contrast_minimum);
+    settings.SetInt("oled_acmax", config.auto_contrast_maximum);
     settings.SetString("oled_brand", config.brand);
     settings.SetString("oled_prefix", config.distance_prefix);
     settings.SetInt("oled_w_ver", kWidgetSchemaVersion);
@@ -197,6 +210,9 @@ void SecondaryDisplayController::PersistConfig(const SecondaryOled::Config& conf
 }
 
 void SecondaryDisplayController::QueueConfig(SecondaryOled::Config config) {
+    if (config.auto_contrast_maximum < config.auto_contrast_minimum) {
+        config.auto_contrast_maximum = config.auto_contrast_minimum;
+    }
     config.brand = NormalizeConfigText(config.brand, "Desk Robot");
     config.distance_prefix = NormalizeConfigText(config.distance_prefix, "Dist");
     if (config.distance_prefix.size() > 10) {
@@ -205,6 +221,81 @@ void SecondaryDisplayController::QueueConfig(SecondaryOled::Config config) {
     Application::GetInstance().Schedule([this, config = std::move(config)]() {
         if (oled_.Configure(config)) {
             PersistConfig(config);
+            std::lock_guard<std::mutex> lock(auto_contrast_mutex_);
+            filtered_lux_valid_ = false;
+            last_auto_contrast_ = -1;
+            last_auto_contrast_update_us_ = 0;
+        }
+    });
+}
+
+int SecondaryDisplayController::AutoContrastTarget(float illuminance_lux) {
+    if (illuminance_lux < AUTO_BRIGHTNESS_DARK_MAX_LUX) {
+        return OLED_AUTO_CONTRAST_DARK;
+    }
+    if (illuminance_lux < AUTO_BRIGHTNESS_DIM_MAX_LUX) {
+        return OLED_AUTO_CONTRAST_DIM;
+    }
+    if (illuminance_lux < AUTO_BRIGHTNESS_INDOOR_MAX_LUX) {
+        return OLED_AUTO_CONTRAST_INDOOR;
+    }
+    if (illuminance_lux < AUTO_BRIGHTNESS_BRIGHT_MAX_LUX) {
+        return OLED_AUTO_CONTRAST_BRIGHT;
+    }
+    if (illuminance_lux < AUTO_BRIGHTNESS_VERY_BRIGHT_MAX_LUX) {
+        return OLED_AUTO_CONTRAST_VERY_BRIGHT;
+    }
+    return OLED_AUTO_CONTRAST_SUNLIT;
+}
+
+void SecondaryDisplayController::UpdateAmbientLight(bool valid, float illuminance_lux,
+                                                     int64_t timestamp_us) {
+    const bool sample_valid =
+        valid && std::isfinite(illuminance_lux) && illuminance_lux >= 0.0f;
+    ambient_light_available_.store(sample_valid, std::memory_order_relaxed);
+    const SecondaryOled::Config config = oled_.GetConfig();
+    if (!config.auto_contrast_enabled) {
+        return;
+    }
+
+    int target = config.contrast;
+    {
+        std::lock_guard<std::mutex> lock(auto_contrast_mutex_);
+        if (!sample_valid) {
+            filtered_lux_valid_ = false;
+        } else {
+            if (!filtered_lux_valid_) {
+                filtered_lux_ = illuminance_lux;
+                filtered_lux_valid_ = true;
+            } else {
+                filtered_lux_ +=
+                    OLED_AUTO_CONTRAST_FILTER_ALPHA * (illuminance_lux - filtered_lux_);
+            }
+            target = std::clamp(AutoContrastTarget(filtered_lux_),
+                                static_cast<int>(config.auto_contrast_minimum),
+                                static_cast<int>(config.auto_contrast_maximum));
+        }
+
+        const bool unchanged = last_auto_contrast_ == target;
+        const bool within_hysteresis =
+            sample_valid && last_auto_contrast_ >= 0 &&
+            std::abs(target - last_auto_contrast_) < OLED_AUTO_CONTRAST_HYSTERESIS;
+        if (unchanged || within_hysteresis) {
+            return;
+        }
+        if (sample_valid && last_auto_contrast_update_us_ > 0 &&
+            timestamp_us >= last_auto_contrast_update_us_ &&
+            timestamp_us - last_auto_contrast_update_us_ <
+                static_cast<int64_t>(OLED_AUTO_CONTRAST_MIN_UPDATE_INTERVAL_MS) * 1000) {
+            return;
+        }
+        last_auto_contrast_ = target;
+        last_auto_contrast_update_us_ = timestamp_us;
+    }
+
+    Application::GetInstance().Schedule([this, contrast = static_cast<uint8_t>(target)]() {
+        if (oled_.GetConfig().auto_contrast_enabled) {
+            oled_.SetRuntimeContrast(contrast);
         }
     });
 }

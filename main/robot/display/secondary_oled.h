@@ -80,6 +80,9 @@ public:
     struct Config {
         bool flip_180 = false;
         uint8_t contrast = 128;
+        bool auto_contrast_enabled = false;
+        uint8_t auto_contrast_minimum = 48;
+        uint8_t auto_contrast_maximum = 224;
         std::string brand = "Desk Robot";
         std::string distance_prefix = "Dist";
         std::array<WidgetConfig, secondary_oled_layout::kMaxWidgets> widgets = {{
@@ -136,6 +139,8 @@ public:
                     int height, bool flip_180);
     bool Configure(const Config& config);
     Config GetConfig() const;
+    uint8_t GetEffectiveContrast() const;
+    bool SetRuntimeContrast(uint8_t contrast);
     uint8_t GetPageCount() const;
     void UpdateTelemetry(const Telemetry& telemetry);
     void ShowTemporaryText(const std::string& text);

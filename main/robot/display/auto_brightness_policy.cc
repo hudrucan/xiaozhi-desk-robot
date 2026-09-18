@@ -64,20 +64,20 @@ void AutoBrightnessPolicy::ResetReading() {
 }
 
 int AutoBrightnessPolicy::TargetForLux(float illuminance_lux) {
-    if (illuminance_lux < 15.0f) {
-        return 15;
+    if (illuminance_lux < AUTO_BRIGHTNESS_DARK_MAX_LUX) {
+        return AUTO_BRIGHTNESS_DARK_PERCENT;
     }
-    if (illuminance_lux < 60.0f) {
-        return 25;
+    if (illuminance_lux < AUTO_BRIGHTNESS_DIM_MAX_LUX) {
+        return AUTO_BRIGHTNESS_DIM_PERCENT;
     }
-    if (illuminance_lux < 150.0f) {
-        return 40;
+    if (illuminance_lux < AUTO_BRIGHTNESS_INDOOR_MAX_LUX) {
+        return AUTO_BRIGHTNESS_INDOOR_PERCENT;
     }
-    if (illuminance_lux < 350.0f) {
-        return 55;
+    if (illuminance_lux < AUTO_BRIGHTNESS_BRIGHT_MAX_LUX) {
+        return AUTO_BRIGHTNESS_BRIGHT_PERCENT;
     }
-    if (illuminance_lux < 700.0f) {
-        return 70;
+    if (illuminance_lux < AUTO_BRIGHTNESS_VERY_BRIGHT_MAX_LUX) {
+        return AUTO_BRIGHTNESS_VERY_BRIGHT_PERCENT;
     }
-    return 85;
+    return AUTO_BRIGHTNESS_SUNLIT_PERCENT;
 }

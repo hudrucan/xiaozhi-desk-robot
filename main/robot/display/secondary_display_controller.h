@@ -22,12 +22,17 @@ public:
                     TelemetryProvider telemetry_provider);
     bool IsAvailable() const { return oled_.IsAvailable(); }
     SecondaryOled::Config GetConfig() const { return oled_.GetConfig(); }
+    uint8_t GetEffectiveContrast() const { return oled_.GetEffectiveContrast(); }
+    bool IsAmbientLightAvailable() const {
+        return ambient_light_available_.load(std::memory_order_relaxed);
+    }
     uint8_t GetPageCount() const { return oled_.GetPageCount(); }
 
     void SetNetworkState(SecondaryOled::NetworkState state) {
         network_state_.store(state, std::memory_order_relaxed);
     }
     void QueueConfig(SecondaryOled::Config config);
+    void UpdateAmbientLight(bool valid, float illuminance_lux, int64_t timestamp_us);
     bool QueueTemporaryText(const std::string& text, int duration_ms);
 
     static int WidgetActionIndex(const std::string& action, const std::string& prefix);
@@ -42,12 +47,19 @@ private:
     void RunTask();
     void PersistConfig(const SecondaryOled::Config& config);
     void ClearTemporaryText();
+    static int AutoContrastTarget(float illuminance_lux);
 
     SecondaryOled oled_;
     std::atomic<SecondaryOled::NetworkState> network_state_{
         SecondaryOled::NetworkState::kConnecting};
+    std::atomic_bool ambient_light_available_{false};
     TaskHandle_t task_ = nullptr;
     esp_timer_handle_t temporary_text_reset_timer_ = nullptr;
     void* telemetry_context_ = nullptr;
     TelemetryProvider telemetry_provider_ = nullptr;
+    std::mutex auto_contrast_mutex_;
+    bool filtered_lux_valid_ = false;
+    float filtered_lux_ = 0.0f;
+    int last_auto_contrast_ = -1;
+    int64_t last_auto_contrast_update_us_ = 0;
 };

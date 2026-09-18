@@ -28,6 +28,19 @@ function bindRangeControls() {
   oledContrast.onchange = () => action("oled_contrast", {
     value: Math.round(+oledContrast.value * 255 / 100),
   });
+  [
+    ["oledAutoContrastMinimum", "oledAutoContrastMinimumValue",
+      "oled_auto_contrast_minimum"],
+    ["oledAutoContrastMaximum", "oledAutoContrastMaximumValue",
+      "oled_auto_contrast_maximum"],
+  ].forEach(([inputId, labelId, actionName]) => {
+    const input = $("#" + inputId);
+    const label = $("#" + labelId);
+    input.oninput = () => { label.textContent = input.value + "%"; };
+    input.onchange = () => action(actionName, {
+      value: Math.round(+input.value * 255 / 100),
+    });
+  });
 
   [
     ["speakerVolume", "speakerValue", "speaker_volume", "%"],
@@ -64,6 +77,8 @@ function bindRobotControls() {
     action("emotion_movement", { value: event.target.checked ? 1 : 0 });
   $("#autoBrightness").onchange = (event) =>
     action("auto_brightness", { value: event.target.checked ? 1 : 0 });
+  $("#oledAutoContrast").onchange = (event) =>
+    action("oled_auto_contrast", { value: event.target.checked ? 1 : 0 });
   $("#capacityStart").onclick = () => action("battery_capacity_start");
   $("#capacityStop").onclick = () => action("battery_capacity_stop");
   $("#capacityReset").onclick = () => {
