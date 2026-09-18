@@ -132,6 +132,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         "${ROBOT_WEB_UI_DIR}/js/drive.js"
         "${ROBOT_WEB_UI_DIR}/js/oled.js"
         "${ROBOT_WEB_UI_DIR}/js/chat_asr.js"
+        "${ROBOT_WEB_UI_DIR}/js/server_config.js"
         "${ROBOT_WEB_UI_DIR}/js/status.js"
         "${ROBOT_WEB_UI_DIR}/js/camera_logs.js"
         "${ROBOT_WEB_UI_DIR}/app.js"

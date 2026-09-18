@@ -1,6 +1,7 @@
 #include "robot_web_control_server.h"
 #include "robot_web_control_page.h"
 #include "asr_settings.h"
+#include "settings.h"
 #include "control/robot_controller.h"
 #include "web/robot_web_status_routes.h"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +36,8 @@ constexpr size_t kLogReadChunkSize = 4 * 1024;
 constexpr size_t kChatProbeMaxCodepoints = 512;
 constexpr size_t kChatRequestMaxBytes = 4 * 1024;
 constexpr size_t kAsrConfigRequestMaxBytes = 2 * 1024;
+constexpr size_t kServerConfigRequestMaxBytes = 768;
+constexpr size_t kServerUrlMaxBytes = 512;
 constexpr size_t kCameraSettingsRequestMaxBytes = 4 * 1024;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
@@ -50,6 +54,49 @@ uint64_t log_stream_start = 0;
 uint64_t log_stream_end = 0;
 std::atomic<vprintf_like_t> previous_log_vprintf = nullptr;
 std::atomic<bool> log_capture_installed = false;
+
+std::string EncodeServerConfig(bool ok = true, const char* message = nullptr,
+                               bool restart_required = false) {
+    Settings settings("wifi", false);
+    const std::string configured_url = settings.GetString("ota_url");
+    const std::string effective_url = configured_url.empty() ? CONFIG_OTA_URL : configured_url;
+
+    cJSON* root = cJSON_CreateObject();
+    if (root == nullptr) {
+        return R"({"ok":false,"message":"Out of memory"})";
+    }
+    cJSON_AddBoolToObject(root, "ok", ok);
+    cJSON_AddStringToObject(root, "configured_url", configured_url.c_str());
+    cJSON_AddStringToObject(root, "effective_url", effective_url.c_str());
+    cJSON_AddStringToObject(root, "default_url", CONFIG_OTA_URL);
+    cJSON_AddBoolToObject(root, "using_default", configured_url.empty());
+    cJSON_AddBoolToObject(root, "restart_required", restart_required);
+    if (message != nullptr) {
+        cJSON_AddStringToObject(root, "message", message);
+    }
+    char* encoded = cJSON_PrintUnformatted(root);
+    const std::string result = encoded != nullptr ? encoded : R"({"ok":false})";
+    cJSON_free(encoded);
+    cJSON_Delete(root);
+    return result;
+}
+
+bool IsValidServerUrl(const std::string& url) {
+    if (url.empty()) {
+        return true;
+    }
+    if (url.size() > kServerUrlMaxBytes ||
+        (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)) {
+        return false;
+    }
+    const size_t scheme_end = url.find("://") + 3;
+    if (scheme_end >= url.size() || url[scheme_end] == '/') {
+        return false;
+    }
+    return std::none_of(url.begin(), url.end(), [](unsigned char value) {
+        return std::isspace(value) || std::iscntrl(value);
+    });
+}
 
 void AppendLog(const char* data, size_t length) {
     if (data == nullptr || length == 0) {
@@ -313,7 +360,7 @@ bool RobotWebControlServer::Start(int port) {
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
-    config.max_uri_handlers = 25;
+    config.max_uri_handlers = 28;
     config.stack_size = 6144;
     config.send_wait_timeout = 2;
 
@@ -419,6 +466,18 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleClearGeminiApiKey,
         .user_ctx = this,
     };
+    const httpd_uri_t get_server_config = {
+        .uri = "/api/server",
+        .method = HTTP_GET,
+        .handler = HandleGetServerConfig,
+        .user_ctx = this,
+    };
+    const httpd_uri_t save_server_config = {
+        .uri = "/api/server",
+        .method = HTTP_POST,
+        .handler = HandleSaveServerConfig,
+        .user_ctx = this,
+    };
     const bool routes_ok = httpd_register_uri_handler(server_, &root) == ESP_OK &&
                            RegisterRobotWebStatusRoutes(server_, this, HandleDomainStatus);
     if (!routes_ok ||
@@ -436,7 +495,9 @@ bool RobotWebControlServer::Start(int port) {
         httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK ||
         httpd_register_uri_handler(server_, &get_asr_config) != ESP_OK ||
         httpd_register_uri_handler(server_, &save_asr_config) != ESP_OK ||
-        httpd_register_uri_handler(server_, &clear_gemini_api_key) != ESP_OK) {
+        httpd_register_uri_handler(server_, &clear_gemini_api_key) != ESP_OK ||
+        httpd_register_uri_handler(server_, &get_server_config) != ESP_OK ||
+        httpd_register_uri_handler(server_, &save_server_config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register local control routes");
         Stop();
         return false;
@@ -564,6 +625,68 @@ esp_err_t RobotWebControlServer::HandleGetConversation(httpd_req_t* request) {
 esp_err_t RobotWebControlServer::HandleGetAsrConfig(httpd_req_t* request) {
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
     return SendJson(request, "200 OK", self->BuildAsrStatus());
+}
+
+esp_err_t RobotWebControlServer::HandleGetServerConfig(httpd_req_t* request) {
+    return SendJson(request, "200 OK", EncodeServerConfig());
+}
+
+esp_err_t RobotWebControlServer::HandleSaveServerConfig(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (request->content_len <= 0 ||
+        static_cast<size_t>(request->content_len) > kServerConfigRequestMaxBytes) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid request"})");
+    }
+
+    std::vector<char> body(static_cast<size_t>(request->content_len) + 1, '\0');
+    size_t received = 0;
+    while (received < static_cast<size_t>(request->content_len)) {
+        const int result =
+            httpd_req_recv(request, body.data() + received, request->content_len - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return ESP_FAIL;
+        }
+        received += result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), received);
+    const cJSON* url =
+        root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "url") : nullptr;
+    if (!cJSON_IsString(url) || url->valuestring == nullptr) {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Missing server URL"})");
+    }
+    const std::string requested_url = url->valuestring;
+    cJSON_Delete(root);
+    if (!IsValidServerUrl(requested_url)) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Use a valid http:// or https:// URL"})");
+    }
+
+    std::string current_url;
+    {
+        Settings current_settings("wifi", false);
+        current_url = current_settings.GetString("ota_url");
+    }
+    const bool changed = current_url != requested_url;
+    if (changed) {
+        Settings settings("wifi", true);
+        settings.SetString("ota_url", requested_url);
+    }
+    ESP_LOGI(TAG, "Bootstrap server %s (%s)", changed ? "updated" : "unchanged",
+             requested_url.empty() ? "firmware default" : "custom");
+    if (!self->controller_.Reboot()) {
+        return SendJson(request, "500 Internal Server Error",
+                        EncodeServerConfig(false,
+                                           "Server saved but reboot could not be scheduled"));
+    }
+    return SendJson(request, "200 OK",
+                    EncodeServerConfig(true, "Server saved; robot is restarting", true));
 }
 
 esp_err_t RobotWebControlServer::HandleLogs(httpd_req_t* request) {

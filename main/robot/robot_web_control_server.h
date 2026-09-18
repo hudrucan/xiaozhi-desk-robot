@@ -35,6 +35,8 @@ private:
     static esp_err_t HandleDomainStatus(httpd_req_t* request);
     static esp_err_t HandleGetConversation(httpd_req_t* request);
     static esp_err_t HandleGetAsrConfig(httpd_req_t* request);
+    static esp_err_t HandleGetServerConfig(httpd_req_t* request);
+    static esp_err_t HandleSaveServerConfig(httpd_req_t* request);
     static esp_err_t HandleLogs(httpd_req_t* request);
     static esp_err_t HandleAction(httpd_req_t* request);
     static esp_err_t HandleLiveDrive(httpd_req_t* request);

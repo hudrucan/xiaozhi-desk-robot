@@ -152,10 +152,12 @@ function bindCameraAndLogControls() {
 }
 
 bindChatAndAsrControls();
+bindServerConfigControls();
 bindRangeControls();
 bindRobotControls();
 bindCameraAndLogControls();
 loadCameraSettings();
+loadServerConfig();
 bindOledPreviewToggle();
 restoreLogs();
 startStatusPolling();

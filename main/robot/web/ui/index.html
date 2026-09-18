@@ -185,6 +185,31 @@
           </section>
           <section class="card">
             <div class="section-title">
+              <strong>Xiaozhi server</strong><span id="serverStatus">Checking</span>
+            </div>
+            <label class="field">
+              <span>Bootstrap / OTA endpoint</span>
+              <input
+                id="serverUrl"
+                class="text-input"
+                type="url"
+                inputmode="url"
+                maxlength="512"
+                autocomplete="off"
+                placeholder="http://local-server:12800/xiaozhi/ota"
+              />
+            </label>
+            <div class="asr-actions">
+              <button id="saveServer" class="log-button">Save &amp; restart</button>
+              <button id="defaultServer" class="log-button">Use default</button>
+            </div>
+            <p class="asr-note">
+              The robot reloads MQTT/WebSocket configuration from this endpoint after restart.
+              Wi-Fi credentials are not changed.
+            </p>
+          </section>
+          <section class="card">
+            <div class="section-title">
               <strong>Emotions</strong><span>5-second preview</span>
             </div>
             <div class="emotion-grid">
