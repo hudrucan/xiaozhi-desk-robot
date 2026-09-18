@@ -88,7 +88,7 @@ function collectCameraSettings() {
     },
     web: { resolution: $("#cameraWebResolution").value,
       jpeg_quality: boundedInteger("cameraWebQuality", "Web JPEG quality", 4, 63),
-      fps: boundedInteger("cameraWebFps", "Web FPS", 1, 10) },
+      fps: boundedInteger("cameraWebFps", "Web FPS", 1, 30) },
     mochan: { resolution: $("#cameraMochanResolution").value,
       aspect: cameraSettingsData.mochan.aspect, render: cameraSettingsData.mochan.render },
     mcp: { resolution: $("#cameraMcpResolution").value,

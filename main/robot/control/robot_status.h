@@ -35,6 +35,8 @@ struct RobotStatus {
     std::string camera_sensor = "unknown";
     std::string camera_mode = "off";
     std::string camera_profile = "normal";
+    std::string camera_effective_profile = "normal";
+    bool camera_auto_profile_available = false;
 
     int motor_speed = 0;
     int drive_duration_ms = 0;

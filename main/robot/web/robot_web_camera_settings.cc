@@ -13,6 +13,7 @@ namespace {
 
 const char* ProfileName(CameraImageProfile value) {
     switch (value) {
+        case CameraImageProfile::kAuto: return "auto";
         case CameraImageProfile::kLowLight: return "low_light";
         case CameraImageProfile::kCustom: return "custom";
         default: return "normal";
@@ -174,7 +175,8 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
     }
 
     if (valid) valid = ReadEnum(sensor, "profile", {{"normal", CameraImageProfile::kNormal},
-        {"low_light", CameraImageProfile::kLowLight}, {"custom", CameraImageProfile::kCustom}},
+        {"low_light", CameraImageProfile::kLowLight}, {"custom", CameraImageProfile::kCustom},
+        {"auto", CameraImageProfile::kAuto}},
         settings.sensor.profile, error);
     if (valid) valid = ReadInt(sensor, "brightness", -2, 2, settings.sensor.brightness, error);
     if (valid) valid = ReadInt(sensor, "contrast", -2, 2, settings.sensor.contrast, error);
@@ -218,7 +220,7 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
         {"sxga", CameraResolution::kSxga}, {"uxga", CameraResolution::kUxga}};
     if (valid) valid = ReadEnum(web, "resolution", resolutions, settings.web.resolution, error);
     if (valid) valid = ReadInt(web, "jpeg_quality", 4, 63, settings.web.jpeg_quality, error);
-    if (valid) valid = ReadInt(web, "fps", 1, 10, settings.web.fps, error);
+    if (valid) valid = ReadInt(web, "fps", 1, 30, settings.web.fps, error);
     if (valid) valid = ReadEnum(mochan, "resolution", resolutions,
                                 settings.mochan.source_resolution, error);
     if (valid) valid = ReadEnum(mochan, "aspect", {{"auto", MochanAspectMode::kAuto},

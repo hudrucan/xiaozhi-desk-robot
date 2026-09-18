@@ -205,8 +205,14 @@ function renderCameraStatus(status) {
   const available = !!status.camera_available;
   const previewAvailable = available && idle;
   if (status.camera_sensor && status.camera_profile) {
-    $("#cameraSettingsSummary").textContent = status.camera_sensor + " · " +
-      status.camera_profile.replace("_", " ") + " · " + (status.camera_mode || "off");
+    let profile = status.camera_profile.replace("_", " ");
+    if (status.camera_profile === "auto") {
+      profile = status.camera_auto_profile_available
+        ? "auto → " + status.camera_effective_profile.replace("_", " ")
+        : "auto unavailable → normal";
+    }
+    $("#cameraSettingsSummary").textContent = status.camera_sensor + " · " + profile +
+      " · " + (status.camera_mode || "off");
   }
   if (browserLive && status.web_camera_live) {
     browserLiveConfirmed = true;

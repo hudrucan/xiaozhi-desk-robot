@@ -33,10 +33,10 @@ McpServer::McpServer() {
         ESP_LOGE(TAG, "Failed to create MCP worker queue");
         return;
     }
-    const BaseType_t created =
-        xTaskCreate(WorkerTask, "mcp_tool", kWorkerStackSize, this, 1, &worker_task_);
+    const BaseType_t created = xTaskCreateWithCaps(
+        WorkerTask, "mcp_tool", kWorkerStackSize, this, 1, &worker_task_, MALLOC_CAP_SPIRAM);
     if (created != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create persistent MCP worker in internal RAM");
+        ESP_LOGE(TAG, "Failed to create persistent MCP worker in PSRAM");
         vQueueDelete(worker_queue_);
         worker_queue_ = nullptr;
         worker_task_ = nullptr;

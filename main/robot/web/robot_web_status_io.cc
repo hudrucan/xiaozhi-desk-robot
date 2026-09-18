@@ -61,6 +61,10 @@ cJSON* RobotWebStatus::CreateCamera() {
     cJSON_AddStringToObject(root, "camera_sensor", status.camera_sensor.c_str());
     cJSON_AddStringToObject(root, "camera_mode", status.camera_mode.c_str());
     cJSON_AddStringToObject(root, "camera_profile", status.camera_profile.c_str());
+    cJSON_AddStringToObject(root, "camera_effective_profile",
+                            status.camera_effective_profile.c_str());
+    cJSON_AddBoolToObject(root, "camera_auto_profile_available",
+                          status.camera_auto_profile_available);
     return root;
 }
 

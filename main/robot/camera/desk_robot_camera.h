@@ -1,5 +1,6 @@
 #pragma once
 
+#include "camera_image_policy.h"
 #include "camera_settings.h"
 #include "esp32_camera.h"
 
@@ -20,7 +21,7 @@ public:
     };
 
     DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
-                    const CameraSettingsConfig& settings);
+                    const CameraSettingsConfig& settings, CameraImagePolicy& image_policy);
 
     bool Capture() override;
     bool StartWebLive();
@@ -44,6 +45,7 @@ public:
     CameraSettingsConfig GetSettings() const;
     int WebFrameIntervalMs() const;
     const char* SensorName() const;
+    CameraImagePolicy::Status GetImagePolicyStatus() const;
     std::expected<std::string, std::string> Explain(const std::string& question) override;
     void OnMcpResponseSent() override;
 
@@ -52,6 +54,8 @@ private:
     void EndMcpOperation();
     void HidePreviewImage();
     bool ApplyModeCaptureSettings(CameraResolution resolution, int jpeg_quality);
+    bool ApplyModeSensorSettings(const CameraSensorSettings& settings);
+    CameraSensorSettings ResolveSensorSettings(const CameraSensorSettings& settings) const;
     static framesize_t ToFrameSize(CameraResolution resolution);
     static gainceiling_t ToGainCeiling(CameraGainCeiling ceiling);
     static CameraSensorControls ToSensorControls(const CameraSensorSettings& settings);
@@ -63,4 +67,5 @@ private:
     std::atomic_bool mcp_capture_pending_{false};
     mutable std::mutex settings_mutex_;
     CameraSettingsConfig settings_;
+    CameraImagePolicy& image_policy_;
 };

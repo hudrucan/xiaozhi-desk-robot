@@ -117,7 +117,7 @@ CameraSettingsConfig CameraSettingsStore::Defaults(bool flipped) {
 
 CameraSettingsConfig CameraSettingsStore::Normalize(CameraSettingsConfig config) {
     config.sensor.profile =
-        NormalizeEnum(config.sensor.profile, CameraImageProfile::kCustom,
+        NormalizeEnum(config.sensor.profile, CameraImageProfile::kAuto,
                       CameraImageProfile::kNormal);
     config.sensor.brightness = std::clamp(config.sensor.brightness, -2, 2);
     config.sensor.contrast = std::clamp(config.sensor.contrast, -2, 2);
@@ -153,7 +153,7 @@ CameraSettingsConfig CameraSettingsStore::Normalize(CameraSettingsConfig config)
     }
     config.web.resolution = NormalizeWebResolution(config.web.resolution);
     config.web.jpeg_quality = std::clamp(config.web.jpeg_quality, 4, 63);
-    config.web.fps = std::clamp(config.web.fps, 1, 10);
+    config.web.fps = std::clamp(config.web.fps, 1, 30);
     config.mochan.source_resolution = NormalizeMochanResolution(config.mochan.source_resolution);
     config.mochan.aspect =
         NormalizeEnum(config.mochan.aspect, MochanAspectMode::kSixteenNine,
@@ -179,7 +179,7 @@ void CameraSettingsStore::Load(bool legacy_flipped) {
     if (has_current_schema) {
         config.sensor.profile =
             ReadEnum(settings, kProfileKey, config.sensor.profile,
-                     static_cast<int>(CameraImageProfile::kCustom));
+                     static_cast<int>(CameraImageProfile::kAuto));
         config.sensor.brightness = settings.GetInt(kBrightnessKey, config.sensor.brightness);
         config.sensor.contrast = settings.GetInt(kContrastKey, config.sensor.contrast);
         config.sensor.saturation = settings.GetInt(kSaturationKey, config.sensor.saturation);

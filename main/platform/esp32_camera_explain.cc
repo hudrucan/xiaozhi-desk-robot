@@ -166,7 +166,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
             ESP_LOGE(TAG, "Image explain returned an empty response");
             return std::unexpected("Image explain returned an empty response");
         }
-        ESP_LOGI(TAG, "Explain image size=%dx%d %zu bytes, question=%s\n%s", jpeg_width,
+        ESP_LOGD(TAG, "Explain image size=%dx%d %zu bytes, question=%s\n%s", jpeg_width,
                  jpeg_height, jpeg_length, question.c_str(), result.c_str());
         return result;
     }
@@ -243,7 +243,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
             xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
         }
         int64_t end_time = esp_timer_get_time();
-        ESP_LOGI(TAG, "JPEG encoding time: %ld ms", int((end_time - start_time) / 1000));
+        ESP_LOGD(TAG, "JPEG encoding time: %ld ms", int((end_time - start_time) / 1000));
     });
 
     auto network = Board::GetInstance().GetNetwork();
@@ -337,7 +337,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
     http->Close();
 
     size_t remain_stack_size = uxTaskGetStackHighWaterMark(nullptr);
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "Explain image size=%dx%d, compressed size=%d, remain stack size=%d, question=%s\n%s",
              current_fb_->width, current_fb_->height, (int)total_sent, (int)remain_stack_size,
              question.c_str(), result.c_str());

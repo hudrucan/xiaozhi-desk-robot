@@ -102,6 +102,7 @@ private:
     ExpressiveMotionPlanner expressive_motion_planner_;
     RobotSettings robot_settings_;
     CameraSettingsStore camera_settings_;
+    CameraImagePolicy camera_image_policy_;
     std::unique_ptr<RobotWebControlServer> web_control_server_;
     std::atomic_bool camera_flipped_{false};
     std::atomic_bool display_flipped_{false};
@@ -527,7 +528,8 @@ private:
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode = CAMERA_GRAB_LATEST;
-        camera_ = new DeskRobotCamera(config, primary_i2c_.mutex(), camera_settings);
+        camera_ = new DeskRobotCamera(config, primary_i2c_.mutex(), camera_settings,
+                                      camera_image_policy_);
 
         const bool flipped = camera_settings.sensor.mirror && camera_settings.sensor.flip;
         camera_flipped_.store(flipped);
@@ -1006,6 +1008,7 @@ private:
     static void OnAmbientLight(void* arg, bool valid, float illuminance_lux,
                                int64_t timestamp_us) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
+        self->camera_image_policy_.UpdateAmbientLight(valid, illuminance_lux, timestamp_us);
         if (!valid) {
             self->auto_brightness_policy_.ResetReading();
             return;
@@ -1462,9 +1465,20 @@ private:
             case CameraImageProfile::kCustom:
                 status.camera_profile = "custom";
                 break;
+            case CameraImageProfile::kAuto:
+                status.camera_profile = "auto";
+                break;
             default:
                 status.camera_profile = "normal";
                 break;
+        }
+        if (camera_ != nullptr) {
+            const CameraImagePolicy::Status policy = camera_->GetImagePolicyStatus();
+            status.camera_auto_profile_available = policy.ambient_light_available;
+            status.camera_effective_profile =
+                policy.effective_profile == CameraImageProfile::kLowLight
+                    ? "low_light"
+                    : "normal";
         }
         status.motor_speed = motors_.GetSpeedPercent();
         status.drive_duration_ms = drive_duration_ms_.load(std::memory_order_relaxed);

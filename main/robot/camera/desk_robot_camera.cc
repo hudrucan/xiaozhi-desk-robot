@@ -12,11 +12,28 @@
 
 #define TAG "DeskRobotCamera"
 
+namespace {
+
+constexpr int kMcpFreshWarmupFrames = 2;
+constexpr int kMcpLowLightWarmupFrames = 4;
+constexpr int kMcpHighResolutionWarmupFrames = 8;
+
+bool IsHighResolution(CameraResolution resolution) {
+    return resolution == CameraResolution::kXga ||
+           resolution == CameraResolution::kSxga ||
+           resolution == CameraResolution::kUxga;
+}
+
+}  // namespace
+
 DeskRobotCamera::DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
-                                 const CameraSettingsConfig& settings)
-    : Esp32Camera(config, &shared_i2c_mutex), settings_(CameraSettingsStore::Normalize(settings)) {
+                                 const CameraSettingsConfig& settings,
+                                 CameraImagePolicy& image_policy)
+    : Esp32Camera(config, &shared_i2c_mutex),
+      settings_(CameraSettingsStore::Normalize(settings)),
+      image_policy_(image_policy) {
     if (Esp32Camera::IsAvailable() &&
-        !Esp32Camera::ApplySensorControls(ToSensorControls(settings_.sensor))) {
+        !ApplyModeSensorSettings(settings_.sensor)) {
         ESP_LOGW(TAG, "Some persisted camera sensor settings were rejected");
     }
 }
@@ -50,10 +67,22 @@ bool DeskRobotCamera::Capture() {
     const int64_t capture_start_us = esp_timer_get_time();
     ESP_LOGI(TAG, "MCP camera capture begin");
     const CameraSettingsConfig settings = GetSettings();
+    const CameraSensorSettings resolved_sensor = ResolveSensorSettings(settings.sensor);
+    // Change the sensor mode first because OV2640 set_framesize() rewrites its
+    // DVP/pixformat path. Apply the requested image controls to the final mode.
     const bool configured =
-        ApplyModeCaptureSettings(settings.mcp.resolution, settings.mcp.jpeg_quality);
-    const bool captured = configured && Esp32Camera::CaptureOwnedJpeg(
-                                            settings.mcp.freshness == McpFreshFramePolicy::kFresh);
+        ApplyModeCaptureSettings(settings.mcp.resolution, settings.mcp.jpeg_quality) &&
+        Esp32Camera::ApplySensorControls(ToSensorControls(resolved_sensor));
+    int warmup_frames = 0;
+    if (settings.mcp.freshness == McpFreshFramePolicy::kFresh) {
+        warmup_frames = resolved_sensor.profile == CameraImageProfile::kLowLight
+                            ? kMcpLowLightWarmupFrames
+                            : kMcpFreshWarmupFrames;
+        if (IsHighResolution(settings.mcp.resolution)) {
+            warmup_frames = std::max(warmup_frames, kMcpHighResolutionWarmupFrames);
+        }
+    }
+    const bool captured = configured && Esp32Camera::CaptureOwnedJpeg(warmup_frames);
     const int64_t capture_ms = (esp_timer_get_time() - capture_start_us) / 1000;
     ESP_LOGI(TAG, "MCP camera capture %s elapsed=%lldms", captured ? "done" : "failed",
              static_cast<long long>(capture_ms));
@@ -79,7 +108,8 @@ bool DeskRobotCamera::StartWebLive() {
             return false;
         }
         const CameraSettingsConfig settings = GetSettings();
-        if (!ApplyModeCaptureSettings(settings.web.resolution, settings.web.jpeg_quality)) {
+        if (!ApplyModeCaptureSettings(settings.web.resolution, settings.web.jpeg_quality) ||
+            !ApplyModeSensorSettings(settings.sensor)) {
             return false;
         }
         hide_mochan = preview_mode_.load() == PreviewMode::kMochanPreview;
@@ -111,7 +141,8 @@ bool DeskRobotCamera::StartMochanPreview() {
         return false;
     }
     const CameraSettingsConfig settings = GetSettings();
-    if (!ApplyModeCaptureSettings(settings.mochan.source_resolution, 12)) {
+    if (!ApplyModeCaptureSettings(settings.mochan.source_resolution, 12) ||
+        !ApplyModeSensorSettings(settings.sensor)) {
         return false;
     }
     preview_mode_.store(PreviewMode::kMochanPreview);
@@ -189,7 +220,8 @@ bool DeskRobotCamera::SendSnapshot(const JpegSender& sender) {
         return false;
     }
     const CameraSettingsConfig settings = GetSettings();
-    if (!ApplyModeCaptureSettings(settings.web.resolution, settings.web.jpeg_quality)) {
+    if (!ApplyModeCaptureSettings(settings.web.resolution, settings.web.jpeg_quality) ||
+        !ApplyModeSensorSettings(settings.sensor)) {
         return false;
     }
     if (!Esp32Camera::CaptureForWeb()) {
@@ -211,7 +243,7 @@ bool DeskRobotCamera::ApplySettings(const CameraSettingsConfig& requested) {
         return false;
     }
     const CameraSettingsConfig normalized = CameraSettingsStore::Normalize(requested);
-    if (!Esp32Camera::ApplySensorControls(ToSensorControls(normalized.sensor))) {
+    if (!ApplyModeSensorSettings(normalized.sensor)) {
         return false;
     }
     std::lock_guard<std::mutex> settings_lock(settings_mutex_);
@@ -233,12 +265,16 @@ const char* DeskRobotCamera::SensorName() const {
     return SensorPid() == OV2640_PID ? "OV2640" : "Unknown";
 }
 
+CameraImagePolicy::Status DeskRobotCamera::GetImagePolicyStatus() const {
+    return image_policy_.GetStatus(esp_timer_get_time());
+}
+
 std::expected<std::string, std::string> DeskRobotCamera::Explain(const std::string& question) {
     if (!mcp_capture_pending_.exchange(false)) {
         EndMcpOperation();
         return std::unexpected("No MCP camera snapshot is pending");
     }
-    ESP_LOGI(TAG, "MCP camera explain begin");
+    ESP_LOGD(TAG, "MCP camera explain begin");
     auto result = Esp32Camera::Explain(question);
     if (result) {
         ESP_LOGI(TAG, "MCP camera explain done");
@@ -252,7 +288,7 @@ void DeskRobotCamera::OnMcpResponseSent() {
     if (!mcp_operation_active_.load()) {
         return;
     }
-    ESP_LOGI(TAG, "MCP camera response sent");
+    ESP_LOGD(TAG, "MCP camera response sent");
     EndMcpOperation();
 }
 
@@ -282,6 +318,21 @@ void DeskRobotCamera::HidePreviewImage() {
 
 bool DeskRobotCamera::ApplyModeCaptureSettings(CameraResolution resolution, int jpeg_quality) {
     return Esp32Camera::ApplyCaptureSettings(ToFrameSize(resolution), jpeg_quality);
+}
+
+bool DeskRobotCamera::ApplyModeSensorSettings(const CameraSensorSettings& settings) {
+    return Esp32Camera::ApplySensorControls(ToSensorControls(ResolveSensorSettings(settings)));
+}
+
+CameraSensorSettings DeskRobotCamera::ResolveSensorSettings(
+    const CameraSensorSettings& settings) const {
+    if (settings.profile != CameraImageProfile::kAuto) {
+        return settings;
+    }
+    CameraSettingsConfig resolved;
+    resolved.sensor = settings;
+    resolved.sensor.profile = image_policy_.EffectiveProfile(esp_timer_get_time());
+    return CameraSettingsStore::Normalize(resolved).sensor;
 }
 
 framesize_t DeskRobotCamera::ToFrameSize(CameraResolution resolution) {

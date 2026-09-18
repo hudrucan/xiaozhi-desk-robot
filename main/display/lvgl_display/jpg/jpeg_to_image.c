@@ -1,4 +1,5 @@
 #include <esp_err.h>
+#include <stdint.h>
 #include <sys/param.h>
 
 #include "esp_jpeg_common.h"
@@ -15,7 +16,8 @@
 #define TAG "jpeg_to_image"
 
 static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
-                                      size_t* height, size_t* stride) {
+                                      size_t* height, size_t* stride, size_t scale_width,
+                                      size_t scale_height) {
     ESP_LOGD(TAG, "Decoding JPEG with software decoder");
     esp_err_t ret = ESP_OK;
     jpeg_error_t jpeg_ret = JPEG_ERR_OK;
@@ -26,6 +28,8 @@ static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_
     jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
     config.output_type = JPEG_PIXEL_FORMAT_RGB565_LE;
     config.rotate = JPEG_ROTATE_0D;
+    config.scale.width = (uint16_t)scale_width;
+    config.scale.height = (uint16_t)scale_height;
 
     jpeg_dec_handle_t jpeg_dec = NULL;
     jpeg_ret = jpeg_dec_open(&config, &jpeg_dec);
@@ -47,7 +51,15 @@ static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_
 
     ESP_LOGD(TAG, "JPEG header info: width=%d, height=%d", out_info.width, out_info.height);
 
-    out_buf = jpeg_calloc_align(out_info.width * out_info.height * 2, 16);
+    int output_size = 0;
+    jpeg_ret = jpeg_dec_get_outbuf_len(jpeg_dec, &output_size);
+    if (jpeg_ret != JPEG_ERR_OK || output_size <= 0) {
+        ESP_LOGE(TAG, "Failed to get JPEG output buffer size");
+        ret = ESP_FAIL;
+        goto jpeg_dec_failed;
+    }
+
+    out_buf = jpeg_calloc_align((size_t)output_size, 16);
     if (out_buf == NULL) {
         ESP_LOGE(TAG, "Failed to allocate memory for JPEG output buffer");
         ret = ESP_ERR_NO_MEM;
@@ -66,7 +78,7 @@ static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_
 
     *out = out_buf;
     out_buf = NULL;
-    *out_len = (size_t)(out_info.width * out_info.height * 2);
+    *out_len = (size_t)output_size;
     *width = (size_t)out_info.width;
     *height = (size_t)out_info.height;
     *stride = (size_t)out_info.width * 2;
@@ -95,13 +107,22 @@ jpeg_dec_failed:
 
 esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
                         size_t* height, size_t* stride) {
+    return jpeg_to_image_scaled(src, src_len, out, out_len, width, height, stride, 0, 0);
+}
+
+esp_err_t jpeg_to_image_scaled(const uint8_t* src, size_t src_len, uint8_t** out,
+                               size_t* out_len, size_t* width, size_t* height,
+                               size_t* stride, size_t scale_width, size_t scale_height) {
 #ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
     if (src == NULL || src_len == 0 || out == NULL || out_len == NULL || width == NULL || height == NULL ||
-        stride == NULL) {
+        stride == NULL || (scale_width == 0) != (scale_height == 0) ||
+        (scale_width != 0 && ((scale_width % 8) != 0 || (scale_height % 8) != 0 ||
+                              scale_width > UINT16_MAX || scale_height > UINT16_MAX))) {
         ESP_LOGE(TAG, "Invalid parameters");
         return ESP_ERR_INVALID_ARG;
     }
-    return decode_with_new_jpeg(src, src_len, out, out_len, width, height, stride);
+    return decode_with_new_jpeg(src, src_len, out, out_len, width, height, stride,
+                                scale_width, scale_height);
 }

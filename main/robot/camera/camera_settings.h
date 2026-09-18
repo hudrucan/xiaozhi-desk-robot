@@ -7,6 +7,7 @@ enum class CameraImageProfile : uint8_t {
     kNormal,
     kLowLight,
     kCustom,
+    kAuto,
 };
 
 enum class CameraResolution : uint8_t {
@@ -59,7 +60,7 @@ struct CameraSensorSettings {
     int manual_exposure = 300;
     bool auto_gain = true;
     int manual_gain = 0;
-    CameraGainCeiling gain_ceiling = CameraGainCeiling::k2x;
+    CameraGainCeiling gain_ceiling = CameraGainCeiling::k8x;
     bool auto_white_balance = true;
     bool awb_gain = true;
     int white_balance_mode = 0;

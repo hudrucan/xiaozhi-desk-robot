@@ -494,6 +494,13 @@
                 <div class="conversation-actions">
                   <span id="chatState" class="chat-state">Ready</span
                   ><button
+                    id="chatCamera"
+                    class="chat-clear"
+                    title="Ask Xiaozhi to take and describe an MCP photo"
+                  >
+                    &#128247; Photo
+                  </button
+                  ><button
                     id="chatClear"
                     class="chat-clear"
                     title="Clear local conversation history"
@@ -562,6 +569,7 @@
                 <summary>Camera settings <span id="cameraSettingsSummary">OV2640 · Normal</span></summary>
                 <div class="camera-settings-grid">
                   <label class="field"><span>Image profile</span><select id="cameraProfile">
+                    <option value="auto">Automatic · BH1750</option>
                     <option value="normal">Normal</option><option value="low_light">Low light</option>
                     <option value="custom">Custom</option>
                   </select></label>
@@ -572,7 +580,7 @@
                     <option value="vga">VGA · 640×480</option><option value="svga">SVGA · 800×600</option>
                   </select></label>
                   <label class="field"><span>JPEG quality · 4–63, lower is better</span><input id="cameraWebQuality" type="number" min="4" max="63" step="1" /></label>
-                  <label class="field"><span>FPS limit · 1–10</span><input id="cameraWebFps" type="number" min="1" max="10" step="1" /></label>
+                  <label class="field"><span>FPS limit · 1–30</span><input id="cameraWebFps" type="number" min="1" max="30" step="1" /></label>
                   <div class="camera-settings-group"><b>Screen preview</b></div>
                   <label class="field"><span>Source resolution</span><select id="cameraMochanResolution">
                     <option value="auto">Auto</option><option value="qvga">QVGA</option>
@@ -585,7 +593,7 @@
                     <option value="uxga">UXGA · 1600×1200</option>
                   </select></label>
                   <label class="field"><span>JPEG quality · 4–63, lower is better</span><input id="cameraMcpQuality" type="number" min="4" max="63" step="1" /></label>
-                  <label class="camera-check"><input id="cameraMcpFresh" type="checkbox" /><span>Fresh frame</span></label>
+                  <label class="camera-check"><input id="cameraMcpFresh" type="checkbox" /><span>Fresh frame · AEC/AGC warm-up</span></label>
                 </div>
                 <details class="camera-advanced">
                   <summary>Advanced sensor controls</summary>

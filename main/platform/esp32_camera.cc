@@ -2,6 +2,7 @@
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -15,6 +16,32 @@
 #include "lvgl_display.h"
 
 #define TAG "Esp32Camera"
+
+namespace {
+
+constexpr size_t kPreviewDecodeMaxWidth = 320;
+constexpr size_t kPreviewDecodeMaxHeight = 240;
+
+void GetPreviewDecodeSize(size_t source_width, size_t source_height,
+                          size_t& target_width, size_t& target_height) {
+    target_width = 0;
+    target_height = 0;
+    if (source_width <= kPreviewDecodeMaxWidth && source_height <= kPreviewDecodeMaxHeight) {
+        return;
+    }
+    const double width_scale = static_cast<double>(kPreviewDecodeMaxWidth) / source_width;
+    const double height_scale = static_cast<double>(kPreviewDecodeMaxHeight) / source_height;
+    const double scale = width_scale < height_scale ? width_scale : height_scale;
+    target_width = std::max<size_t>(8, (static_cast<size_t>(source_width * scale) / 8) * 8);
+    target_height = std::max<size_t>(8, (static_cast<size_t>(source_height * scale) / 8) * 8);
+    // esp_new_jpeg supports downscaling to at most 1/8 of the source.
+    const size_t minimum_width = ((source_width + 63) / 64) * 8;
+    const size_t minimum_height = ((source_height + 63) / 64) * 8;
+    target_width = std::max(target_width, minimum_width);
+    target_height = std::max(target_height, minimum_height);
+}
+
+}  // namespace
 
 OwnedJpeg::~OwnedJpeg() { Reset(); }
 
@@ -148,13 +175,13 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
     explain_token_ = token;
 }
 
-bool Esp32Camera::Capture() { return CaptureInternal(true, true); }
+bool Esp32Camera::Capture() { return CaptureInternal(true, 1); }
 
-bool Esp32Camera::CaptureOwnedJpeg(bool fresh_frame) {
+bool Esp32Camera::CaptureOwnedJpeg(int warmup_frames) {
     // Show the captured frame once as five-second user feedback. This does not
     // make MCP a persistent preview mode; its camera ownership remains a
     // transient still operation and the framebuffer is returned below.
-    if (!CaptureInternal(true, fresh_frame)) {
+    if (!CaptureInternal(true, warmup_frames)) {
         return false;
     }
 
@@ -177,9 +204,9 @@ bool Esp32Camera::CaptureOwnedJpeg(bool fresh_frame) {
     return true;
 }
 
-bool Esp32Camera::CaptureForPreview() { return CaptureInternal(true, false); }
+bool Esp32Camera::CaptureForPreview() { return CaptureInternal(true, 0); }
 
-bool Esp32Camera::CaptureForWeb() { return CaptureInternal(false, false); }
+bool Esp32Camera::CaptureForWeb() { return CaptureInternal(false, 0); }
 
 bool Esp32Camera::GetCurrentJpeg(const uint8_t*& data, size_t& length) const {
     if (current_fb_ == nullptr || current_fb_->format != PIXFORMAT_JPEG) {
@@ -192,7 +219,7 @@ bool Esp32Camera::GetCurrentJpeg(const uint8_t*& data, size_t& length) const {
     return data != nullptr && length > 0;
 }
 
-bool Esp32Camera::CaptureInternal(bool update_preview, bool fresh_frame) {
+bool Esp32Camera::CaptureInternal(bool update_preview, int discard_frames) {
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -201,9 +228,10 @@ bool Esp32Camera::CaptureInternal(bool update_preview, bool fresh_frame) {
         return false;
     }
 
-    // Preview consumers use the driver's latest framebuffer directly. MCP may
-    // explicitly request a fresh frame after changing capture settings.
-    const int capture_count = fresh_frame ? 2 : 1;
+    // Preview consumers use the driver's latest framebuffer directly. A still
+    // capture may discard transition frames so AEC/AGC can converge after a
+    // profile or resolution switch.
+    const int capture_count = std::max(0, discard_frames) + 1;
     for (int i = 0; i < capture_count; i++) {
         if (current_fb_) {
             esp_camera_fb_return(current_fb_);
@@ -266,9 +294,14 @@ bool Esp32Camera::CaptureInternal(bool update_preview, bool fresh_frame) {
         size_t preview_width = 0;
         size_t preview_height = 0;
         size_t preview_stride = 0;
+        size_t decode_width = 0;
+        size_t decode_height = 0;
+        GetPreviewDecodeSize(current_fb_->width, current_fb_->height,
+                             decode_width, decode_height);
         esp_err_t decode_result =
-            jpeg_to_image(current_fb_->buf, current_fb_->len, &preview_data, &preview_len,
-                          &preview_width, &preview_height, &preview_stride);
+            jpeg_to_image_scaled(current_fb_->buf, current_fb_->len, &preview_data, &preview_len,
+                                 &preview_width, &preview_height, &preview_stride,
+                                 decode_width, decode_height);
         if (decode_result == ESP_OK) {
             auto display = Board::GetInstance().GetDisplay();
             if (display != nullptr) {
@@ -373,8 +406,15 @@ bool Esp32Camera::ApplyCaptureSettings(framesize_t frame_size, int jpeg_quality)
     if (sensor == nullptr) {
         return false;
     }
-    const int frame_result = sensor->set_framesize(sensor, frame_size);
-    const int quality_result = sensor->set_quality(sensor, jpeg_quality);
+    // Reprogramming the OV2640 frame size resets its DVP/pixformat path and
+    // temporarily destabilizes AEC/AGC. Avoid doing that at every still capture
+    // when the requested capture mode is already active.
+    const int frame_result = sensor->status.framesize == frame_size
+                                 ? 0
+                                 : sensor->set_framesize(sensor, frame_size);
+    const int quality_result = sensor->status.quality == jpeg_quality
+                                   ? 0
+                                   : sensor->set_quality(sensor, jpeg_quality);
     return frame_result == 0 && quality_result == 0;
 }
 

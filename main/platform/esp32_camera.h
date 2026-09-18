@@ -47,7 +47,7 @@ struct CameraSensorControls {
     int manual_exposure = 300;
     bool auto_gain = true;
     int manual_gain = 0;
-    gainceiling_t gain_ceiling = GAINCEILING_2X;
+    gainceiling_t gain_ceiling = GAINCEILING_8X;
     bool auto_white_balance = true;
     bool awb_gain = true;
     int white_balance_mode = 0;
@@ -92,9 +92,9 @@ public:
     virtual std::expected<std::string, std::string> Explain(const std::string& question) override;
 
 protected:
-    bool CaptureOwnedJpeg(bool fresh_frame = true);
+    bool CaptureOwnedJpeg(int warmup_frames = 1);
     void ReturnCurrentFrame();
 
 private:
-    bool CaptureInternal(bool update_preview, bool fresh_frame);
+    bool CaptureInternal(bool update_preview, int discard_frames);
 };

@@ -1,3 +1,6 @@
+const CAMERA_CHAT_PROMPT =
+  "Chụp ảnh ngay bây giờ và mô tả ngắn gọn những gì bạn nhìn thấy.";
+
 function resizeChatInput() {
   const input = $("#chatInput");
   input.style.height = "36px";
@@ -15,6 +18,7 @@ function updateChatInput() {
   $("#chatCount").textContent = count + " / " + CHAT_MAX_CHARS;
   $("#chatCount").classList.toggle("over", count > CHAT_MAX_CHARS);
   $("#chatSend").disabled = chatSubmitting || busy || empty || count > CHAT_MAX_CHARS;
+  $("#chatCamera").disabled = chatSubmitting || busy;
 }
 
 function renderConversation(conversation) {
@@ -46,11 +50,11 @@ function renderConversation(conversation) {
   updateChatInput();
 }
 
-async function submitChat() {
+async function submitChatText(text, clearInput) {
   const input = $("#chatInput");
-  const text = input.value;
   const count = Array.from(text).length;
-  if (chatSubmitting || !text.trim() || count > CHAT_MAX_CHARS) return;
+  const busy = ["Sending", "Waiting", "Speaking"].includes(chatBackendState);
+  if (chatSubmitting || busy || !text.trim() || count > CHAT_MAX_CHARS) return;
 
   chatSubmitting = true;
   chatBackendState = "Sending";
@@ -64,7 +68,7 @@ async function submitChat() {
     });
     const result = await response.json();
     if (!response.ok || !result.ok) throw Error(result.message || "Message rejected");
-    input.value = "";
+    if (clearInput) input.value = "";
     updateChatInput();
     queueDomains(["chat", "core"], 40);
   } catch (error) {
@@ -78,6 +82,14 @@ async function submitChat() {
     chatSubmitting = false;
     updateChatInput();
   }
+}
+
+function submitChat() {
+  return submitChatText($("#chatInput").value, true);
+}
+
+function submitCameraChat() {
+  return submitChatText(CAMERA_CHAT_PROMPT, false);
 }
 
 async function clearConversation() {

@@ -43,6 +43,16 @@ extern "C" {
 esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
                         size_t* height, size_t* stride);
 
+/**
+ * @brief Decode JPEG to an explicitly scaled RGB565 output.
+ *
+ * Scale dimensions must be multiples of 8. Pass zero for both dimensions to
+ * preserve the JPEG's original size.
+ */
+esp_err_t jpeg_to_image_scaled(const uint8_t* src, size_t src_len, uint8_t** out,
+                               size_t* out_len, size_t* width, size_t* height,
+                               size_t* stride, size_t scale_width, size_t scale_height);
+
 #ifdef __cplusplus
 }
 #endif

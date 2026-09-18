@@ -7,6 +7,7 @@ function bindChatAndAsrControls() {
     }
   };
   $("#chatSend").onclick = submitChat;
+  $("#chatCamera").onclick = submitCameraChat;
   $("#chatClear").onclick = clearConversation;
   $("#asrProvider").onchange = (event) => setAsrProvider(event.target.value);
   $("#geminiApiKey").oninput = () => { asrEditing = true; };
