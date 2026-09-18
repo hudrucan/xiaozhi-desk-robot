@@ -25,7 +25,7 @@
 #define TAG "MCP"
 
 McpServer::McpServer() {
-    constexpr UBaseType_t kWorkerQueueLength = 2;
+    constexpr UBaseType_t kWorkerQueueLength = 1;
     constexpr uint32_t kWorkerStackSize = 12288;
 
     worker_queue_ = xQueueCreate(kWorkerQueueLength, sizeof(std::function<void()>*));
@@ -33,10 +33,10 @@ McpServer::McpServer() {
         ESP_LOGE(TAG, "Failed to create MCP worker queue");
         return;
     }
-    const BaseType_t created = xTaskCreateWithCaps(
-        WorkerTask, "mcp_tool", kWorkerStackSize, this, 1, &worker_task_, MALLOC_CAP_SPIRAM);
+    const BaseType_t created =
+        xTaskCreate(WorkerTask, "mcp_tool", kWorkerStackSize, this, 1, &worker_task_);
     if (created != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create persistent MCP worker");
+        ESP_LOGE(TAG, "Failed to create persistent MCP worker in internal RAM");
         vQueueDelete(worker_queue_);
         worker_queue_ = nullptr;
         worker_task_ = nullptr;
@@ -686,7 +686,7 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
 
     auto* worker_call = new (std::nothrow) std::function<void()>(std::move(execute_call));
     if (worker_call == nullptr) {
-        ReplyError(id, "Failed to allocate MCP worker", worker_failure_sender);
+        ReplyError(id, "Failed to allocate MCP worker call", worker_failure_sender);
         return;
     }
     if (worker_queue_ == nullptr || xQueueSend(worker_queue_, &worker_call, 0) != pdTRUE) {
