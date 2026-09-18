@@ -28,6 +28,9 @@ cJSON* RobotWebStatus::CreateMotors() {
         cJSON_AddBoolToObject(motors, "sequence_active", status.motors.sequence_active);
         cJSON_AddNumberToObject(motors, "sequence_total", status.motors.sequence_total);
         cJSON_AddNumberToObject(motors, "sequence_completed", status.motors.sequence_completed);
+        cJSON_AddBoolToObject(motors, "live_drive", status.motors.live_drive);
+        cJSON_AddNumberToObject(motors, "left_percent", status.motors.left_percent);
+        cJSON_AddNumberToObject(motors, "right_percent", status.motors.right_percent);
     }
 #ifdef MPU6050_I2C_ADDRESS
     cJSON_AddBoolToObject(root, "gyro_turn_available", status.gyro.available);

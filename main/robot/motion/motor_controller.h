@@ -34,6 +34,9 @@ public:
         bool sequence_active = false;
         size_t sequence_total = 0;
         size_t sequence_completed = 0;
+        bool live_drive = false;
+        int8_t left_percent = 0;
+        int8_t right_percent = 0;
     };
 
     MotorController(gpio_num_t left_in1, gpio_num_t left_in2, gpio_num_t right_in1,
@@ -41,6 +44,7 @@ public:
     ~MotorController();
 
     bool Drive(Direction direction, uint32_t duration_ms, uint8_t intensity_percent = 100);
+    bool DriveWheels(int left_percent, int right_percent, uint32_t lease_ms);
     bool PlaySequence(const std::vector<Movement>& movements);
     void Stop();
     void EmergencyStop();
@@ -49,6 +53,7 @@ public:
     bool IsActive() const { return motion_active_.load(std::memory_order_relaxed); }
     bool SetActiveIntensityPercent(uint8_t intensity_percent);
     void SetMotionGuard(std::function<bool(Direction)> guard);
+    void SetLiveMotionGuard(std::function<bool(int, int)> guard);
     void SetMovementStateCallback(std::function<void(bool)> callback);
     bool IsMoving(Direction direction) const;
     Status GetStatus() const;
@@ -58,7 +63,7 @@ public:
     static const char* DirectionName(Direction direction);
 
 private:
-    enum class Phase { kIdle, kDeadTime, kDriving };
+    enum class Phase { kIdle, kDeadTime, kDriving, kLiveDeadTime, kLiveDriving };
 
     struct Command {
         Direction direction;
@@ -80,6 +85,7 @@ private:
     static void StopTimerCallback(void* arg);
     void BeginDeadTime();
     void ApplyNextCommand();
+    void ApplyLiveCommand();
     void HandleTimerExpired(uint32_t generation);
     bool ArmTimer(uint32_t delay_ms);
     void EnterFault(const char* reason);
@@ -112,10 +118,14 @@ private:
     std::atomic<size_t> sequence_total_{0};
     std::atomic<size_t> sequence_completed_{0};
     std::atomic<int64_t> active_until_us_{0};
+    std::atomic_bool live_drive_{false};
+    std::atomic<int8_t> live_left_percent_{0};
+    std::atomic<int8_t> live_right_percent_{0};
     std::atomic<uint32_t> timer_generation_{0};
     int64_t arm_at_us_ = 0;
     std::deque<Command> queued_commands_;
     std::function<bool(Direction)> motion_guard_;
+    std::function<bool(int, int)> live_motion_guard_;
     std::function<void(bool)> movement_state_callback_;
     std::atomic_bool motion_active_{false};
 };

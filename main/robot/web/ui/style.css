@@ -416,6 +416,80 @@
         gap: 8px;
         margin: 0 0 13px;
       }
+      .drive-mode {
+        display: inline-flex;
+        padding: 2px;
+        border: 1px solid #4a3a25;
+        border-radius: 9px;
+        background: #130f09;
+      }
+      .drive-mode button {
+        border: 0;
+        border-radius: 7px;
+        padding: 5px 9px;
+        color: var(--muted);
+        background: transparent;
+        font: inherit;
+        font-size: 9px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .drive-mode button.active {
+        color: #191107;
+        background: var(--hi);
+      }
+      .joystick-panel {
+        min-height: 246px;
+        padding: 4px 0 13px;
+      }
+      .joystick {
+        position: relative;
+        width: 210px;
+        height: 210px;
+        margin: 0 auto 11px;
+        border: 1px solid #5e492b;
+        border-radius: 50%;
+        background:
+          radial-gradient(circle at center, transparent 0 17%, #2a2115 18% 19%, transparent 20%),
+          linear-gradient(90deg, transparent 49.5%, #3d3020 50%, transparent 50.5%),
+          linear-gradient(transparent 49.5%, #3d3020 50%, transparent 50.5%),
+          radial-gradient(circle, #282014, #120e08 72%);
+        box-shadow: inset 0 0 24px #090704, 0 8px 20px var(--shadow);
+        touch-action: none;
+        user-select: none;
+        cursor: grab;
+      }
+      .joystick.active {
+        border-color: var(--hi);
+        cursor: grabbing;
+      }
+      .joystick.disabled {
+        opacity: 0.45;
+      }
+      .joystick-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 68px;
+        height: 68px;
+        border: 2px solid #806841;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #5a482d, #241a0e 70%);
+        box-shadow: 0 7px 16px #080604, inset 0 1px rgba(255, 255, 255, 0.1);
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      }
+      .joystick-output {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 9px;
+      }
+      .joystick-output b {
+        color: var(--text);
+        white-space: nowrap;
+      }
       .control {
         border: 1px solid #5e492b;
         color: var(--hi);

@@ -74,7 +74,7 @@ function updateDriveAvailability() {
 function renderMotorStatus(status) {
   Object.assign(statusCache, status);
   const motors = status.motors || {};
-  motorsActive = !!(motors.moving || motors.queued || motors.sequence_active);
+  motorsActive = !!(motors.moving || motors.queued || motors.sequence_active || motors.live_drive);
   robotActive = lastState !== "idle" || motorsActive;
   if (document.activeElement !== $("#duration") && Number.isFinite(status.drive_duration_ms)) {
     $("#duration").value = status.drive_duration_ms;
@@ -86,6 +86,9 @@ function renderMotorStatus(status) {
     : motorsActive
       ? (motors.direction || "moving") + (motors.sequence_active ? " · dance" : "")
       : "Stopped";
+  if (!liveDriveActive && motors.live_drive) {
+    renderJoystick(motors.left_percent || 0, motors.right_percent || 0);
+  }
   $("#queue").textContent = motors.queued || 0;
   $("#motorTime").textContent = fmtMs(motors.remaining_ms || 0);
   $("#panicStop").classList.toggle("show", motorsActive);

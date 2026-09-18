@@ -16,6 +16,7 @@ public:
     virtual ~RobotController();
 
     virtual bool Move(MotorController::Direction direction, int duration_ms, MovePolicy policy) = 0;
+    virtual bool SetLiveDrive(int left_percent, int right_percent) = 0;
     virtual void Stop() = 0;
     virtual bool Dance() = 0;
     virtual bool TurnRelative(int degrees, std::string& message) = 0;

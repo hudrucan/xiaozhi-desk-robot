@@ -29,6 +29,16 @@ bool ParseDirection(const std::string& direction, MotorController::Direction& co
 
 }  // namespace
 
+bool RobotWebAdapter::ExecuteLiveDrive(int left_percent, int right_percent,
+                                       std::string& message) {
+    const int safe_left = std::clamp(left_percent, -100, 100);
+    const int safe_right = std::clamp(right_percent, -100, 100);
+    const bool accepted = controller_.SetLiveDrive(safe_left, safe_right);
+    message = accepted ? (safe_left == 0 && safe_right == 0 ? "Motors stopped" : "Live drive")
+                       : "Movement blocked: table edge detected; reverse remains available";
+    return accepted;
+}
+
 bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
                                     const std::string& text, std::string& message) {
     MotorController::Direction direction;

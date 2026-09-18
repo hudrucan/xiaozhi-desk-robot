@@ -37,6 +37,7 @@ private:
     static esp_err_t HandleGetAsrConfig(httpd_req_t* request);
     static esp_err_t HandleLogs(httpd_req_t* request);
     static esp_err_t HandleAction(httpd_req_t* request);
+    static esp_err_t HandleLiveDrive(httpd_req_t* request);
     static esp_err_t HandleSnapshot(httpd_req_t* request);
     static esp_err_t HandleCameraMode(httpd_req_t* request);
     static esp_err_t HandleCameraStream(httpd_req_t* request);

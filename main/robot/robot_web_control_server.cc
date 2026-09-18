@@ -313,7 +313,7 @@ bool RobotWebControlServer::Start(int port) {
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
-    config.max_uri_handlers = 24;
+    config.max_uri_handlers = 25;
     config.stack_size = 6144;
     config.send_wait_timeout = 2;
 
@@ -333,6 +333,12 @@ bool RobotWebControlServer::Start(int port) {
         .uri = "/api/action",
         .method = HTTP_POST,
         .handler = HandleAction,
+        .user_ctx = this,
+    };
+    const httpd_uri_t live_drive = {
+        .uri = "/api/drive/live",
+        .method = HTTP_POST,
+        .handler = HandleLiveDrive,
         .user_ctx = this,
     };
     const httpd_uri_t logs = {
@@ -417,6 +423,7 @@ bool RobotWebControlServer::Start(int port) {
                            RegisterRobotWebStatusRoutes(server_, this, HandleDomainStatus);
     if (!routes_ok ||
         httpd_register_uri_handler(server_, &action) != ESP_OK ||
+        httpd_register_uri_handler(server_, &live_drive) != ESP_OK ||
         httpd_register_uri_handler(server_, &logs) != ESP_OK ||
         httpd_register_uri_handler(server_, &snapshot) != ESP_OK ||
         httpd_register_uri_handler(server_, &camera_mode) != ESP_OK ||
@@ -625,6 +632,57 @@ esp_err_t RobotWebControlServer::HandleAction(httpd_req_t* request) {
     std::string message;
     const bool accepted = self->robot_adapter_.ExecuteAction(
         action->valuestring, control_value, control_text, message);
+    cJSON_Delete(root);
+
+    cJSON* response = cJSON_CreateObject();
+    if (response == nullptr) {
+        return SendJson(request, "500 Internal Server Error",
+                        R"({"ok":false,"message":"Out of memory"})");
+    }
+    cJSON_AddBoolToObject(response, "ok", accepted);
+    cJSON_AddStringToObject(response, "message", message.c_str());
+    char* encoded = cJSON_PrintUnformatted(response);
+    const std::string response_body = encoded != nullptr ? encoded : R"({"ok":false})";
+    cJSON_free(encoded);
+    cJSON_Delete(response);
+    return SendJson(request, accepted ? "200 OK" : "400 Bad Request", response_body);
+}
+
+esp_err_t RobotWebControlServer::HandleLiveDrive(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (request->content_len <= 0 || request->content_len > 96) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid request"})");
+    }
+
+    std::array<char, 97> body = {};
+    size_t received = 0;
+    while (received < static_cast<size_t>(request->content_len)) {
+        const int result =
+            httpd_req_recv(request, body.data() + received, request->content_len - received);
+        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (result <= 0) {
+            return ESP_FAIL;
+        }
+        received += result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(body.data(), received);
+    const cJSON* left =
+        root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "left") : nullptr;
+    const cJSON* right =
+        root != nullptr ? cJSON_GetObjectItemCaseSensitive(root, "right") : nullptr;
+    if (!cJSON_IsNumber(left) || !cJSON_IsNumber(right)) {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Missing wheel outputs"})");
+    }
+
+    std::string message;
+    const bool accepted =
+        self->robot_adapter_.ExecuteLiveDrive(left->valueint, right->valueint, message);
     cJSON_Delete(root);
 
     cJSON* response = cJSON_CreateObject();

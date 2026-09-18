@@ -230,9 +230,14 @@
           </section>
           <section class="card">
             <div class="section-title">
-              <strong>Drive</strong><span id="durationLabel">250 ms</span>
+              <strong>Drive</strong
+              ><div class="drive-mode" role="group" aria-label="Drive control mode">
+                <button id="padMode" class="active" type="button">Pad</button
+                ><button id="joystickMode" type="button">Joystick</button>
+              </div>
             </div>
-            <div class="dpad">
+            <div id="padDrivePanel">
+              <div class="dpad">
               <button
                 class="control rotate-left-90"
                 data-turn="-90"
@@ -311,17 +316,32 @@
                   />
                 </svg>
               </button>
+              </div>
+              <div class="range-row">
+                <span>50 ms</span
+                ><input
+                  id="duration"
+                  type="range"
+                  min="50"
+                  max="5000"
+                  step="50"
+                  value="250"
+                /><span id="durationLabel">250 ms</span>
+              </div>
             </div>
-            <div class="range-row">
-              <span>50 ms</span
-              ><input
-                id="duration"
-                type="range"
-                min="50"
-                max="5000"
-                step="50"
-                value="250"
-              /><span>5 sec</span>
+            <div id="joystickDrivePanel" class="joystick-panel" hidden>
+              <div
+                id="joystick"
+                class="joystick"
+                role="application"
+                aria-label="Robot drive joystick"
+              >
+                <div id="joystickKnob" class="joystick-knob"></div>
+              </div>
+              <div class="joystick-output">
+                <span>Drag to drive · release to stop</span
+                ><b id="joystickOutput">L 0% · R 0%</b>
+              </div>
             </div>
             <div class="range-row" style="margin-top: 12px">
               <span>Speed</span

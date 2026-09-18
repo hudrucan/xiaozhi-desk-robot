@@ -59,6 +59,7 @@ function bindRangeControls() {
 }
 
 function emergencyStop() {
+  stopLiveDrive(true);
   $$('[data-drive].active').forEach((button) => button.classList.remove("active"));
   fetch("/api/action", {
     method: "POST",
@@ -70,6 +71,7 @@ function emergencyStop() {
 }
 
 function bindRobotControls() {
+  bindLiveDriveControls();
   const duration = $("#duration");
   $("#motionEmotions").onchange = (event) =>
     action("motion_emotions", { value: event.target.checked ? 1 : 0 });

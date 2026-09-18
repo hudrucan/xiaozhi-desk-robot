@@ -93,6 +93,7 @@ private:
     enum class EmotionSource : uint8_t { kAssistant, kPreview, kMpuReaction };
 
     static constexpr int kDefaultDriveDurationMs = 250;
+    static constexpr uint32_t kLiveDriveLeaseMs = 350;
     static constexpr int64_t kEmotionMovementCooldownUs = 1500 * 1000LL;
 
     Button boot_button_;
@@ -112,6 +113,9 @@ private:
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_bool motor_activity_active_{false};
     std::atomic_int drive_duration_ms_{kDefaultDriveDurationMs};
+    std::atomic_uint32_t live_drive_command_{100u | (100u << 8)};
+    std::atomic_uint32_t live_drive_generation_{0};
+    std::atomic_bool live_drive_update_scheduled_{false};
     std::atomic_bool emotion_movement_enabled_{false};
     std::atomic_bool emotion_movement_active_{false};
     int64_t last_emotion_movement_us_ = 0;
@@ -1258,8 +1262,48 @@ private:
         return true;
     }
 
+    bool SetLiveDrive(int left_percent, int right_percent) override {
+        const int safe_left = std::clamp(left_percent, -100, 100);
+        const int safe_right = std::clamp(right_percent, -100, 100);
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        if (IsCliffDetected() && (safe_left > 0 || safe_right > 0)) {
+            return false;
+        }
+#endif
+        const uint32_t packed = static_cast<uint32_t>(safe_left + 100) |
+                                (static_cast<uint32_t>(safe_right + 100) << 8);
+        live_drive_command_.store(packed, std::memory_order_relaxed);
+        live_drive_generation_.fetch_add(1, std::memory_order_release);
+        if (!live_drive_update_scheduled_.exchange(true, std::memory_order_acq_rel)) {
+            Application::GetInstance().Schedule([this]() { ApplyPendingLiveDrive(); });
+        }
+        return true;
+    }
+
+    void ApplyPendingLiveDrive() {
+        const uint32_t generation = live_drive_generation_.load(std::memory_order_acquire);
+        const uint32_t packed = live_drive_command_.load(std::memory_order_acquire);
+        const int left = static_cast<int>(packed & 0xff) - 100;
+        const int right = static_cast<int>((packed >> 8) & 0xff) - 100;
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        if (IsCliffDetected() && (left > 0 || right > 0)) {
+            motors_.Stop();
+        } else {
+            motors_.DriveWheels(left, right, kLiveDriveLeaseMs);
+        }
+#else
+        motors_.DriveWheels(left, right, kLiveDriveLeaseMs);
+#endif
+
+        live_drive_update_scheduled_.store(false, std::memory_order_release);
+        if (live_drive_generation_.load(std::memory_order_acquire) != generation &&
+            !live_drive_update_scheduled_.exchange(true, std::memory_order_acq_rel)) {
+            Application::GetInstance().Schedule([this]() { ApplyPendingLiveDrive(); });
+        }
+    }
+
     void Stop() override {
-        Application::GetInstance().Schedule([this]() { motors_.Stop(); });
+        SetLiveDrive(0, 0);
     }
 
     bool Dance() override { return QueueDance(); }
@@ -1582,6 +1626,9 @@ public:
         InitializeDistanceSensor();
         motors_.SetMotionGuard([this](MotorController::Direction direction) {
             return !IsDirectionBlockedByCliff(direction);
+        });
+        motors_.SetLiveMotionGuard([this](int left_percent, int right_percent) {
+            return !IsCliffDetected() || (left_percent <= 0 && right_percent <= 0);
         });
 #endif
         InitializeAudioSettings();

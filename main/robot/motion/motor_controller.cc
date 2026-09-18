@@ -7,6 +7,7 @@
 #include <esp_log.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <utility>
 
@@ -191,6 +192,9 @@ bool MotorController::Drive(Direction direction, uint32_t duration_ms, uint8_t i
         ESP_LOGW(TAG, "Motor command blocked by safety guard");
         return false;
     }
+    if (live_drive_.load(std::memory_order_relaxed)) {
+        Stop();
+    }
     duration_ms = std::clamp(duration_ms, kMinDurationMs, kMaxDurationMs);
     if (queued_commands_.size() >= kMaxQueuedCommands) {
         ESP_LOGW(TAG, "Motor command queue is full; dropping command");
@@ -215,6 +219,69 @@ bool MotorController::Drive(Direction direction, uint32_t duration_ms, uint8_t i
         BeginDeadTime();
     }
     return true;
+}
+
+bool MotorController::DriveWheels(int left_percent, int right_percent, uint32_t lease_ms) {
+    if (!available_ || faulted_.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    if (esp_timer_get_time() < arm_at_us_) {
+        ESP_LOGW(TAG, "Ignoring live motor command during startup arm delay");
+        return false;
+    }
+    const int safe_left = std::clamp(left_percent, -100, 100);
+    const int safe_right = std::clamp(right_percent, -100, 100);
+    if (safe_left == 0 && safe_right == 0) {
+        Stop();
+        return true;
+    }
+    if (live_motion_guard_ && !live_motion_guard_(safe_left, safe_right)) {
+        ESP_LOGW(TAG, "Live motor command blocked by safety guard");
+        Stop();
+        return false;
+    }
+
+    const uint32_t safe_lease = std::clamp<uint32_t>(lease_ms, 100, 500);
+    const bool was_live = live_drive_.load(std::memory_order_relaxed);
+    const int previous_left = live_left_percent_.load(std::memory_order_relaxed);
+    const int previous_right = live_right_percent_.load(std::memory_order_relaxed);
+    const bool reverses = (previous_left != 0 && safe_left != 0 &&
+                           (previous_left < 0) != (safe_left < 0)) ||
+                          (previous_right != 0 && safe_right != 0 &&
+                           (previous_right < 0) != (safe_right < 0));
+
+    if (!was_live) {
+        Stop();
+    }
+    queued_commands_.clear();
+    queued_runtime_ms_.store(0, std::memory_order_relaxed);
+    queued_count_.store(0, std::memory_order_relaxed);
+    sequence_active_.store(false, std::memory_order_relaxed);
+    sequence_total_.store(0, std::memory_order_relaxed);
+    sequence_completed_.store(0, std::memory_order_relaxed);
+    live_drive_.store(true, std::memory_order_relaxed);
+    live_left_percent_.store(static_cast<int8_t>(safe_left), std::memory_order_relaxed);
+    live_right_percent_.store(static_cast<int8_t>(safe_right), std::memory_order_relaxed);
+    active_until_us_.store(esp_timer_get_time() + static_cast<int64_t>(safe_lease) * 1000,
+                           std::memory_order_relaxed);
+    PublishMotionActive(true);
+
+    if (was_live && phase_ == Phase::kLiveDriving && !reverses) {
+        ApplyLiveCommand();
+        return phase_ == Phase::kLiveDriving && ArmTimer(safe_lease);
+    }
+    if (was_live && phase_ == Phase::kLiveDeadTime) {
+        return true;
+    }
+
+    if (stop_timer_ != nullptr) {
+        esp_timer_stop(stop_timer_);
+    }
+    timer_generation_.fetch_add(1, std::memory_order_relaxed);
+    AllOff();
+    moving_.store(false, std::memory_order_relaxed);
+    phase_ = Phase::kLiveDeadTime;
+    return ArmTimer(kDirectionDeadTimeMs);
 }
 
 bool MotorController::PlaySequence(const std::vector<Movement>& movements) {
@@ -351,6 +418,57 @@ void MotorController::ApplyNextCommand() {
     ArmTimer(command.duration_ms);
 }
 
+void MotorController::ApplyLiveCommand() {
+    const int left = live_left_percent_.load(std::memory_order_relaxed);
+    const int right = live_right_percent_.load(std::memory_order_relaxed);
+    if (!live_drive_.load(std::memory_order_relaxed) || (left == 0 && right == 0)) {
+        Stop();
+        return;
+    }
+    if (live_motion_guard_ && !live_motion_guard_(left, right)) {
+        ESP_LOGW(TAG, "Pending live motor command blocked by safety guard");
+        Stop();
+        return;
+    }
+
+    Direction direction = Direction::kForward;
+    if (left <= 0 && right <= 0) {
+        direction = Direction::kBackward;
+    } else if (left < 0 && right > 0) {
+        direction = Direction::kLeft;
+    } else if (left > 0 && right < 0) {
+        direction = Direction::kRight;
+    }
+    direction_.store(direction, std::memory_order_relaxed);
+    active_intensity_percent_.store(
+        static_cast<uint8_t>(std::max(std::abs(left), std::abs(right))),
+        std::memory_order_relaxed);
+
+    bool applied = false;
+    {
+        std::lock_guard<std::mutex> lock(output_mutex_);
+        if (!emergency_pending_.load() && InitializePwm()) {
+            applied = SetMotor(left_in1_, left_in2_, left < 0,
+                               static_cast<uint8_t>(std::abs(left))) &&
+                      SetMotor(right_in1_, right_in2_, right < 0,
+                               static_cast<uint8_t>(std::abs(right)));
+        }
+        if (!applied) {
+            OutputsOffLocked();
+        }
+    }
+    if (!applied) {
+        if (emergency_pending_.load()) {
+            Stop();
+        } else {
+            EnterFault("live motor PWM unavailable; outputs disabled");
+        }
+        return;
+    }
+    phase_ = Phase::kLiveDriving;
+    moving_.store(true, std::memory_order_relaxed);
+}
+
 bool MotorController::SetActiveIntensityPercent(uint8_t intensity_percent) {
     if (!available_ || faulted_.load(std::memory_order_relaxed) ||
         !moving_.load(std::memory_order_relaxed)) {
@@ -394,7 +512,24 @@ void MotorController::HandleTimerExpired(uint32_t generation) {
         faulted_.load(std::memory_order_relaxed)) {
         return;
     }
-    if (phase_ == Phase::kDriving) {
+    if (phase_ == Phase::kLiveDriving) {
+        phase_ = Phase::kIdle;
+        moving_.store(false, std::memory_order_relaxed);
+        live_drive_.store(false, std::memory_order_relaxed);
+        live_left_percent_.store(0, std::memory_order_relaxed);
+        live_right_percent_.store(0, std::memory_order_relaxed);
+        active_until_us_.store(0, std::memory_order_relaxed);
+        PublishMotionActive(false);
+    } else if (phase_ == Phase::kLiveDeadTime) {
+        ApplyLiveCommand();
+        const int64_t remaining_us =
+            active_until_us_.load(std::memory_order_relaxed) - esp_timer_get_time();
+        if (phase_ == Phase::kLiveDriving && remaining_us > 0) {
+            ArmTimer(std::max<uint32_t>(1, static_cast<uint32_t>(remaining_us / 1000)));
+        } else if (phase_ == Phase::kLiveDriving) {
+            Stop();
+        }
+    } else if (phase_ == Phase::kDriving) {
         // The esp_timer callback has already removed power from both motors.
         phase_ = Phase::kIdle;
         moving_.store(false, std::memory_order_relaxed);
@@ -429,6 +564,9 @@ void MotorController::EnterFault(const char* reason) {
     sequence_total_.store(0, std::memory_order_relaxed);
     sequence_completed_.store(0, std::memory_order_relaxed);
     active_until_us_.store(0, std::memory_order_relaxed);
+    live_drive_.store(false, std::memory_order_relaxed);
+    live_left_percent_.store(0, std::memory_order_relaxed);
+    live_right_percent_.store(0, std::memory_order_relaxed);
     PublishMotionActive(false);
     faulted_.store(true, std::memory_order_relaxed);
     ESP_LOGE(TAG, "Motor control latched off: %s", reason);
@@ -452,6 +590,9 @@ void MotorController::Stop() {
     sequence_total_.store(0, std::memory_order_relaxed);
     sequence_completed_.store(0, std::memory_order_relaxed);
     active_until_us_.store(0, std::memory_order_relaxed);
+    live_drive_.store(false, std::memory_order_relaxed);
+    live_left_percent_.store(0, std::memory_order_relaxed);
+    live_right_percent_.store(0, std::memory_order_relaxed);
     PublishMotionActive(false);
     emergency_pending_.store(false);
 }
@@ -477,6 +618,10 @@ void MotorController::EmergencyStop() {
 
 void MotorController::SetMotionGuard(std::function<bool(Direction)> guard) {
     motion_guard_ = std::move(guard);
+}
+
+void MotorController::SetLiveMotionGuard(std::function<bool(int, int)> guard) {
+    live_motion_guard_ = std::move(guard);
 }
 
 void MotorController::SetMovementStateCallback(std::function<void(bool)> callback) {
@@ -525,6 +670,9 @@ MotorController::Status MotorController::GetStatus() const {
         .sequence_active = sequence_active_.load(std::memory_order_relaxed),
         .sequence_total = sequence_total_.load(std::memory_order_relaxed),
         .sequence_completed = sequence_completed_.load(std::memory_order_relaxed),
+        .live_drive = live_drive_.load(std::memory_order_relaxed),
+        .left_percent = live_left_percent_.load(std::memory_order_relaxed),
+        .right_percent = live_right_percent_.load(std::memory_order_relaxed),
     };
 }
 
@@ -533,18 +681,20 @@ std::string MotorController::StatusJson() const {
 }
 
 std::string MotorController::StatusJson(const Status& status) {
-    char result[320];
+    char result[400];
     snprintf(
         result, sizeof(result),
         "{\"available\":%s,\"faulted\":%s,\"moving\":%s,\"direction\":\"%s\","
         "\"intensity_percent\":%u,\"queued\":%zu,\"remaining_ms\":%lu,\"sequence_active\":%s,"
-        "\"sequence_total\":%zu,\"sequence_completed\":%zu}",
+        "\"sequence_total\":%zu,\"sequence_completed\":%zu,\"live_drive\":%s,"
+        "\"left_percent\":%d,\"right_percent\":%d}",
         status.available ? "true" : "false", status.faulted ? "true" : "false",
         status.moving ? "true" : "false", DirectionName(status.direction),
         static_cast<unsigned>(status.intensity_percent), status.queued,
         static_cast<unsigned long>(status.remaining_ms),
         status.sequence_active ? "true" : "false", status.sequence_total,
-        status.sequence_completed);
+        status.sequence_completed, status.live_drive ? "true" : "false",
+        static_cast<int>(status.left_percent), static_cast<int>(status.right_percent));
     return result;
 }
 

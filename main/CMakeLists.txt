@@ -129,6 +129,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set(ROBOT_WEB_UI_DIR "${CMAKE_CURRENT_LIST_DIR}/robot/web/ui")
     set(ROBOT_WEB_JS_FILES
         "${ROBOT_WEB_UI_DIR}/js/core.js"
+        "${ROBOT_WEB_UI_DIR}/js/drive.js"
         "${ROBOT_WEB_UI_DIR}/js/oled.js"
         "${ROBOT_WEB_UI_DIR}/js/chat_asr.js"
         "${ROBOT_WEB_UI_DIR}/js/status.js"
