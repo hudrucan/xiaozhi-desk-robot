@@ -49,6 +49,7 @@
         display: flex;
         flex-direction: column;
         gap: 9px;
+        padding: 13px;
         background: rgba(6, 5, 3, 0.34);
       }
       .conversation-empty {
