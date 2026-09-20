@@ -67,6 +67,7 @@ public:
     // Connected bidirectional transports may keep the default no-op behavior.
     virtual bool PrimeAudioChannel() { return true; }
     virtual bool SendWakeWordDetected(const std::string& wake_word);
+    bool SendTypedText(const std::string& text);
     virtual void SendStartListening(ListeningMode mode);
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);

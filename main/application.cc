@@ -565,6 +565,8 @@ void Application::InitializeProtocol() {
 
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
+    text_chat_controller_.SetEnhancedTypedTextEnabled(ota_->HasDeskRobotTypedTextV1());
+
     if (ota_->HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
     } else if (ota_->HasWebsocketConfig()) {

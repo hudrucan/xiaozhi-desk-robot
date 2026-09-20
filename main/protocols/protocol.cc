@@ -93,6 +93,28 @@ bool Protocol::SendWakeWordDetected(const std::string& wake_word) {
     return sent;
 }
 
+bool Protocol::SendTypedText(const std::string& text) {
+    cJSON* root = cJSON_CreateObject();
+    if (root == nullptr) {
+        return false;
+    }
+    const bool complete =
+        cJSON_AddStringToObject(root, "session_id", session_id_.c_str()) != nullptr &&
+        cJSON_AddStringToObject(root, "type", "listen") != nullptr &&
+        cJSON_AddStringToObject(root, "state", "detect") != nullptr &&
+        cJSON_AddStringToObject(root, "text", text.c_str()) != nullptr &&
+        cJSON_AddStringToObject(root, "input_mode", "text") != nullptr;
+    if (!complete) {
+        cJSON_Delete(root);
+        return false;
+    }
+    char* encoded = cJSON_PrintUnformatted(root);
+    const bool sent = encoded != nullptr && SendText(encoded);
+    cJSON_free(encoded);
+    cJSON_Delete(root);
+    return sent;
+}
+
 void Protocol::SendStartListening(ListeningMode mode) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\"";
     message += ",\"type\":\"listen\",\"state\":\"start\"";

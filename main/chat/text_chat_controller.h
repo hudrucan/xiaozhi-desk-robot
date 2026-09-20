@@ -17,6 +17,9 @@ public:
     explicit TextChatController(Application& application);
 
     void RegisterMcpTool(McpServer& mcp_server);
+    void SetEnhancedTypedTextEnabled(bool enabled) {
+        enhanced_typed_text_enabled_.store(enabled);
+    }
     bool Submit(std::string text, bool require_active_conversation, std::string& message);
     void RegisterCallback(
         std::function<void(const std::string&, const std::string&)> callback);
@@ -53,6 +56,7 @@ private:
 
     Application& application_;
     WebChatMcpBridge web_chat_bridge_;
+    std::atomic_bool enhanced_typed_text_enabled_{false};
     std::atomic_bool pending_{false};
     std::atomic<int64_t> deadline_us_{0};
     std::atomic_bool tts_active_{false};
@@ -65,7 +69,7 @@ private:
     bool resume_listening_ = false;
     ListeningMode resume_mode_ = kListeningModeAutoStop;
 
-    void Run(const std::string& text);
+    void Run(const std::string& text, bool enhanced_typed_text);
     void Emit(const std::string& event, const std::string& text = "");
     void CompleteAfterPlayback();
     void ResumeListening();

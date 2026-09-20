@@ -112,15 +112,22 @@ bool TextChatController::Submit(std::string text, bool require_active_conversati
     }
 
     const size_t codepoints = CountUtf8Codepoints(text);
-    if (codepoints > kNativeDetectMaxCodepoints) {
+    if (enhanced_typed_text_enabled_.load()) {
+        web_chat_bridge_.Clear();
+        ESP_LOGI(TAG, "Enhanced typed text queued chars=%u bytes=%u",
+                 static_cast<unsigned>(codepoints), static_cast<unsigned>(text.size()));
+        application_.Schedule(
+            [this, text = std::move(text)]() { Run(text, true); });
+    } else if (codepoints > kNativeDetectMaxCodepoints) {
         web_chat_bridge_.Arm(text);
         ESP_LOGI(TAG, "MCP bridge armed chars=%u bytes=%u trigger=%s",
                  static_cast<unsigned>(codepoints), static_cast<unsigned>(text.size()),
                  kMcpTrigger);
-        application_.Schedule([this]() { Run(kMcpTrigger); });
+        application_.Schedule([this]() { Run(kMcpTrigger, false); });
     } else {
         web_chat_bridge_.Clear();
-        application_.Schedule([this, text = std::move(text)]() { Run(text); });
+        application_.Schedule(
+            [this, text = std::move(text)]() { Run(text, false); });
     }
 
     message = "Text chat queued";
@@ -340,7 +347,7 @@ void TextChatController::ResumeListening() {
     }
 }
 
-void TextChatController::Run(const std::string& text) {
+void TextChatController::Run(const std::string& text, bool enhanced_typed_text) {
     if (!pending_.load()) {
         return;
     }
@@ -433,8 +440,11 @@ void TextChatController::Run(const std::string& text) {
         ESP_LOGI(TAG, "Idle-origin: UDP silence prime sent, mic suppressed");
     }
 
-    ESP_LOGI(TAG, "Sending detect/text");
-    if (!application_.protocol_->SendWakeWordDetected(text)) {
+    ESP_LOGI(TAG, "Sending detect/text input_mode=%s", enhanced_typed_text ? "text" : "legacy");
+    const bool sent = enhanced_typed_text
+                          ? application_.protocol_->SendTypedText(text)
+                          : application_.protocol_->SendWakeWordDetected(text);
+    if (!sent) {
         reject("Send failed", true, !resume_listening_);
         return;
     }

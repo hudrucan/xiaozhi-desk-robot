@@ -152,8 +152,16 @@ NetworkResult<> Ota::CheckVersion() {
     }
 
     has_websocket_config_ = false;
+    has_desk_robot_typed_text_v1_ = false;
     cJSON *websocket = cJSON_GetObjectItem(root, "websocket");
     if (cJSON_IsObject(websocket)) {
+        cJSON *features = cJSON_GetObjectItem(websocket, "features");
+        if (cJSON_IsObject(features)) {
+            cJSON *typed_text =
+                cJSON_GetObjectItem(features, "desk_robot_typed_text_v1");
+            has_desk_robot_typed_text_v1_ = cJSON_IsTrue(typed_text);
+        }
+
         Settings settings("websocket", true);
         cJSON *item = NULL;
         cJSON_ArrayForEach(item, websocket) {
