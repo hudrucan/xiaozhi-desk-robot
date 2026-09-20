@@ -140,7 +140,9 @@ void CliffSensor::RunTask() {
                                     reading.distance_mm <= edge_mm;
         if (floor_detected) {
             unsafe_samples = 0;
-            cliff_detected_.store(false);
+            if (cliff_detected_.exchange(false)) {
+                ESP_LOGI(TAG, "Floor normal: %u mm away", reading.distance_mm);
+            }
         } else {
             unsafe_samples = std::min<uint8_t>(unsafe_samples + 1, CLIFF_CONFIRM_SAMPLES);
             if (unsafe_samples >= CLIFF_CONFIRM_SAMPLES && !cliff_detected_.exchange(true)) {

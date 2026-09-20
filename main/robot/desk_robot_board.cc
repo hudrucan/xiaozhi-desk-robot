@@ -42,6 +42,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
@@ -88,6 +89,48 @@
 #define MPU6050_PRESS_THRESHOLD_G 1.35f
 #endif
 
+namespace {
+
+const char* ResetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:
+            return "power-on";
+        case ESP_RST_EXT:
+            return "external-pin";
+        case ESP_RST_SW:
+            return "software";
+        case ESP_RST_PANIC:
+            return "panic";
+        case ESP_RST_INT_WDT:
+            return "interrupt-watchdog";
+        case ESP_RST_TASK_WDT:
+            return "task-watchdog";
+        case ESP_RST_WDT:
+            return "watchdog";
+        case ESP_RST_DEEPSLEEP:
+            return "deep-sleep";
+        case ESP_RST_BROWNOUT:
+            return "brownout";
+        case ESP_RST_SDIO:
+            return "sdio";
+        case ESP_RST_USB:
+            return "usb";
+        case ESP_RST_JTAG:
+            return "jtag";
+        case ESP_RST_EFUSE:
+            return "efuse";
+        case ESP_RST_PWR_GLITCH:
+            return "power-glitch";
+        case ESP_RST_CPU_LOCKUP:
+            return "cpu-lockup";
+        case ESP_RST_UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
+
+}  // namespace
+
 class DeskRobotBoard : public WifiBoard, public RobotController {
 private:
     enum class EmotionSource : uint8_t { kAssistant, kPreview, kMpuReaction };
@@ -95,6 +138,8 @@ private:
     static constexpr int kDefaultDriveDurationMs = 250;
     static constexpr uint32_t kLiveDriveLeaseMs = 350;
     static constexpr int64_t kEmotionMovementCooldownUs = 1500 * 1000LL;
+    static constexpr uint8_t kWebControlMaxStartAttempts = 3;
+    static constexpr int64_t kWebControlRetryDelayUs = 3 * 1000 * 1000LL;
 
     Button boot_button_;
     MochanDisplay* display_ = nullptr;
@@ -122,6 +167,8 @@ private:
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
     esp_timer_handle_t light_effect_reset_timer_ = nullptr;
+    esp_timer_handle_t web_control_retry_timer_ = nullptr;
+    uint8_t web_control_start_attempts_ = 0;
     std::mutex temporary_emotion_mutex_;
     std::string temporary_emotion_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -390,6 +437,42 @@ private:
     }
 #endif
 
+    void StartWebControl(bool reset_attempts) {
+        if (reset_attempts) {
+            web_control_start_attempts_ = 0;
+            if (web_control_retry_timer_ != nullptr &&
+                esp_timer_is_active(web_control_retry_timer_)) {
+                esp_timer_stop(web_control_retry_timer_);
+            }
+        }
+        if (!WifiManager::GetInstance().IsConnected()) {
+            return;
+        }
+        if (web_control_server_ != nullptr && web_control_server_->Start(8080)) {
+            web_control_start_attempts_ = 0;
+            ESP_LOGI(TAG, "Local control: http://%s:8080",
+                     WifiManager::GetInstance().GetIpAddress().c_str());
+            return;
+        }
+
+        ++web_control_start_attempts_;
+        if (web_control_start_attempts_ >= kWebControlMaxStartAttempts ||
+            web_control_retry_timer_ == nullptr) {
+            ESP_LOGE(TAG, "Local control unavailable after %u start attempts",
+                     static_cast<unsigned>(web_control_start_attempts_));
+            return;
+        }
+        const esp_err_t result =
+            esp_timer_start_once(web_control_retry_timer_, kWebControlRetryDelayUs);
+        if (result != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to schedule local control retry: %s", esp_err_to_name(result));
+            return;
+        }
+        ESP_LOGW(TAG, "Local control start failed; retrying attempt %u of %u",
+                 static_cast<unsigned>(web_control_start_attempts_ + 1),
+                 static_cast<unsigned>(kWebControlMaxStartAttempts));
+    }
+
     void OnNetworkEvent(NetworkEvent event, const std::string& data = "") override {
         WifiBoard::OnNetworkEvent(event, data);
 
@@ -421,12 +504,7 @@ private:
 #endif
                 display_->SetWifiConnected(true);
                 display_->HideBootSplash();
-                Application::GetInstance().Schedule([this]() {
-                    if (web_control_server_ != nullptr && web_control_server_->Start(8080)) {
-                        ESP_LOGI(TAG, "Local control: http://%s:8080",
-                                 WifiManager::GetInstance().GetIpAddress().c_str());
-                    }
-                });
+                Application::GetInstance().Schedule([this]() { StartWebControl(true); });
                 break;
             case NetworkEvent::WifiConfigModeEnter:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
@@ -1587,6 +1665,24 @@ private:
                     web_control_server_->OnChatProbeEvent(event, text);
                 }
             });
+        esp_timer_create_args_t retry_args = {
+            .callback =
+                [](void* arg) {
+                    auto* self = static_cast<DeskRobotBoard*>(arg);
+                    Application::GetInstance().Schedule(
+                        [self]() { self->StartWebControl(false); });
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "web_control_retry",
+            .skip_unhandled_events = true,
+        };
+        const esp_err_t result =
+            esp_timer_create(&retry_args, &web_control_retry_timer_);
+        if (result != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create local control retry timer: %s",
+                     esp_err_to_name(result));
+        }
     }
 
     void InitializeButtons() {
@@ -1608,6 +1704,9 @@ public:
         // The web dashboard is not reachable until Wi-Fi comes up, so begin
         // buffering here to retain display, camera, and audio initialization logs.
         RobotWebControlServer::BeginLogCapture();
+        const esp_reset_reason_t reset_reason = esp_reset_reason();
+        ESP_LOGI(TAG, "Boot reset reason: %s (%d)", ResetReasonName(reset_reason),
+                 static_cast<int>(reset_reason));
         InitializeSpi();
         InitializeDisplay();
         // Bring up the panel backlight before camera/audio initialization. A

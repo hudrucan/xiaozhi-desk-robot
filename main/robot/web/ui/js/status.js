@@ -377,7 +377,7 @@ async function runStatusScheduler() {
   domainSchedule.delete(name);
   statusPending = true;
   try {
-    const response = await fetch(config.path, { cache: "no-store" });
+    const response = await fetchWithTimeout(config.path, { cache: "no-store" });
     if (!response.ok) throw Error("Status request failed");
     const status = await response.json();
     config.render(status);

@@ -55,6 +55,23 @@ uint64_t log_stream_end = 0;
 std::atomic<vprintf_like_t> previous_log_vprintf = nullptr;
 std::atomic<bool> log_capture_installed = false;
 
+bool ReceiveRequestBody(httpd_req_t* request, char* body, size_t length) {
+    size_t received = 0;
+    while (received < length) {
+        const int result = httpd_req_recv(request, body + received, length - received);
+        if (result <= 0) {
+            if (result == HTTPD_SOCK_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Request body timed out: uri=%s received=%u expected=%u",
+                         request->uri, static_cast<unsigned>(received),
+                         static_cast<unsigned>(length));
+            }
+            return false;
+        }
+        received += static_cast<size_t>(result);
+    }
+    return true;
+}
+
 std::string EncodeServerConfig(bool ok = true, const char* message = nullptr,
                                bool restart_required = false) {
     Settings settings("wifi", false);
@@ -362,10 +379,13 @@ bool RobotWebControlServer::Start(int port) {
     config.backlog_conn = 2;
     config.max_uri_handlers = 28;
     config.stack_size = 6144;
+    config.recv_wait_timeout = 2;
     config.send_wait_timeout = 2;
 
-    if (httpd_start(&server_, &config) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start local control server on port %d", port);
+    const esp_err_t start_result = httpd_start(&server_, &config);
+    if (start_result != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start local control server on port %d: %s", port,
+                 esp_err_to_name(start_result));
         server_ = nullptr;
         return false;
     }
@@ -640,17 +660,9 @@ esp_err_t RobotWebControlServer::HandleSaveServerConfig(httpd_req_t* request) {
     }
 
     std::vector<char> body(static_cast<size_t>(request->content_len) + 1, '\0');
-    size_t received = 0;
-    while (received < static_cast<size_t>(request->content_len)) {
-        const int result =
-            httpd_req_recv(request, body.data() + received, request->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += result;
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
     }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), received);
@@ -721,17 +733,9 @@ esp_err_t RobotWebControlServer::HandleAction(httpd_req_t* request) {
     }
 
     std::array<char, 257> body = {};
-    size_t received = 0;
-    while (received < static_cast<size_t>(request->content_len)) {
-        const int result =
-            httpd_req_recv(request, body.data() + received, request->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += result;
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
     }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), received);
@@ -779,17 +783,9 @@ esp_err_t RobotWebControlServer::HandleLiveDrive(httpd_req_t* request) {
     }
 
     std::array<char, 97> body = {};
-    size_t received = 0;
-    while (received < static_cast<size_t>(request->content_len)) {
-        const int result =
-            httpd_req_recv(request, body.data() + received, request->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += result;
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
     }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), received);
@@ -835,17 +831,9 @@ esp_err_t RobotWebControlServer::HandleChatProbe(httpd_req_t* request) {
     }
 
     std::vector<char> body(static_cast<size_t>(request->content_len) + 1, '\0');
-    size_t received = 0;
-    while (received < static_cast<size_t>(request->content_len)) {
-        const int result =
-            httpd_req_recv(request, body.data() + received, request->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += result;
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
     }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), received);
@@ -941,17 +929,9 @@ esp_err_t RobotWebControlServer::HandleSaveAsrConfig(httpd_req_t* request) {
     }
 
     std::vector<char> body(static_cast<size_t>(request->content_len) + 1, '\0');
-    size_t received = 0;
-    while (received < static_cast<size_t>(request->content_len)) {
-        const int result =
-            httpd_req_recv(request, body.data() + received, request->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += result;
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
     }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), received);
@@ -1048,17 +1028,9 @@ esp_err_t RobotWebControlServer::HandleCameraMode(httpd_req_t* request) {
     }
 
     std::array<char, 65> body = {};
-    size_t received = 0;
-    while (received < static_cast<size_t>(request->content_len)) {
-        const int result =
-            httpd_req_recv(request, body.data() + received, request->content_len - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += static_cast<size_t>(result);
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
     }
 
     cJSON* root = cJSON_ParseWithLength(body.data(), received);
@@ -1109,17 +1081,8 @@ esp_err_t RobotWebControlServer::HandleSaveCameraSettings(httpd_req_t* request) 
                         R"({"ok":false,"message":"Invalid camera settings request"})");
     }
     std::vector<char> body(static_cast<size_t>(request->content_len));
-    size_t received = 0;
-    while (received < body.size()) {
-        const int result = httpd_req_recv(request, body.data() + received,
-                                          body.size() - received);
-        if (result == HTTPD_SOCK_ERR_TIMEOUT) {
-            continue;
-        }
-        if (result <= 0) {
-            return ESP_FAIL;
-        }
-        received += static_cast<size_t>(result);
+    if (!ReceiveRequestBody(request, body.data(), body.size())) {
+        return ESP_FAIL;
     }
 
     CameraSettingsConfig settings;

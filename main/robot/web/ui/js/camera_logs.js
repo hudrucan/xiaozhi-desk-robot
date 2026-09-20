@@ -280,7 +280,9 @@ async function fetchLogs() {
   if (logPaused || logPending) return;
   logPending = true;
   try {
-    const response = await fetch("/api/log?since=" + logCursor, { cache: "no-store" });
+    const response = await fetchWithTimeout("/api/log?since=" + logCursor, {
+      cache: "no-store",
+    });
     if (!response.ok) throw Error("Log request failed");
     const nextCursor = Number(response.headers.get("X-Log-Cursor") || logCursor);
     const reset = response.headers.get("X-Log-Reset") === "1";
