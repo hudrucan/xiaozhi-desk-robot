@@ -1,5 +1,6 @@
 #include "mochan_display.h"
 
+#include "display/vietnamese_glyph_fallback.h"
 #include "display/lvgl_display/lvgl_theme.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
 
@@ -125,6 +126,11 @@ void MochanDisplay::SetupUI() {
     }
 
     Display::SetupUI();
+    // xiaozhi-fonts 2.0 derives its common tier from locale strings and a
+    // tokenizer corpus, so it omits several valid Vietnamese letters (mostly
+    // uppercase). Seed the same dynamic fallback used by server glyph_push so
+    // response text stays complete even with servers that do not push them.
+    AddTextGlyphs(CreateVietnameseGlyphFallback(), 4);
     DisplayLockGuard lock(this);
     auto* screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, kFaceBackground, 0);

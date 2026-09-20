@@ -67,6 +67,11 @@ bool LvglDisplay::SetTextFont(std::shared_ptr<LvglFont> text_font) {
     if (dark_theme != nullptr) {
         dark_theme->set_text_font(text_font);
     }
+    if (dynamic_glyph_cache_ != nullptr && !dynamic_glyph_cache_->empty()) {
+        auto* fallback =
+            dynamic_glyph_cache_->EnsureFont(text_font->font(), dynamic_glyph_cache_->bpp());
+        text_font->SetFallback(fallback);
+    }
     if (current_theme_ != nullptr) {
         SetTheme(current_theme_);
     }

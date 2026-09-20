@@ -17,6 +17,8 @@ public:
     lv_font_t* EnsureFont(const lv_font_t* base_font, uint8_t bpp);
     bool AddGlyphs(const std::vector<TextGlyph>& glyphs);
     void Clear();
+    bool empty() const { return entries_.empty(); }
+    uint8_t bpp() const { return bpp_; }
 
 private:
     struct Entry {
