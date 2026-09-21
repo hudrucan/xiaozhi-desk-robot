@@ -46,9 +46,11 @@ function renderCoreStatus(status) {
   robotActive = !idle || motorsActive;
   if (!idle && browserLive) stopBrowserLive("Live preview stopped outside Idle", true);
 
-  const visibleState = status.state === "listening" && !status.asr_ready
-    ? status.asr_preparing ? "preparing ASR" : "processing"
-    : (status.state || "idle").replaceAll("_", " ");
+  const visibleState = status.server_status_phase
+    ? String(status.server_status_phase).replaceAll("_", " ")
+    : status.state === "listening" && !status.asr_ready
+      ? status.asr_preparing ? "preparing ASR" : "processing"
+      : (status.state || "idle").replaceAll("_", " ");
   $("#state").textContent = visibleState;
   $("#wakeAction").classList.toggle("on", chatActive);
   $("#wakeLabel").textContent = chatActive ? "End chat" : "Wake";

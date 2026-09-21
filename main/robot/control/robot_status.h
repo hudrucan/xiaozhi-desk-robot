@@ -13,6 +13,7 @@
 
 struct RobotStatus {
     std::string state = "unknown";
+    std::string server_status_phase;
     bool asr_ready = false;
     bool asr_preparing = false;
 

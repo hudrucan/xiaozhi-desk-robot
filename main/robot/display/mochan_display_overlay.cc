@@ -107,14 +107,16 @@ void MochanDisplay::SetStatus(const char* status) {
     }
     FaceState next_activity = FaceState::kIdle;
     bool clear_emotion = false;
-    const bool status_dot_busy = std::strcmp(status, Lang::Strings::PREPARING_ASR) == 0 ||
+    const bool status_dot_busy = std::strcmp(status, Lang::Strings::INITIALIZING) == 0 ||
+                                 std::strcmp(status, Lang::Strings::PREPARING_ASR) == 0 ||
                                  std::strcmp(status, Lang::Strings::PROCESSING) == 0;
     if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
         next_activity = FaceState::kListening;
         clear_emotion = true;
     } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
         next_activity = FaceState::kSpeaking;
-    } else if (std::strcmp(status, Lang::Strings::CONNECTING) == 0 ||
+    } else if (std::strcmp(status, Lang::Strings::INITIALIZING) == 0 ||
+               std::strcmp(status, Lang::Strings::CONNECTING) == 0 ||
                std::strcmp(status, Lang::Strings::PREPARING_ASR) == 0 ||
                std::strcmp(status, Lang::Strings::PROCESSING) == 0 ||
                std::strcmp(status, Lang::Strings::REGISTERING_NETWORK) == 0) {

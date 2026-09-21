@@ -1556,6 +1556,7 @@ private:
         auto& app = Application::GetInstance();
         const char* state = DeviceStateMachine::GetStateName(app.GetDeviceState());
         status.state = state != nullptr ? state : "unknown";
+        status.server_status_phase = app.GetServerStatusPhase();
         status.asr_ready = app.IsAsrReady();
         status.asr_preparing = app.IsGeminiAsrPreparing();
         status.camera_available = camera_ != nullptr && camera_->IsAvailable();

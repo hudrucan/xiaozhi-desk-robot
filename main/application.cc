@@ -624,7 +624,15 @@ void Application::InitializeProtocol() {
             ESP_LOGW(TAG, "Incoming JSON message has no type");
             return;
         }
-        if (strcmp(type->valuestring, "notify") == 0) {
+        if (strcmp(type->valuestring, "status") == 0) {
+            ServerStatusMessage message;
+            if (ServerStatusController::Parse(root, message)) {
+                Schedule([this, display, message = std::move(message)]() {
+                    server_status_controller_.Handle(message, display, GetDeviceState(),
+                                                     IsGeminiAsrPreparing());
+                });
+            }
+        } else if (strcmp(type->valuestring, "notify") == 0) {
             auto audio_url = cJSON_GetObjectItem(root, "audio_url");
             if (!cJSON_IsString(audio_url) || audio_url->valuestring[0] == '\0') {
                 ESP_LOGW(TAG, "Notify message requires audio_url");
@@ -1074,6 +1082,12 @@ void Application::HandleStateChangedEvent() {
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
+    const bool server_status_active = server_status_controller_.active();
+    const auto set_device_status = [display, server_status_active](const char* status) {
+        if (!server_status_active) {
+            display->SetStatus(status);
+        }
+    };
 
     switch (new_state) {
         case kDeviceStateUnknown:
@@ -1082,7 +1096,7 @@ void Application::HandleStateChangedEvent() {
             // queues STATE_CHANGED after Alert(), and the idle handler would
             // otherwise wipe the status, emotion, and chat message.
             if (last_error_message_.empty()) {
-                display->SetStatus(Lang::Strings::STANDBY);
+                set_device_status(Lang::Strings::STANDBY);
                 display->ClearChatMessages();  // Clear messages first
                 display->SetEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
@@ -1091,17 +1105,17 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateConnecting:
-            display->SetStatus(Lang::Strings::CONNECTING);
+            set_device_status(Lang::Strings::CONNECTING);
             display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
             if (!text_chat_controller_.IsPending() &&
                 gemini_asr_controller_.GetTurnConfig().provider == AsrProvider::kGemini) {
-                display->SetStatus(Lang::Strings::PREPARING_ASR);
+                set_device_status(Lang::Strings::PREPARING_ASR);
                 gemini_asr_controller_.SetPreparingForListening();
             } else {
-                display->SetStatus(Lang::Strings::LISTENING);
+                set_device_status(Lang::Strings::LISTENING);
             }
             display->SetEmotion("neutral");
 
@@ -1132,7 +1146,7 @@ void Application::HandleStateChangedEvent() {
             }
             break;
         case kDeviceStateSpeaking:
-            display->SetStatus(Lang::Strings::SPEAKING);
+            set_device_status(Lang::Strings::SPEAKING);
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
@@ -1145,7 +1159,7 @@ void Application::HandleStateChangedEvent() {
             gemini_asr_controller_.MaybeStartPrewarm();
             break;
         case kDeviceStateNotifying:
-            display->SetStatus(Lang::Strings::SPEAKING);
+            set_device_status(Lang::Strings::SPEAKING);
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             break;

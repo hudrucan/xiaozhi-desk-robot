@@ -11,6 +11,7 @@ cJSON* RobotWebStatus::CreateCore() {
         return nullptr;
     }
     cJSON_AddStringToObject(root, "state", status.state.c_str());
+    cJSON_AddStringToObject(root, "server_status_phase", status.server_status_phase.c_str());
     cJSON_AddBoolToObject(root, "asr_ready", status.asr_ready);
     cJSON_AddBoolToObject(root, "asr_preparing", status.asr_preparing);
     cJSON_AddStringToObject(root, "emotion", status.emotion.c_str());

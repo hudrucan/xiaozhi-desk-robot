@@ -20,6 +20,7 @@
 #include "gemini_asr_turn_controller.h"
 #include "device_state.h"
 #include "device_state_machine.h"
+#include "display/server_status_controller.h"
 #include "notify/notification_controller.h"
 #include "chat/text_chat_controller.h"
 
@@ -74,6 +75,7 @@ public:
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     bool IsAsrReady() const { return gemini_asr_controller_.IsReady(); }
     bool IsGeminiAsrPreparing() const { return gemini_asr_controller_.IsPreparing(); }
+    std::string GetServerStatusPhase() const { return server_status_controller_.active_phase(); }
 
     /**
      * Request state transition
@@ -148,6 +150,7 @@ private:
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
+    ServerStatusController server_status_controller_;
     // Declared before AudioService so its client outlives every audio callback
     // that may read the non-owning Gemini route pointer.
     GeminiAsrTurnController gemini_asr_controller_;
