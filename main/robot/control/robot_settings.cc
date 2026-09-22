@@ -26,6 +26,16 @@ void RobotSettings::SetMicrophoneGain(int gain) const {
     settings.SetInt("input_gain", std::clamp(gain, 1, 3));
 }
 
+bool RobotSettings::GetMicrophoneMuted() const {
+    Settings settings("audio", false);
+    return settings.GetBool("input_muted", false);
+}
+
+void RobotSettings::SetMicrophoneMuted(bool muted) const {
+    Settings settings("audio", true);
+    settings.SetBool("input_muted", muted);
+}
+
 bool RobotSettings::GetCameraFlipped() const {
     Settings settings("desk_robot", false);
     return settings.GetBool("camera_flip", false);

@@ -1053,6 +1053,9 @@ private:
         speaker_volume_.store(speaker_volume);
         microphone_gain_.store(microphone_gain);
         GetAudioCodec()->SetInputGain(static_cast<float>(microphone_gain));
+        if (robot_settings_.GetMicrophoneMuted()) {
+            Application::GetInstance().SetMicrophoneMuted(true);
+        }
     }
 
     void ApplyStatusLightBrightness(int brightness_percent) {
@@ -1485,6 +1488,8 @@ private:
     void SetMicrophoneGain(int gain) override { QueueMicrophoneGain(gain); }
     void SetMicrophoneMuted(bool muted) override {
         Application::GetInstance().SetMicrophoneMuted(muted);
+        Application::GetInstance().Schedule(
+            [this, muted]() { robot_settings_.SetMicrophoneMuted(muted); });
     }
     void SetScreenBrightness(int brightness) override { QueueScreenBrightness(brightness); }
     void SetAutoBrightnessEnabled(bool enabled) override {

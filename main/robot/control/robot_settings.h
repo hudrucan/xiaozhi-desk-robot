@@ -5,6 +5,8 @@ public:
     int GetSpeakerVolume() const;
     int GetMicrophoneGain() const;
     void SetMicrophoneGain(int gain) const;
+    bool GetMicrophoneMuted() const;
+    void SetMicrophoneMuted(bool muted) const;
 
     bool GetCameraFlipped() const;
     void SetCameraFlipped(bool flipped) const;
