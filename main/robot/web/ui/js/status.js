@@ -292,9 +292,14 @@ function renderCameraStatus(status) {
 function renderAudioStatus(status) {
   setRange($("#speakerVolume"), status.speaker_volume, $("#speakerValue"), "%");
   setRange($("#microphoneGain"), status.microphone_gain, $("#microphoneValue"), "×");
+  if (document.activeElement !== $("#microphoneMute")) {
+    $("#microphoneMute").checked = !!status.microphone_muted;
+  }
   $("#micLevel").style.width = Math.max(0, Math.min(100, status.microphone_level || 0)) + "%";
-  $("#micClip").textContent = status.microphone_clipping ? "CLIP" : "LIVE";
-  $("#micClip").classList.toggle("on", !!status.microphone_clipping);
+  $("#micClip").textContent = status.microphone_muted
+    ? "MUTED"
+    : status.microphone_clipping ? "CLIP" : "LIVE";
+  $("#micClip").classList.toggle("on", !!status.microphone_muted || !!status.microphone_clipping);
 }
 
 function renderSystemStatus(status) {

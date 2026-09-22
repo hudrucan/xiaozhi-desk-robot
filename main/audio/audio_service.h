@@ -144,6 +144,8 @@ public:
     void EnableWakeWordDetection(bool enable);
     void ReleaseWakeWordResources();
     void EnableVoiceProcessing(bool enable);
+    void SetMicrophoneMuted(bool muted);
+    bool IsMicrophoneMuted() const { return microphone_muted_.load(); }
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
 
@@ -220,6 +222,7 @@ private:
     bool device_aec_enabled_ = false;
 #endif
     std::atomic<bool> service_stopped_{true};
+    std::atomic<bool> microphone_muted_{false};
     std::atomic<bool> audio_input_need_warmup_{false};
     std::atomic<uint8_t> input_level_{0};
     std::atomic<int64_t> last_input_level_us_{0};

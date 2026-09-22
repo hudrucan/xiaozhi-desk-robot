@@ -209,6 +209,20 @@ void MochanDisplay::SetupUI() {
     lv_obj_set_style_border_width(status_dot_, 0, 0);
     lv_obj_align(status_dot_, LV_ALIGN_TOP_RIGHT, -9, 9);
 
+    mic_mute_icon_ = lv_label_create(container_);
+    lv_label_set_text(mic_mute_icon_, MATERIAL_SYMBOLS_MIC_OFF);
+    lv_obj_set_style_text_color(mic_mute_icon_, lv_color_hex(0xff6257), 0);
+    if (initial_theme != nullptr && initial_theme->icon_font() != nullptr) {
+        lv_obj_set_style_text_font(mic_mute_icon_, initial_theme->icon_font()->font(), 0);
+    }
+    lv_obj_set_style_transform_scale(mic_mute_icon_, 160, 0);
+    // Keep the scaled glyph anchored to its right edge and vertically centered
+    // with the adjacent status dot.
+    lv_obj_set_style_transform_pivot_x(mic_mute_icon_, LV_PCT(100), 0);
+    lv_obj_set_style_transform_pivot_y(mic_mute_icon_, LV_PCT(50), 0);
+    lv_obj_align(mic_mute_icon_, LV_ALIGN_TOP_RIGHT, -25, 3);
+    lv_obj_add_flag(mic_mute_icon_, LV_OBJ_FLAG_HIDDEN);
+
     battery_icon_ = lv_label_create(container_);
     lv_label_set_text(battery_icon_, MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_FULL);
     lv_obj_set_style_text_color(battery_icon_, kBrassHighlight, 0);

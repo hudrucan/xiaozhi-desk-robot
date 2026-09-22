@@ -193,6 +193,12 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = "Microphone gain " + std::to_string(safe_gain) + "x";
         return true;
     }
+    if (action == "microphone_mute") {
+        const bool muted = value != 0;
+        controller_.SetMicrophoneMuted(muted);
+        message = muted ? "Microphone muted" : "Microphone enabled";
+        return true;
+    }
     if (action == "screen_brightness") {
         const int safe_brightness = std::clamp(value, 10, 100);
         controller_.SetScreenBrightness(safe_brightness);

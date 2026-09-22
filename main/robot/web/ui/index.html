@@ -402,7 +402,7 @@
                 value="70"
               /><span class="audio-value" id="speakerValue">70%</span>
             </div>
-            <div class="audio-row">
+            <div class="audio-row microphone-row">
               <span class="audio-name"
                 ><b>Microphone</b><small>Input gain</small></span
               ><input
@@ -413,6 +413,9 @@
                 step="1"
                 value="1"
               /><span class="audio-value" id="microphoneValue">1×</span>
+              <label class="toggle microphone-mute" title="Temporarily disable microphone input"
+                ><input id="microphoneMute" type="checkbox" />Mute</label
+              >
               <div class="vu-wrap">
                 <div class="vu"><i id="micLevel"></i></div>
                 <span class="clip" id="micClip">LIVE</span>

@@ -79,6 +79,8 @@ function bindRobotControls() {
     action("emotion_movement", { value: event.target.checked ? 1 : 0 });
   $("#autoBrightness").onchange = (event) =>
     action("auto_brightness", { value: event.target.checked ? 1 : 0 });
+  $("#microphoneMute").onchange = (event) =>
+    action("microphone_mute", { value: event.target.checked ? 1 : 0 });
   $("#oledAutoContrast").onchange = (event) =>
     action("oled_auto_contrast", { value: event.target.checked ? 1 : 0 });
   $("#capacityStart").onclick = () => action("battery_capacity_start");

@@ -44,6 +44,7 @@ public:
 
     virtual void SetSpeakerVolume(int volume) = 0;
     virtual void SetMicrophoneGain(int gain) = 0;
+    virtual void SetMicrophoneMuted(bool muted) = 0;
     virtual void SetScreenBrightness(int brightness) = 0;
     virtual void SetAutoBrightnessEnabled(bool enabled) = 0;
     virtual void SetAutoBrightnessMinimum(int brightness) = 0;

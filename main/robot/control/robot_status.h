@@ -23,6 +23,7 @@ struct RobotStatus {
     std::string emotion;
     int speaker_volume = 0;
     int microphone_gain = 1;
+    bool microphone_muted = false;
     int microphone_level = 0;
     bool microphone_clipping = false;
     int screen_brightness = 0;

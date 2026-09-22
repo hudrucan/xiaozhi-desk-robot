@@ -75,6 +75,7 @@ public:
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     bool IsAsrReady() const { return gemini_asr_controller_.IsReady(); }
     bool IsGeminiAsrPreparing() const { return gemini_asr_controller_.IsPreparing(); }
+    bool IsMicrophoneMuted() const { return audio_service_.IsMicrophoneMuted(); }
     std::string GetServerStatusPhase() const { return server_status_controller_.active_phase(); }
 
     /**
@@ -113,6 +114,7 @@ public:
      * Sends MAIN_EVENT_STOP_LISTENING to be handled in Run()
      */
     void StopListening();
+    void SetMicrophoneMuted(bool muted);
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);

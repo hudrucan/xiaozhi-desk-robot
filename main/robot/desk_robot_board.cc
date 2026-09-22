@@ -1483,6 +1483,9 @@ private:
 
     void SetSpeakerVolume(int volume) override { QueueSpeakerVolume(volume); }
     void SetMicrophoneGain(int gain) override { QueueMicrophoneGain(gain); }
+    void SetMicrophoneMuted(bool muted) override {
+        Application::GetInstance().SetMicrophoneMuted(muted);
+    }
     void SetScreenBrightness(int brightness) override { QueueScreenBrightness(brightness); }
     void SetAutoBrightnessEnabled(bool enabled) override {
         QueueAutoBrightnessEnabled(enabled);
@@ -1565,9 +1568,10 @@ private:
         status.emotion = display_->GetCurrentEmotion();
         status.speaker_volume = speaker_volume_.load();
         status.microphone_gain = microphone_gain_.load();
+        status.microphone_muted = app.IsMicrophoneMuted();
         auto& audio_service = app.GetAudioService();
-        status.microphone_level = audio_service.GetInputLevel();
-        status.microphone_clipping = audio_service.IsInputClipping();
+        status.microphone_level = status.microphone_muted ? 0 : audio_service.GetInputLevel();
+        status.microphone_clipping = !status.microphone_muted && audio_service.IsInputClipping();
         status.screen_brightness = GetBacklight() != nullptr ? GetBacklight()->brightness() : 0;
         const AutoBrightnessPolicy::Config auto_brightness =
             auto_brightness_policy_.GetConfig();

@@ -270,6 +270,11 @@ void Application::Run() {
                         ;
                     break;
                 }
+                if (audio_service_.IsMicrophoneMuted()) {
+                    while (audio_service_.PopPacketFromSendQueue())
+                        ;
+                    break;
+                }
                 if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
                     // Drop the remaining packets. Leaving them in the queue would
                     // stall the Opus codec task (it waits for queue space), which in
@@ -823,6 +828,26 @@ void Application::StartListening() { xEventGroupSetBits(event_group_, MAIN_EVENT
 
 void Application::StopListening() { xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING); }
 
+void Application::SetMicrophoneMuted(bool muted) {
+    Schedule([this, muted]() {
+        audio_service_.SetMicrophoneMuted(muted);
+        Board::GetInstance().GetDisplay()->SetMicrophoneMuted(muted);
+        if (muted) {
+            return;
+        }
+
+        const DeviceState state = GetDeviceState();
+        if (state == kDeviceStateIdle) {
+            audio_service_.EnableWakeWordDetection(true);
+        } else if (state == kDeviceStateListening && !text_chat_controller_.IsPending()) {
+            audio_service_.EnableVoiceProcessing(true);
+            ConfigureWakeWordForListening();
+        } else if (state == kDeviceStateSpeaking || state == kDeviceStateNotifying) {
+            audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+        }
+    });
+}
+
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
 
@@ -952,7 +977,7 @@ void Application::HandleStopListeningEvent() {
 }
 
 void Application::HandleWakeWordDetectedEvent() {
-    if (!protocol_) {
+    if (!protocol_ || audio_service_.IsMicrophoneMuted()) {
         return;
     }
 

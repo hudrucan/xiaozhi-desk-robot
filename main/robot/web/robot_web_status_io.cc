@@ -86,6 +86,7 @@ cJSON* RobotWebStatus::CreateAudio() {
     }
     cJSON_AddNumberToObject(root, "speaker_volume", status.speaker_volume);
     cJSON_AddNumberToObject(root, "microphone_gain", status.microphone_gain);
+    cJSON_AddBoolToObject(root, "microphone_muted", status.microphone_muted);
     cJSON_AddNumberToObject(root, "microphone_level", status.microphone_level);
     cJSON_AddBoolToObject(root, "microphone_clipping", status.microphone_clipping);
     return root;

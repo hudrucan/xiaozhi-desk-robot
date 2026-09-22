@@ -82,6 +82,9 @@ void AudioService::Initialize(AudioCodec* codec) {
 
     audio_engine_ = std::make_unique<AfeAudioEngine>();
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+        if (microphone_muted_.load()) {
+            return;
+        }
         if (asr_provider_.load(std::memory_order_acquire) == AsrProvider::kGemini) {
             auto* client = gemini_client_.load(std::memory_order_acquire);
             if (client != nullptr) {
@@ -704,6 +707,7 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
 }
 
 void AudioService::EnableWakeWordDetection(bool enable) {
+    enable = enable && !microphone_muted_.load();
     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
     if (enable) {
         if (!InitializeAudioEngine()) {
@@ -733,6 +737,7 @@ void AudioService::EnableWakeWordDetection(bool enable) {
 void AudioService::ReleaseWakeWordResources() {}
 
 void AudioService::EnableVoiceProcessing(bool enable) {
+    enable = enable && !microphone_muted_.load();
     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
 
     if (enable) {
@@ -754,6 +759,20 @@ void AudioService::EnableVoiceProcessing(bool enable) {
             audio_engine_->EnableVoiceProcessing(false);
         }
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+    }
+}
+
+void AudioService::SetMicrophoneMuted(bool muted) {
+    microphone_muted_.store(muted);
+    if (muted) {
+        EnableVoiceProcessing(false);
+        EnableWakeWordDetection(false);
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        audio_encode_queue_.clear();
+        audio_send_queue_.clear();
+        input_level_.store(0);
+        last_input_clip_us_.store(0);
+        audio_queue_cv_.notify_all();
     }
 }
 

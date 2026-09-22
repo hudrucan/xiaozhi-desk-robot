@@ -395,8 +395,23 @@ void MochanDisplay::SetTheme(Theme* theme) {
     if (battery_icon_ != nullptr && lvgl_theme->icon_font() != nullptr) {
         lv_obj_set_style_text_font(battery_icon_, lvgl_theme->icon_font()->font(), 0);
     }
+    if (mic_mute_icon_ != nullptr && lvgl_theme->icon_font() != nullptr) {
+        lv_obj_set_style_text_font(mic_mute_icon_, lvgl_theme->icon_font()->font(), 0);
+    }
     if (battery_status_ != nullptr) {
         lv_obj_set_style_text_font(battery_status_, text_font, 0);
+    }
+}
+
+void MochanDisplay::SetMicrophoneMuted(bool muted) {
+    if (mic_mute_icon_ == nullptr) {
+        return;
+    }
+    DisplayLockGuard lock(this);
+    if (muted) {
+        lv_obj_remove_flag(mic_mute_icon_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(mic_mute_icon_, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
