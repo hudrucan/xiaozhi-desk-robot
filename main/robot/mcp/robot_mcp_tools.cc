@@ -37,7 +37,8 @@ void RobotMcpTools::Register(RobotController& controller) {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddTool(
         "self.robot.drive",
-        "Drive the two-wheel base. The movement always stops after duration_ms.",
+        "Move forward, backward, left, or right, then stop after `duration_ms`. Cliff safety may "
+        "block movement.",
         PropertyList({
             Property("direction", kPropertyTypeString),
             Property("duration_ms", kPropertyTypeInteger, 250, 50, 2000),
@@ -56,25 +57,24 @@ void RobotMcpTools::Register(RobotController& controller) {
             }
             return true;
         });
-    mcp_server.AddTool("self.robot.stop", "Stop both drive motors immediately.", PropertyList(),
+    mcp_server.AddTool("self.robot.stop", "Stop both drive motors now.", PropertyList(),
                        [&controller](const PropertyList&) -> ReturnValue {
                            controller.Stop();
                            return true;
                        });
     mcp_server.AddTool(
-        "self.robot.get_status", "Get the drive motor state.", PropertyList(),
+        "self.robot.get_status", "Get current drive-motor state.", PropertyList(),
         [&controller](const PropertyList&) -> ReturnValue {
             return MotorController::StatusJson(controller.GetStatus().motors);
         });
-    mcp_server.AddTool("self.robot.dance", "Run a bounded randomized dance movement.",
+    mcp_server.AddTool("self.robot.dance", "Run one bounded random dance.",
                        PropertyList(), [&controller](const PropertyList&) -> ReturnValue {
                            return controller.Dance();
                        });
     mcp_server.AddTool(
         "self.face.set_emotion",
-        "Temporarily show a face emotion, then return to the current assistant state. "
-        "Supported emotions: neutral, happy, bored, laughing, funny, sad, angry, crying, "
-        "loving, "
+        "Show a temporary face emotion: neutral, happy, bored, laughing, funny, sad, angry, "
+        "crying, loving, "
         "embarrassed, surprised, shocked, thinking, winking, cool, relaxed, delicious, "
         "kissy, confident, sleepy, silly, confused, suspicious, and shake.",
         PropertyList({
@@ -90,8 +90,8 @@ void RobotMcpTools::Register(RobotController& controller) {
         });
     mcp_server.AddTool(
         "self.face.look",
-        "Temporarily move the eyes, then return to center. Supported directions: center, "
-        "left, right, up, down, up_left, up_right, down_left, and down_right.",
+        "Look temporarily: center, left, right, up, down, up_left, up_right, down_left, or "
+        "down_right.",
         PropertyList({
             Property("direction", kPropertyTypeString, "center"),
             Property("duration_ms", kPropertyTypeInteger, 2500, 250, 15000),
@@ -109,8 +109,7 @@ void RobotMcpTools::Register(RobotController& controller) {
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     mcp_server.AddTool(
         "self.secondary_display.show_text",
-        "Temporarily show a short ASCII message on the secondary OLED. The automatic brand, "
-        "sensor, motion, power, and capacity dashboard returns afterward.",
+        "Show temporary ASCII text on the secondary OLED; telemetry returns afterward.",
         PropertyList({
             Property("text", kPropertyTypeString),
             Property("duration_ms", kPropertyTypeInteger, 5000, 500, 60000),
@@ -125,10 +124,8 @@ void RobotMcpTools::Register(RobotController& controller) {
 #endif
     mcp_server.AddTool(
         "self.status_light.set_effect",
-        "Temporarily control the monochrome Edison status lights. Supported effects: steady, "
-        "breathe, blink, and off. Motor movement still has priority, and normal status "
-        "behavior "
-        "returns afterward.",
+        "Temporarily set the status lights to steady, breathe, blink, or off. Motor indication "
+        "has priority.",
         PropertyList({
             Property("effect", kPropertyTypeString, "steady"),
             Property("duration_ms", kPropertyTypeInteger, 5000, 250, 30000),
@@ -140,24 +137,10 @@ void RobotMcpTools::Register(RobotController& controller) {
             }
             return true;
         });
-    mcp_server.AddTool("self.camera.set_camera_flipped",
-                       "Rotate the camera image by 180 degrees.", PropertyList(),
-                       [&controller](const PropertyList&) -> ReturnValue {
-                           controller.ToggleCameraFlip();
-                           return true;
-                       });
-    mcp_server.AddTool("self.audio_microphone.set_gain",
-                       "Set the microphone software gain. Use 1 for normal, 2 for louder, "
-                       "or 3 for maximum.",
-                       PropertyList({Property("gain", kPropertyTypeInteger, 1, 1, 3)}),
-                       [&controller](const PropertyList& properties) -> ReturnValue {
-                           controller.SetMicrophoneGain(properties["gain"].value<int>());
-                           return true;
-                       });
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
     mcp_server.AddTool(
         "self.distance.get",
-        "Get the downward VL53L0X floor distance and cliff-detection state.", PropertyList(),
+        "Get downward floor distance and cliff-detection state.", PropertyList(),
         [&controller](const PropertyList&) -> ReturnValue {
             const auto cliff = controller.GetStatus().cliff;
             if (!cliff.available) {
@@ -172,8 +155,7 @@ void RobotMcpTools::Register(RobotController& controller) {
 #endif
     mcp_server.AddTool(
         "self.environment.get",
-        "Get cached ambient temperature, humidity, pressure, and illuminance. Each measurement "
-        "has independent availability and validity so partial sensor failures remain visible.",
+        "Get cached temperature, humidity, pressure, and illuminance with per-sensor validity.",
         PropertyList(), [&controller](const PropertyList&) -> ToolResult {
             cJSON* result = cJSON_CreateObject();
             if (result == nullptr) {
@@ -212,7 +194,7 @@ void RobotMcpTools::Register(RobotController& controller) {
 #ifdef INA219_I2C_ADDRESS
     mcp_server.AddTool(
         "self.battery.get_status",
-        "Get INA219 battery voltage, estimated charge percentage, current, and power.",
+        "Get detailed battery charge, voltage, current, power, and SoC diagnostics.",
         PropertyList(), [&controller](const PropertyList&) -> ToolResult {
             cJSON* result = cJSON_CreateObject();
             if (result == nullptr) {
@@ -254,7 +236,7 @@ void RobotMcpTools::Register(RobotController& controller) {
 #ifdef MPU6050_I2C_ADDRESS
     mcp_server.AddTool(
         "self.motion.get_orientation",
-        "Get the MPU6050 orientation, acceleration, rotation, and detected gesture.",
+        "Get orientation, acceleration, rotation, gesture, and gyro-turn state.",
         PropertyList(), [&controller](const PropertyList&) -> ToolResult {
             cJSON* result = cJSON_CreateObject();
             if (result == nullptr) {
@@ -288,20 +270,10 @@ void RobotMcpTools::Register(RobotController& controller) {
             }
             return result;
         });
-    mcp_server.AddTool("self.motion.set_emotion_control",
-                       "Enable or disable automatic face reactions from MPU6050 movement.",
-                       PropertyList({Property("enabled", kPropertyTypeBoolean, true)}),
-                       [&controller](const PropertyList& properties) -> ReturnValue {
-                           controller.SetMotionEmotionsEnabled(
-                               properties["enabled"].value<bool>());
-                           return true;
-                       });
     mcp_server.AddTool(
         "self.robot.turn_relative",
-        "Turn the robot by a relative gyro-measured angle. Positive degrees turn right; "
-        "negative degrees turn left. Use 90 for right 90 degrees or -90 for left 90 degrees. "
-        "The command is rejected unless the MPU6050 is calibrated, the motors are idle, and "
-        "the floor is safe.",
+        "Turn by a gyro-measured angle: positive is right, negative is left. Requires calibrated "
+        "MPU6050, idle motors, and a safe floor.",
         PropertyList({Property("degrees", kPropertyTypeInteger, 90, -180, 180)}),
         [&controller](const PropertyList& properties) -> ToolResult {
             std::string message;

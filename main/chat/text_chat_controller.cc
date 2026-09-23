@@ -66,8 +66,8 @@ std::string TextChatController::WebChatMcpBridge::GetDisplayText() const {
 void TextChatController::RegisterMcpTool(McpServer& mcp_server) {
     mcp_server.AddPriorityAssistantOnlyTool(
         kMcpToolName,
-        "When detect text is exactly 'web_chat', call this tool immediately before responding. "
-        "It returns the full user message; answer that message, never the literal trigger.",
+        "If detect text is exactly 'web_chat', call this before replying. Its result is the real "
+        "user message; answer it, not 'web_chat'.",
         PropertyList(), [this](const PropertyList&) -> ToolResult {
             auto pending = web_chat_bridge_.ConsumePending();
             if (pending.empty()) {

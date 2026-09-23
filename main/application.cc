@@ -143,9 +143,6 @@ void Application::Initialize() {
     // Add MCP common tools (only once during initialization)
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
-
-    text_chat_controller_.RegisterMcpTool(mcp_server);
-
     mcp_server.AddUserOnlyTools();
 
     // Set network event callback for UI updates and network state handling
@@ -570,7 +567,14 @@ void Application::InitializeProtocol() {
 
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
-    text_chat_controller_.SetEnhancedTypedTextEnabled(ota_->HasDeskRobotTypedTextV1());
+    const bool enhanced_typed_text = ota_->HasDeskRobotTypedTextV1();
+    text_chat_controller_.SetEnhancedTypedTextEnabled(enhanced_typed_text);
+    if (!enhanced_typed_text) {
+        // Legacy servers receive long Web Chat input through an assistant-only MCP bridge.
+        // Native typed-text servers receive the original text directly and must not advertise
+        // an MCP tool that can never have pending input.
+        text_chat_controller_.RegisterMcpTool(McpServer::GetInstance());
+    }
 
     if (ota_->HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();

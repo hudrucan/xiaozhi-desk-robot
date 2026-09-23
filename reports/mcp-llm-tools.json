@@ -1,0 +1,189 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "self_get_device_status",
+      "description": "Get speaker volume, screen brightness, battery level, and Wi-Fi status. Call before changing volume if its current value is unknown.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_audio_speaker_set_volume",
+      "description": "Set speaker volume from 0 to 100. Call `self_get_device_status` first if the current volume is unknown.",
+      "parameters": {
+        "type": "object",
+        "properties": { "volume": { "type": "integer", "minimum": 0, "maximum": 100 } },
+        "required": ["volume"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_screen_set_brightness",
+      "description": "Set screen brightness from 0 to 100.",
+      "parameters": {
+        "type": "object",
+        "properties": { "brightness": { "type": "integer", "minimum": 0, "maximum": 100 } },
+        "required": ["brightness"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_camera_take_photo",
+      "description": "Take a photo to answer a visual question. Pass the question in `question`.",
+      "parameters": {
+        "type": "object",
+        "properties": { "question": { "type": "string" } },
+        "required": ["question"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_robot_drive",
+      "description": "Move forward, backward, left, or right, then stop after `duration_ms`. Cliff safety may block movement.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "direction": { "type": "string" },
+          "duration_ms": { "type": "integer", "default": 250, "minimum": 50, "maximum": 2000 }
+        },
+        "required": ["direction"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_robot_stop",
+      "description": "Stop both drive motors now.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_robot_get_status",
+      "description": "Get current drive-motor state.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_robot_dance",
+      "description": "Run one bounded random dance.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_face_set_emotion",
+      "description": "Show a temporary face emotion: neutral, happy, bored, laughing, funny, sad, angry, crying, loving, embarrassed, surprised, shocked, thinking, winking, cool, relaxed, delicious, kissy, confident, sleepy, silly, confused, suspicious, or shake.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "emotion": { "type": "string", "default": "neutral" },
+          "duration_ms": { "type": "integer", "default": 5000, "minimum": 250, "maximum": 30000 }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_face_look",
+      "description": "Look temporarily: center, left, right, up, down, up_left, up_right, down_left, or down_right.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "direction": { "type": "string", "default": "center" },
+          "duration_ms": { "type": "integer", "default": 2500, "minimum": 250, "maximum": 15000 }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_secondary_display_show_text",
+      "description": "Show temporary ASCII text on the secondary OLED; telemetry returns afterward.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "duration_ms": { "type": "integer", "default": 5000, "minimum": 500, "maximum": 60000 }
+        },
+        "required": ["text"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_status_light_set_effect",
+      "description": "Temporarily set the status lights to steady, breathe, blink, or off. Motor indication has priority.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "effect": { "type": "string", "default": "steady" },
+          "duration_ms": { "type": "integer", "default": 5000, "minimum": 250, "maximum": 30000 }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_distance_get",
+      "description": "Get downward floor distance and cliff-detection state.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_environment_get",
+      "description": "Get cached temperature, humidity, pressure, and illuminance with per-sensor validity.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_battery_get_status",
+      "description": "Get detailed battery charge, voltage, current, power, and SoC diagnostics.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_motion_get_orientation",
+      "description": "Get orientation, acceleration, rotation, gesture, and gyro-turn state.",
+      "parameters": { "type": "object", "properties": {}, "required": [] }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "self_robot_turn_relative",
+      "description": "Turn by a gyro-measured angle: positive is right, negative is left. Requires calibrated MPU6050, idle motors, and a safe floor.",
+      "parameters": {
+        "type": "object",
+        "properties": { "degrees": { "type": "integer", "default": 90, "minimum": -180, "maximum": 180 } },
+        "required": []
+      }
+    }
+  }
+]

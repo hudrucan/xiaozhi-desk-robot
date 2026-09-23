@@ -19,7 +19,6 @@
 #include "board.h"
 #include "display.h"
 #include "lvgl_image.h"
-#include "lvgl_theme.h"
 #include "settings.h"
 
 #define TAG "MCP"
@@ -71,20 +70,15 @@ void McpServer::AddCommonTools() {
     // Custom tools must be added in the board's InitializeTools function.
 
     AddTool("self.get_device_status",
-            "Provides the real-time information of the device, including the current status of the "
-            "audio speaker, screen, battery, network, etc.\n"
-            "Use this tool for: \n"
-            "1. Answering questions about current condition (e.g. what is the current volume of "
-            "the audio speaker?)\n"
-            "2. As the first step to control the device (e.g. turn up / down the volume of the "
-            "audio speaker, etc.)",
+            "Get speaker volume, screen brightness, battery level, and Wi-Fi status. Call before "
+            "changing volume if its current value is unknown.",
             PropertyList(), [&board](const PropertyList& properties) -> ReturnValue {
                 return board.GetDeviceStatusJson();
             });
 
     AddTool("self.audio_speaker.set_volume",
-            "Set the volume of the audio speaker. If the current volume is unknown, you must call "
-            "`self.get_device_status` tool first and then call this tool.",
+            "Set speaker volume from 0 to 100. Call `self.get_device_status` first if the current "
+            "volume is unknown.",
             PropertyList({Property("volume", kPropertyTypeInteger, 0, 100)}),
             [&board](const PropertyList& properties) -> ReturnValue {
                 auto codec = board.GetAudioCodec();
@@ -94,7 +88,7 @@ void McpServer::AddCommonTools() {
 
     auto backlight = board.GetBacklight();
     if (backlight) {
-        AddTool("self.screen.set_brightness", "Set the brightness of the screen.",
+        AddTool("self.screen.set_brightness", "Set screen brightness from 0 to 100.",
                 PropertyList({Property("brightness", kPropertyTypeInteger, 0, 100)}),
                 [backlight](const PropertyList& properties) -> ReturnValue {
                     uint8_t brightness =
@@ -105,33 +99,11 @@ void McpServer::AddCommonTools() {
     }
 
 #ifdef HAVE_LVGL
-    auto display = board.GetDisplay();
-    if (display && display->GetTheme() != nullptr) {
-        AddTool("self.screen.set_theme",
-                "Set the theme of the screen. The theme can be `light` or `dark`.",
-                PropertyList({Property("theme", kPropertyTypeString)}),
-                [display](const PropertyList& properties) -> ReturnValue {
-                    auto theme_name = properties["theme"].value<std::string>();
-                    auto& theme_manager = LvglThemeManager::GetInstance();
-                    auto theme = theme_manager.GetTheme(theme_name);
-                    if (theme != nullptr) {
-                        display->SetTheme(theme);
-                        return true;
-                    }
-                    return false;
-                });
-    }
-
     auto camera = board.GetCamera();
     if (camera) {
         auto camera_tool = std::make_unique<McpTool>(
             "self.camera.take_photo",
-            "Always remember you have a camera. If the user asks you to see something, use "
-            "this tool to take a photo and then explain it.\n"
-            "Args:\n"
-            "  `question`: The question that you want to ask about the photo.\n"
-            "Return:\n"
-            "  A JSON object that provides the photo information.",
+            "Take a photo to answer a visual question. Pass the question in `question`.",
             PropertyList({Property("question", kPropertyTypeString)}),
             [camera](const PropertyList& properties) -> ToolResult {
                 // Lower the priority to do the camera capture
