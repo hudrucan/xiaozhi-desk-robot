@@ -62,7 +62,7 @@ bool SharedI2cBus::StartDeferredInitialization(void* context,
     }
     initializer_context_ = context;
     initializer_ = initializer;
-    if (xTaskCreate(DeferredInitializationTask, "aux_i2c_init", 10240, this, 1,
+    if (xTaskCreate(DeferredInitializationTask, "deferred_i2c", 10240, this, 1,
                     &initialization_task_) != pdPASS) {
         initialization_task_ = nullptr;
         initializer_ = nullptr;

@@ -207,6 +207,18 @@ private:
     SecondaryDisplayController secondary_display_;
 #endif
 
+    static void InitializeDeferredPrimaryDevices(void* arg) {
+        auto* self = static_cast<DeskRobotBoard*>(arg);
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        self->InitializeDistanceSensor();
+#endif
+        if (!self->environment_controller_.Start(
+                self->primary_i2c_.handle(), self->primary_i2c_.mutex(), self,
+                &DeskRobotBoard::OnAmbientLight)) {
+            ESP_LOGW(TAG, "Failed to start environment controller");
+        }
+    }
+
 #ifdef AUXILIARY_I2C_SDA_PIN
     static void InitializeDeferredAuxiliaryDevices(void* arg) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
@@ -1732,7 +1744,6 @@ public:
 #endif
         InitializeCamera();
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
-        InitializeDistanceSensor();
         motors_.SetMotionGuard([this](MotorController::Direction direction) {
             return !IsDirectionBlockedByCliff(direction);
         });
@@ -1752,13 +1763,11 @@ public:
 #endif
         InitializeWebControl();
         ESP_LOGI(TAG, "Desk robot board initialized");
-        // Start best-effort environment probing only after board construction returns to the
-        // application loop. The controller adds a further delay before touching the primary bus.
+        // Camera owns the first synchronous use of primary I2C. Defer the remaining primary-bus
+        // sensors until board/audio initialization has returned to the application loop.
         Application::GetInstance().Schedule([this]() {
-            if (!environment_controller_.Start(primary_i2c_.handle(), primary_i2c_.mutex(), this,
-                                               &DeskRobotBoard::OnAmbientLight)) {
-                ESP_LOGW(TAG, "Failed to start environment controller");
-            }
+            primary_i2c_.StartDeferredInitialization(
+                this, &DeskRobotBoard::InitializeDeferredPrimaryDevices);
         });
 #ifdef AUXILIARY_I2C_SDA_PIN
         // Board construction runs inside Application::Initialize(). Queue only the lightweight

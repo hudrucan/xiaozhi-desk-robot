@@ -4,6 +4,7 @@
 #include "config/tuning.h"
 
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 
 #include <algorithm>
@@ -13,6 +14,12 @@ extern "C" {
 }
 
 #define TAG "CliffSensor"
+
+namespace {
+
+constexpr uint32_t kTaskStackSize = 8192;
+
+}  // namespace
 
 bool CliffSensor::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex, int edge_mm,
                              void* callback_context, CliffCallback callback) {
@@ -39,8 +46,9 @@ bool CliffSensor::Initialize(i2c_master_bus_handle_t bus, std::mutex& bus_mutex,
         }
         return false;
     }
-    if (xTaskCreate(TaskEntry, "vl53l0x", 4096, this, 1, &task_) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create VL53L0X task");
+    if (xTaskCreateWithCaps(TaskEntry, "vl53l0x", kTaskStackSize, this, 1, &task_,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create VL53L0X task in PSRAM");
         vl53l0x_destroy(sensor);
         sensor_ = nullptr;
         return false;
@@ -87,6 +95,9 @@ void CliffSensor::RunTask() {
     uint8_t consecutive_failures = 0;
     bool failure_reported = false;
     bool recovery_reported = false;
+    bool stack_usage_reported = false;
+    ESP_LOGI(TAG, "VL53L0X task started with %u-byte PSRAM stack",
+             static_cast<unsigned>(kTaskStackSize));
     while (true) {
         vl53l0x_data_t reading = {};
         esp_err_t error = ESP_FAIL;
@@ -119,6 +130,11 @@ void CliffSensor::RunTask() {
             }
         }
         if (error == ESP_OK) {
+            if (!stack_usage_reported) {
+                ESP_LOGI(TAG, "VL53L0X first measurement stack free=%u bytes",
+                         static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+                stack_usage_reported = true;
+            }
             if (failure_reported) {
                 ESP_LOGI(TAG, "VL53L0X measurements resumed");
                 failure_reported = false;
