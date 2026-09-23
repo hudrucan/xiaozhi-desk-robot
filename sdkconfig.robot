@@ -34,18 +34,7 @@ CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
-# Offline custom wake phrase: English MultiNet recognizes "wake up" and reports
-# the same text to the conversation server. Keep the low default threshold for
-# easier activation; raise it only if hardware testing shows false triggers.
-CONFIG_WAKE_WORD_DISABLED=n
-CONFIG_USE_AFE_WAKE_WORD=n
-CONFIG_USE_CUSTOM_WAKE_WORD=y
-CONFIG_CUSTOM_WAKE_WORD="wake up"
-CONFIG_CUSTOM_WAKE_WORD_DISPLAY="Wake up"
-CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20
-CONFIG_SR_WN_WN9_HIWALLE_TTS2=n
-CONFIG_SR_MN_CN_NONE=y
-CONFIG_SR_MN_EN_MULTINET6_QUANT=y
+CONFIG_SR_WN_WN9_HIWALLE_TTS2=y
 
 # Keep the camera DMA bounce buffer out of internal SRAM so AFE/WakeNet10
 # still has a usable internal heap after boot.
