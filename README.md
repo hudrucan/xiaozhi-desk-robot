@@ -256,7 +256,7 @@ idf.py --version
 The project contains one supported physical target:
 
 ```text
-esp32-s3-camera-robot
+esp32-s3-n16r8-cam
 ```
 
 Canonical configured build:

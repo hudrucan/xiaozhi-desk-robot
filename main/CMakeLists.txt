@@ -64,8 +64,8 @@ function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
 endfunction()
 
 # Fixed product identity and display assets for the only supported target.
-set(BOARD_TYPE "esp32-s3-camera-robot")
-set(BOARD_NAME "esp32-s3-camera-robot")
+set(BOARD_TYPE "esp32-s3-n16r8-cam")
+set(BOARD_NAME "esp32-s3-n16r8-cam")
 set(BOARD_MANUFACTURER "generic")
 set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
 set(BUILTIN_ICON_FONT font_material_symbols_20_4)

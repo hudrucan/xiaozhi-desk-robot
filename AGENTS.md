@@ -8,7 +8,7 @@ This repository is the **single-target Xiaozhi Desk Robot firmware**, derived fr
 It supports one physical target only:
 
 ```text
-esp32-s3-camera-robot
+esp32-s3-n16r8-cam
 ESP32-S3
 ```
 

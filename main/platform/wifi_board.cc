@@ -10,7 +10,8 @@
 #include <freertos/task.h>
 #include <esp_network.h>
 #include <esp_log.h>
-#include <esp_mac.h>
+#include <esp_wifi.h>
+#include <cstring>
 #include <utility>
 
 #include <material_symbols.h>
@@ -19,6 +20,7 @@
 #include <ssid_manager.h>
 
 static const char *TAG = "WifiBoard";
+static constexpr char CONFIG_AP_SSID[] = "xiaozhi-desk-robot";
 
 // Connection timeout in seconds
 static constexpr int CONNECT_TIMEOUT_SEC = 60;
@@ -51,19 +53,13 @@ void WifiBoard::StartNetwork() {
 
     // Initialize WiFi manager
     WifiManagerConfig config;
-    config.ssid_prefix = "desk-robot";
+    config.ssid_prefix = CONFIG_AP_SSID;
     config.language = Lang::CODE;
     config.show_ota_config = true;
     config.show_sleep_config = true;
 
-    // Set a DHCP hostname so the router shows a friendly name instead of "espressif".
-    // Uses the same "<prefix>-<last 2 MAC bytes>" scheme as the config AP SSID.
-    uint8_t mac[6];
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
-        char hostname[32];
-        snprintf(hostname, sizeof(hostname), "%s-%02x%02x", config.ssid_prefix.c_str(), mac[4], mac[5]);
-        config.station_hostname = hostname;
-    }
+    // Set a stable DHCP hostname so the router shows a recognizable device name.
+    config.station_hostname = "xiaozhi-desk-robot";
     wifi_manager.Initialize(config);
 
     // Set unified event callback - forward to NetworkEvent with SSID data
@@ -168,10 +164,25 @@ void WifiBoard::StartWifiConfigMode() {
 
     wifi_manager.StartConfigAp();
 
+    // esp-wifi-connect treats this value as a prefix and appends the last two
+    // MAC bytes. This product has a single user-owned robot, so replace the
+    // generated AP name with the exact stable SSID after the AP starts.
+    wifi_config_t ap_config = {};
+    esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &ap_config);
+    if (err == ESP_OK) {
+        std::memset(ap_config.ap.ssid, 0, sizeof(ap_config.ap.ssid));
+        std::memcpy(ap_config.ap.ssid, CONFIG_AP_SSID, sizeof(CONFIG_AP_SSID) - 1);
+        ap_config.ap.ssid_len = sizeof(CONFIG_AP_SSID) - 1;
+        err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set exact config AP SSID: %s", esp_err_to_name(err));
+    }
+
     // Show config prompt after a short delay
     Application::GetInstance().Schedule([&wifi_manager]() {
         std::string hint = Lang::Strings::CONNECT_TO_HOTSPOT;
-        hint += wifi_manager.GetApSsid();
+        hint += CONFIG_AP_SSID;
         hint += Lang::Strings::ACCESS_VIA_BROWSER;
         hint += wifi_manager.GetApWebUrl();
 
