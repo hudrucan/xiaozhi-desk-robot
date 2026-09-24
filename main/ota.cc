@@ -77,6 +77,9 @@ NetworkResult<> Ota::CheckVersion() {
     }
 
     auto http = SetupHttp();
+    // Optional diagnostic metadata for bootstrap servers. Unknown HTTP request
+    // headers are ignored by compatible servers and this does not alter the JSON body.
+    http->SetHeader("Reset-Reason", SystemInfo::GetResetReasonName(esp_reset_reason()));
 
     std::string data = board.GetSystemInfoJson();
     std::string method = data.length() > 0 ? "POST" : "GET";

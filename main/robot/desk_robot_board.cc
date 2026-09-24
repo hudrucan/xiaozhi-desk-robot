@@ -31,6 +31,7 @@
 #include "robot_web_control_server.h"
 #include "sensors/environment_controller.h"
 #include "sensors/shared_i2c_bus.h"
+#include "system_info.h"
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
 #include "sensors/cliff_sensor.h"
 #endif
@@ -88,48 +89,6 @@
 #ifndef MPU6050_PRESS_THRESHOLD_G
 #define MPU6050_PRESS_THRESHOLD_G 1.35f
 #endif
-
-namespace {
-
-const char* ResetReasonName(esp_reset_reason_t reason) {
-    switch (reason) {
-        case ESP_RST_POWERON:
-            return "power-on";
-        case ESP_RST_EXT:
-            return "external-pin";
-        case ESP_RST_SW:
-            return "software";
-        case ESP_RST_PANIC:
-            return "panic";
-        case ESP_RST_INT_WDT:
-            return "interrupt-watchdog";
-        case ESP_RST_TASK_WDT:
-            return "task-watchdog";
-        case ESP_RST_WDT:
-            return "watchdog";
-        case ESP_RST_DEEPSLEEP:
-            return "deep-sleep";
-        case ESP_RST_BROWNOUT:
-            return "brownout";
-        case ESP_RST_SDIO:
-            return "sdio";
-        case ESP_RST_USB:
-            return "usb";
-        case ESP_RST_JTAG:
-            return "jtag";
-        case ESP_RST_EFUSE:
-            return "efuse";
-        case ESP_RST_PWR_GLITCH:
-            return "power-glitch";
-        case ESP_RST_CPU_LOCKUP:
-            return "cpu-lockup";
-        case ESP_RST_UNKNOWN:
-        default:
-            return "unknown";
-    }
-}
-
-}  // namespace
 
 class DeskRobotBoard : public WifiBoard, public RobotController {
 private:
@@ -1727,7 +1686,7 @@ public:
         // buffering here to retain display, camera, and audio initialization logs.
         RobotWebControlServer::BeginLogCapture();
         const esp_reset_reason_t reset_reason = esp_reset_reason();
-        ESP_LOGI(TAG, "Boot reset reason: %s (%d)", ResetReasonName(reset_reason),
+        ESP_LOGI(TAG, "Boot reset reason: %s (%d)", SystemInfo::GetResetReasonName(reset_reason),
                  static_cast<int>(reset_reason));
         InitializeSpi();
         InitializeDisplay();

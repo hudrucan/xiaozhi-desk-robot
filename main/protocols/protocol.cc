@@ -138,7 +138,12 @@ void Protocol::SendStopListening() {
 void Protocol::SendMcpMessage(const std::string& payload) {
     std::string message =
         "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";
-    SendText(message);
+    const bool sent = SendText(message);
+    if (!sent) {
+        ESP_LOGE(TAG, "Failed to send MCP result, payload_size=%zu", payload.size());
+    } else {
+        ESP_LOGD(TAG, "MCP result sent, payload_size=%zu", payload.size());
+    }
 }
 
 bool Protocol::IsTimeout() const {

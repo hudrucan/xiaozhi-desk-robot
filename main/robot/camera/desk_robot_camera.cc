@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -65,7 +66,6 @@ bool DeskRobotCamera::Capture() {
         return false;
     }
     const int64_t capture_start_us = esp_timer_get_time();
-    ESP_LOGI(TAG, "MCP camera capture begin");
     const CameraSettingsConfig settings = GetSettings();
     const CameraSensorSettings resolved_sensor = ResolveSensorSettings(settings.sensor);
     // Change the sensor mode first because OV2640 set_framesize() rewrites its
@@ -84,8 +84,12 @@ bool DeskRobotCamera::Capture() {
     }
     const bool captured = configured && Esp32Camera::CaptureOwnedJpeg(warmup_frames);
     const int64_t capture_ms = (esp_timer_get_time() - capture_start_us) / 1000;
-    ESP_LOGI(TAG, "MCP camera capture %s elapsed=%lldms", captured ? "done" : "failed",
-             static_cast<long long>(capture_ms));
+    ESP_LOGI(TAG,
+             "camera_mcp stage=camera_capture_completed success=%d elapsed_ms=%lld "
+             "free_internal=%zu free_psram=%zu",
+             captured ? 1 : 0, static_cast<long long>(capture_ms),
+             heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     mcp_capture_pending_ = captured;
     if (!captured) {
         EndMcpOperation();

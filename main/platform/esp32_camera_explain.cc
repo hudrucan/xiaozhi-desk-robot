@@ -2,7 +2,6 @@
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
-#include <freertos/task.h>
 
 #include <array>
 #include <cstring>
@@ -10,6 +9,7 @@
 
 #include "board.h"
 #include "esp_timer.h"
+#include "http.h"
 #include "jpg/image_to_jpeg.h"
 #include "system_info.h"
 
@@ -33,6 +33,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
     // explain endpoints accept the TCP connection but never consume a chunked
     // multipart request, leaving the MCP call pending indefinitely.
     if (owned_snapshot || current_fb_->format == PIXFORMAT_JPEG) {
+        const int64_t request_start_us = esp_timer_get_time();
         const uint8_t* jpeg_data = owned_snapshot ? owned_snapshot.data : current_fb_->buf;
         const size_t jpeg_length = owned_snapshot ? owned_snapshot.length : current_fb_->len;
         const int jpeg_width = owned_snapshot ? owned_snapshot.width : current_fb_->width;
@@ -41,9 +42,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
         auto http = network->CreateHttp(3);
         http->SetTimeout(20000);
 
-        auto close_http = [&]() {
-            http->Close();
-        };
+        auto close_http = [&]() { http->Close(); };
 
         const std::string boundary = "----ESP32_CAMERA_BOUNDARY";
         std::string question_field;
@@ -74,9 +73,8 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
         // An engaged but empty content value makes HttpClient use raw writes
         // after Open(), while the explicit Content-Length describes the body.
         http->SetContent(std::string{});
-        ESP_LOGI(TAG, "JPEG upload begin: image=%dx%d %zu bytes, body=%zu bytes", jpeg_width,
-                 jpeg_height, jpeg_length,
-                 content_length);
+        ESP_LOGD(TAG, "JPEG upload begin: image=%dx%d %zu bytes, body=%zu bytes",
+                 jpeg_width, jpeg_height, jpeg_length, content_length);
         auto opened = http->Open("POST", explain_url_);
         if (!opened) {
             const std::string error = opened.error().ToString();
@@ -117,7 +115,6 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
             }
             return std::unexpected(std::move(upload_error));
         }
-        ESP_LOGI(TAG, "JPEG upload complete; waiting for response");
         auto status_code = http->GetStatusCode();
         if (!status_code) {
             ESP_LOGE(TAG, "Failed to read HTTP status: %s",
@@ -126,8 +123,16 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
             close_http();
             return std::unexpected("Failed to read image explain HTTP status: " + error);
         }
+        const size_t declared_length = http->GetBodyLength();
+        const std::string request_id = http->GetResponseHeader("X-Xiaozhi-Request-Id");
+        const std::string vision_outcome = http->GetResponseHeader("X-Xiaozhi-Vision-Outcome");
+        const std::string server_timing = http->GetResponseHeader("Server-Timing");
         if (*status_code != 200) {
-            ESP_LOGE(TAG, "Failed to upload photo, status code: %d", *status_code);
+            ESP_LOGE(TAG,
+                     "Image explain failed: status=%d request_id=%s outcome=%s "
+                     "server_timing=%s",
+                     *status_code, request_id.c_str(), vision_outcome.c_str(),
+                     server_timing.c_str());
             close_http();
             return std::unexpected("Image explain returned HTTP " +
                                    std::to_string(*status_code));
@@ -135,7 +140,6 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
 
         constexpr size_t kMaxResponseBytes = 64 * 1024;
         std::string result;
-        const size_t declared_length = http->GetBodyLength();
         if (declared_length > kMaxResponseBytes) {
             close_http();
             return std::unexpected("Image explain response is too large");
@@ -162,6 +166,15 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
             result.append(response_buffer.data(), static_cast<size_t>(*bytes_read));
         }
         close_http();
+        ESP_LOGI(TAG,
+                 "camera_mcp vision_completed elapsed_ms=%lld status=%d image_size=%zu "
+                 "response_size=%zu request_id=%s outcome=%s server_timing=%s "
+                 "free_internal=%zu free_psram=%zu",
+                 static_cast<long long>((esp_timer_get_time() - request_start_us) / 1000),
+                 *status_code, jpeg_length, result.size(), request_id.c_str(),
+                 vision_outcome.c_str(), server_timing.c_str(),
+                 heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         if (result.empty()) {
             ESP_LOGE(TAG, "Image explain returned an empty response");
             return std::unexpected("Image explain returned an empty response");

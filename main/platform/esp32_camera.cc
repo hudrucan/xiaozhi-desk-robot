@@ -200,7 +200,7 @@ bool Esp32Camera::CaptureOwnedJpeg(int warmup_frames) {
         std::lock_guard<std::mutex> lock(mcp_snapshot_mutex_);
         mcp_snapshot_ = std::move(snapshot);
     }
-    ESP_LOGI(TAG, "MCP JPEG copied: %dx%d, len=%zu", width, height, length);
+    ESP_LOGD(TAG, "MCP JPEG copied: %dx%d, len=%zu", width, height, length);
     return true;
 }
 
