@@ -43,7 +43,7 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
                                     const std::string& text, std::string& message) {
     MotorController::Direction direction;
     if (ParseDirection(action, direction)) {
-        const int safe_duration = std::clamp(value, 50, 2000);
+        const int safe_duration = std::clamp(value, 50, 5000);
         if (!controller_.Move(direction, safe_duration,
                               RobotController::MovePolicy::kReplaceCurrent)) {
             message = "Movement blocked: table edge detected; reverse remains available";
@@ -231,7 +231,7 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         return true;
     }
     if (action == "drive_duration") {
-        const int safe_duration = std::clamp(value, 50, 2000);
+        const int safe_duration = std::clamp(value, 50, 5000);
         controller_.SetDriveDuration(safe_duration);
         message = "Drive time " + std::to_string(safe_duration) + " ms";
         return true;

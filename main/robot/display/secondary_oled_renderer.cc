@@ -1,6 +1,15 @@
 #include "secondary_oled.h"
 
+#include "display/vietnamese_glyph_fallback.h"
+
+#include <lvgl.h>
+
 #include <algorithm>
+#include <array>
+
+extern "C" {
+LV_FONT_DECLARE(font_noto_sans_basic_20_4);
+}
 
 namespace {
 
@@ -43,6 +52,125 @@ constexpr uint8_t kLowercase[][5] = {
     {0x1c, 0x20, 0x40, 0x20, 0x1c}, {0x3c, 0x40, 0x30, 0x40, 0x3c}, {0x44, 0x28, 0x10, 0x28, 0x44},
     {0x0c, 0x50, 0x50, 0x50, 0x3c}, {0x44, 0x64, 0x54, 0x4c, 0x44},
 };
+
+constexpr int kNotoLineHeight = 16;
+constexpr int kFallbackLineHeight = 28;
+constexpr int kFallbackBaseLine = 8;
+constexpr int kNotoScaleNumerator = 4;
+constexpr int kNotoScaleDenominator = 7;
+
+struct NotoGlyph {
+    uint16_t advance = 0;
+    uint16_t box_w = 0;
+    uint16_t box_h = 0;
+    int16_t ofs_x = 0;
+    int16_t ofs_y = 0;
+    uint16_t stride = 0;
+    const uint8_t* bitmap = nullptr;
+    uint8_t bpp = 0;
+    int line_height = kFallbackLineHeight;
+    int base_line = kFallbackBaseLine;
+    int scale_numerator = kNotoScaleNumerator;
+    int scale_denominator = kNotoScaleDenominator;
+};
+
+int ScaleRounded(int value, int numerator, int denominator) {
+    if (value >= 0) {
+        return (value * numerator + denominator / 2) / denominator;
+    }
+    return -((-value * numerator + denominator / 2) / denominator);
+}
+
+bool ResolveNotoGlyph(uint32_t codepoint, NotoGlyph& glyph) {
+    // The main LCD already links this 20px font. Read its immutable raw bitmap directly and
+    // downscale to the OLED's 16px line box, avoiding another font asset or an LVGL draw buffer.
+    lv_font_glyph_dsc_t descriptor = {};
+    if (lv_font_get_glyph_dsc(&font_noto_sans_basic_20_4, &descriptor, codepoint, 0)) {
+        descriptor.req_raw_bitmap = 1;
+        glyph.advance = static_cast<uint16_t>(std::max(
+            1, ScaleRounded(descriptor.adv_w, kNotoScaleNumerator, kNotoScaleDenominator)));
+        glyph.box_w = descriptor.box_w;
+        glyph.box_h = descriptor.box_h;
+        glyph.ofs_x = descriptor.ofs_x;
+        glyph.ofs_y = descriptor.ofs_y;
+        glyph.stride = descriptor.stride;
+        glyph.bitmap = static_cast<const uint8_t*>(
+            descriptor.resolved_font->get_glyph_bitmap(&descriptor, nullptr));
+        glyph.bpp = 4;
+        glyph.line_height = descriptor.resolved_font->line_height;
+        glyph.base_line = descriptor.resolved_font->base_line;
+        return glyph.box_w == 0 || glyph.box_h == 0 || glyph.bitmap != nullptr;
+    }
+
+    VietnameseGlyphView fallback;
+    if (!FindVietnameseGlyphFallback(codepoint, fallback)) {
+        return false;
+    }
+    const int source_advance = static_cast<int>((fallback.adv_w + 8) >> 4);
+    glyph.advance = static_cast<uint16_t>(std::max(
+        1, ScaleRounded(source_advance, kNotoScaleNumerator, kNotoScaleDenominator)));
+    glyph.box_w = fallback.box_w;
+    glyph.box_h = fallback.box_h;
+    glyph.ofs_x = fallback.ofs_x;
+    glyph.ofs_y = fallback.ofs_y;
+    glyph.bitmap = fallback.bitmap;
+    glyph.bpp = 4;
+    glyph.line_height = kFallbackLineHeight;
+    glyph.base_line = kFallbackBaseLine;
+    glyph.scale_numerator = kNotoScaleNumerator;
+    glyph.scale_denominator = kNotoScaleDenominator;
+    return true;
+}
+
+bool NotoGlyphPixel(const NotoGlyph& glyph, int x, int y) {
+    if (glyph.bitmap == nullptr || x < 0 || y < 0 || x >= glyph.box_w || y >= glyph.box_h) {
+        return false;
+    }
+    if (glyph.bpp == 1) {
+        const size_t bit = glyph.stride == 0
+                               ? static_cast<size_t>(y) * glyph.box_w + x
+                               : static_cast<size_t>(y) * glyph.stride * 8 + x;
+        return (glyph.bitmap[bit / 8] & (0x80U >> (bit & 7))) != 0;
+    }
+    const size_t pixel = static_cast<size_t>(y) * glyph.box_w + x;
+    const uint8_t packed = glyph.bitmap[pixel / 2];
+    const uint8_t value = (pixel & 1) == 0 ? packed >> 4 : packed & 0x0f;
+    return value >= 8;
+}
+
+uint32_t DecodeUtf8(const std::string& text, size_t& offset) {
+    const auto first = static_cast<uint8_t>(text[offset++]);
+    if (first < 0x80) {
+        return first;
+    }
+    int continuation_count = 0;
+    uint32_t codepoint = 0;
+    if ((first & 0xe0) == 0xc0) {
+        continuation_count = 1;
+        codepoint = first & 0x1f;
+    } else if ((first & 0xf0) == 0xe0) {
+        continuation_count = 2;
+        codepoint = first & 0x0f;
+    } else if ((first & 0xf8) == 0xf0) {
+        continuation_count = 3;
+        codepoint = first & 0x07;
+    } else {
+        return '?';
+    }
+    if (offset + continuation_count > text.size()) {
+        offset = text.size();
+        return '?';
+    }
+    for (int index = 0; index < continuation_count; ++index) {
+        const auto continuation = static_cast<uint8_t>(text[offset]);
+        if ((continuation & 0xc0) != 0x80) {
+            return '?';
+        }
+        ++offset;
+        codepoint = (codepoint << 6) | (continuation & 0x3f);
+    }
+    return codepoint;
+}
 
 }  // namespace
 
@@ -127,6 +255,24 @@ int SecondaryOled::MeasureTextWidth(const std::string& text, FontSize font) {
         return 0;
     }
     return static_cast<int>(text.size()) * (FontWidth(font) + 1) - 1;
+}
+
+bool SecondaryOled::HasNonAscii(const std::string& text) {
+    return std::any_of(text.begin(), text.end(),
+                       [](unsigned char character) { return character >= 0x80; });
+}
+
+int SecondaryOled::MeasureNotoTextWidth(const std::string& text) {
+    int width = 0;
+    for (size_t offset = 0; offset < text.size();) {
+        uint32_t codepoint = DecodeUtf8(text, offset);
+        NotoGlyph glyph;
+        if (!ResolveNotoGlyph(codepoint, glyph) && !ResolveNotoGlyph('?', glyph)) {
+            continue;
+        }
+        width += glyph.advance;
+    }
+    return width;
 }
 
 SecondaryOled::FontSize SecondaryOled::SelectSingleLineFont(const std::string& text, int width,
@@ -249,6 +395,148 @@ void SecondaryOled::DrawText(int x, int y, const std::string& text, FontSize fon
             }
         }
         x += glyph_width + 1;
+    }
+}
+
+void SecondaryOled::DrawNotoText(int x, int y, const std::string& text, int max_width) {
+    const int right = x + max_width;
+    for (size_t offset = 0; offset < text.size();) {
+        uint32_t codepoint = DecodeUtf8(text, offset);
+        NotoGlyph glyph;
+        if (!ResolveNotoGlyph(codepoint, glyph) && !ResolveNotoGlyph('?', glyph)) {
+            continue;
+        }
+        if (x + glyph.advance > right) {
+            break;
+        }
+
+        const int source_top = glyph.line_height - glyph.base_line - glyph.box_h - glyph.ofs_y;
+        const int output_top = ScaleRounded(source_top, glyph.scale_numerator,
+                                            glyph.scale_denominator);
+        const int output_x = x + ScaleRounded(glyph.ofs_x, glyph.scale_numerator,
+                                              glyph.scale_denominator);
+        const int output_width = std::max(
+            0, ScaleRounded(glyph.box_w, glyph.scale_numerator, glyph.scale_denominator));
+        const int output_height = std::max(
+            0, ScaleRounded(glyph.box_h, glyph.scale_numerator, glyph.scale_denominator));
+        for (int row = 0; row < output_height; ++row) {
+            const int source_row = std::min<int>(
+                glyph.box_h - 1, row * glyph.scale_denominator / glyph.scale_numerator);
+            for (int column = 0; column < output_width; ++column) {
+                const int source_column = std::min<int>(
+                    glyph.box_w - 1, column * glyph.scale_denominator / glyph.scale_numerator);
+                if (NotoGlyphPixel(glyph, source_column, source_row)) {
+                    SetPixel(output_x + column, y + output_top + row);
+                }
+            }
+        }
+        x += glyph.advance;
+    }
+}
+
+void SecondaryOled::DrawNotoTextFitted(int x, int y, int width, int height,
+                                       const std::string& text) {
+    if (width <= 0 || height < kNotoLineHeight || text.empty()) {
+        return;
+    }
+
+    struct Character {
+        size_t begin = 0;
+        size_t end = 0;
+        int width = 0;
+        bool whitespace = false;
+    };
+    // MCP text is capped at 48 code points; keep this scratch storage bounded on the
+    // PSRAM-backed OLED task stack.
+    std::array<Character, 48> characters = {};
+    size_t character_count = 0;
+    for (size_t offset = 0; offset < text.size() && character_count < characters.size();) {
+        const size_t begin = offset;
+        const uint32_t codepoint = DecodeUtf8(text, offset);
+        NotoGlyph glyph;
+        if (!ResolveNotoGlyph(codepoint, glyph) && !ResolveNotoGlyph('?', glyph)) {
+            continue;
+        }
+        characters[character_count++] = {
+            .begin = begin,
+            .end = offset,
+            .width = glyph.advance,
+            .whitespace = codepoint == ' ',
+        };
+    }
+    if (character_count == 0) {
+        return;
+    }
+
+    struct Line {
+        size_t begin = 0;
+        size_t end = 0;
+        int width = 0;
+        bool ellipsis = false;
+    };
+    std::array<Line, 2> lines = {};
+    const size_t maximum_lines = std::min<size_t>(lines.size(), height / kNotoLineHeight);
+    size_t line_count = 0;
+    size_t cursor = 0;
+    while (cursor < character_count && line_count < maximum_lines) {
+        while (cursor < character_count && characters[cursor].whitespace) {
+            ++cursor;
+        }
+        if (cursor >= character_count) {
+            break;
+        }
+        const size_t line_begin = cursor;
+        size_t last_space = character_count;
+        int used_width = 0;
+        while (cursor < character_count &&
+               (used_width + characters[cursor].width <= width || cursor == line_begin)) {
+            used_width += characters[cursor].width;
+            if (characters[cursor].whitespace) {
+                last_space = cursor;
+            }
+            ++cursor;
+        }
+        size_t line_end = cursor;
+        if (cursor < character_count && last_space != character_count && last_space > line_begin) {
+            line_end = last_space;
+            cursor = last_space + 1;
+        }
+        while (line_end > line_begin && characters[line_end - 1].whitespace) {
+            --line_end;
+        }
+        int line_width = 0;
+        for (size_t index = line_begin; index < line_end; ++index) {
+            line_width += characters[index].width;
+        }
+        lines[line_count++] = {.begin = line_begin, .end = line_end, .width = line_width};
+    }
+
+    if (cursor < character_count && line_count > 0) {
+        Line& last = lines[line_count - 1];
+        const int ellipsis_width = 3 * MeasureNotoTextWidth(".");
+        while (last.end > last.begin && last.width + ellipsis_width > width) {
+            --last.end;
+            last.width -= characters[last.end].width;
+        }
+        last.width += ellipsis_width;
+        last.ellipsis = true;
+    }
+
+    const int top = y + std::max(0, (height - static_cast<int>(line_count) * kNotoLineHeight) / 2);
+    for (size_t line_index = 0; line_index < line_count; ++line_index) {
+        const Line& line = lines[line_index];
+        std::string line_text;
+        if (line.end > line.begin) {
+            const size_t byte_begin = characters[line.begin].begin;
+            const size_t byte_end = characters[line.end - 1].end;
+            line_text = text.substr(byte_begin, byte_end - byte_begin);
+        }
+        if (line.ellipsis) {
+            line_text += "...";
+        }
+        const int draw_x = x + std::max(0, (width - line.width) / 2);
+        DrawNotoText(draw_x, top + static_cast<int>(line_index) * kNotoLineHeight, line_text,
+                     width - (draw_x - x));
     }
 }
 

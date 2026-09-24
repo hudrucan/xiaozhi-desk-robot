@@ -39,3 +39,20 @@ std::vector<TextGlyph> CreateVietnameseGlyphFallback() {
     }
     return result;
 }
+
+bool FindVietnameseGlyphFallback(uint32_t codepoint, VietnameseGlyphView& glyph) {
+    for (const auto& seed : kVietnameseFallbackGlyphs) {
+        if (seed.codepoint != codepoint) {
+            continue;
+        }
+        glyph.adv_w = seed.adv_w;
+        glyph.box_w = seed.box_w;
+        glyph.box_h = seed.box_h;
+        glyph.ofs_x = seed.ofs_x;
+        glyph.ofs_y = seed.ofs_y;
+        glyph.bitmap = kVietnameseFallbackBitmap + seed.bitmap_offset;
+        glyph.bitmap_size = seed.bitmap_size;
+        return true;
+    }
+    return false;
+}

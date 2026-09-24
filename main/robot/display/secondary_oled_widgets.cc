@@ -26,6 +26,9 @@ constexpr uint8_t kCapacityIcon[8] = {
 constexpr uint8_t kBatteryIcon[8] = {
     0x00, 0x7e, 0x42, 0x5a, 0x5a, 0x42, 0x7e, 0x18,
 };
+constexpr uint8_t kWifiIcon[8] = {
+    0x02, 0x05, 0x29, 0x55, 0x29, 0x05, 0x02, 0x00,
+};
 
 std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
     if (text.empty()) {
@@ -43,12 +46,31 @@ std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
     } else if (middle > 0 && text[middle - 1] == ' ') {
         split = middle - 1;
     }
+    while (split > 0 && split < text.size() &&
+           (static_cast<uint8_t>(text[split]) & 0xc0) == 0x80) {
+        --split;
+    }
     std::string first = text.substr(0, split);
     std::string second = text.substr(split);
     while (!second.empty() && second.front() == ' ') {
         second.erase(second.begin());
     }
     return {std::move(first), std::move(second)};
+}
+
+std::pair<std::string, std::string> SplitIpAddress(const std::string& address) {
+    if (address.empty()) {
+        return {"No IP", ""};
+    }
+    const size_t middle = address.size() / 2;
+    size_t split = address.rfind('.', middle);
+    if (split == std::string::npos) {
+        split = address.find('.', middle);
+    }
+    if (split == std::string::npos) {
+        return {address, ""};
+    }
+    return {address.substr(0, split), address.substr(split + 1)};
 }
 
 std::string FormatCapacityMah(uint32_t capacity_uah) {
@@ -175,6 +197,13 @@ void SecondaryOled::RenderSingleLineWidgetLocked(
                           : "--mAh";
             icon = kBatteryIcon;
             break;
+        case WidgetType::kNetwork:
+            primary = telemetry_.network_state == NetworkState::kConnected &&
+                              !telemetry_.ip_address.empty()
+                          ? telemetry_.ip_address
+                          : "No IP";
+            icon = kWifiIcon;
+            break;
         case WidgetType::kClimate:
         case WidgetType::kPressure:
         case WidgetType::kLight:
@@ -195,6 +224,11 @@ void SecondaryOled::RenderSingleLineWidgetLocked(
                                                       : placement.height;
     const FontSize preferred =
         placement.height == 16 ? FontSize::kRegular : FontSize::kEmphasis;
+
+    if (HasNonAscii(primary)) {
+        DrawNotoTextFitted(left, top, content_width, content_height, primary);
+        return;
+    }
 
     // Large full-width widgets need more breathing room between the 8px icon
     // and the text. Keep the existing 12px icon/text offset for S/M widgets,
@@ -263,6 +297,10 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
 
     switch (type) {
         case WidgetType::kBranding: {
+            if (HasNonAscii(config_.brand)) {
+                DrawNotoTextFitted(left, top, content_width, content_height, config_.brand);
+                break;
+            }
             const auto lines = SplitForTwoLines(config_.brand);
             if (!lines.second.empty()) {
                 DrawIconTwoLinesFitted(left, top, content_width, content_height, kRobotIcon,
@@ -279,6 +317,11 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
                               std::clamp(telemetry_.distance_mm, 0, 9999));
             } else {
                 std::snprintf(first, sizeof(first), "--mm");
+            }
+            if (HasNonAscii(config_.distance_prefix)) {
+                DrawNotoTextFitted(left, top, content_width, content_height,
+                                   config_.distance_prefix + " " + first);
+                break;
             }
             if (roomy) {
                 DrawIconTwoLinesFitted(left, top, content_width, content_height, kDistanceIcon,
@@ -355,10 +398,26 @@ void SecondaryOled::RenderWidgetLocked(const secondary_oled_layout::Placement& p
                                               : "--mAh";
             if (roomy) {
                 DrawIconTwoLinesFitted(left, top, content_width, content_height, kBatteryIcon,
-                                       "", remaining, FontSize::kRegular, allow_icon);
+                                       "Rmn", remaining, FontSize::kRegular, allow_icon);
             } else {
                 DrawIconTextFitted(left, top, content_width, content_height, kBatteryIcon,
                                    remaining, FontSize::kEmphasis, allow_icon);
+            }
+            break;
+        }
+        case WidgetType::kNetwork: {
+            const std::string address =
+                telemetry_.network_state == NetworkState::kConnected &&
+                        !telemetry_.ip_address.empty()
+                    ? telemetry_.ip_address
+                    : "No IP";
+            if (roomy) {
+                DrawIconTwoLinesFitted(left, top, content_width, content_height, kWifiIcon, "IP",
+                                       address, FontSize::kRegular, allow_icon);
+            } else {
+                const auto lines = SplitIpAddress(address);
+                DrawTwoLinesFitted(left, top, content_width, content_height, lines.first,
+                                   lines.second, FontSize::kRegular);
             }
             break;
         }

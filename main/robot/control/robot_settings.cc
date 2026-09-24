@@ -104,12 +104,12 @@ void RobotSettings::SetMotorSpeed(int speed) const {
 int RobotSettings::GetDriveDurationMs() const {
     Settings settings("desk_robot", false);
     return std::clamp(static_cast<int>(settings.GetInt("drive_time", kDefaultDriveDurationMs)), 50,
-                      2000);
+                      5000);
 }
 
 void RobotSettings::SetDriveDurationMs(int duration_ms) const {
     Settings settings("desk_robot", true);
-    settings.SetInt("drive_time", std::clamp(duration_ms, 50, 2000));
+    settings.SetInt("drive_time", std::clamp(duration_ms, 50, 5000));
 }
 
 bool RobotSettings::GetEmotionMovementEnabled() const {

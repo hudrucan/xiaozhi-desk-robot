@@ -653,6 +653,9 @@ private:
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     static void CollectSecondaryOledTelemetry(void* arg, SecondaryOled::Telemetry& telemetry) {
         auto* self = static_cast<DeskRobotBoard*>(arg);
+        if (telemetry.network_state == SecondaryOled::NetworkState::kConnected) {
+            telemetry.ip_address = WifiManager::GetInstance().GetIpAddress();
+        }
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         const auto cliff = self->cliff_sensor_.GetStatus();
         telemetry.distance_mm = cliff.distance_mm;
@@ -769,25 +772,7 @@ private:
     }
 
     static std::string NormalizeTemporaryText(const std::string& text, size_t max_length) {
-        std::string normalized;
-        normalized.reserve(std::min(text.size(), max_length));
-        bool previous_space = true;
-        for (unsigned char character : text) {
-            if (normalized.size() >= max_length) {
-                break;
-            }
-            if (std::isalnum(character) || character == '-') {
-                normalized.push_back(static_cast<char>(character));
-                previous_space = false;
-            } else if (std::isspace(character) && !previous_space) {
-                normalized.push_back(' ');
-                previous_space = true;
-            }
-        }
-        while (!normalized.empty() && normalized.back() == ' ') {
-            normalized.pop_back();
-        }
-        return normalized;
+        return SecondaryDisplayController::NormalizeUtf8Text(text, max_length);
     }
 
 
@@ -1166,7 +1151,7 @@ private:
     }
 
     void QueueDriveDuration(int duration_ms) {
-        const int safe_duration = std::clamp(duration_ms, 50, 2000);
+        const int safe_duration = std::clamp(duration_ms, 50, 5000);
         drive_duration_ms_.store(safe_duration, std::memory_order_relaxed);
         Application::GetInstance().Schedule([this, safe_duration]() {
             robot_settings_.SetDriveDurationMs(safe_duration);
@@ -1326,7 +1311,7 @@ private:
     }
 
     bool Move(MotorController::Direction direction, int duration_ms, MovePolicy policy) override {
-        const int safe_duration = std::clamp(duration_ms, 50, 2000);
+        const int safe_duration = std::clamp(duration_ms, 50, 5000);
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         if (IsDirectionBlockedByCliff(direction)) {
             return false;

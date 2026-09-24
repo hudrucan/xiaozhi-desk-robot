@@ -41,7 +41,7 @@ void RobotMcpTools::Register(RobotController& controller) {
         "block movement.",
         PropertyList({
             Property("direction", kPropertyTypeString),
-            Property("duration_ms", kPropertyTypeInteger, 250, 50, 2000),
+            Property("duration_ms", kPropertyTypeInteger, 250, 50, 5000),
         }),
         [&controller](const PropertyList& properties) -> ToolResult {
             const auto direction = properties["direction"].value<std::string>();
@@ -109,7 +109,8 @@ void RobotMcpTools::Register(RobotController& controller) {
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     mcp_server.AddTool(
         "self.secondary_display.show_text",
-        "Show temporary ASCII text on the secondary OLED; telemetry returns afterward.",
+        "Show short UTF-8 text, including Vietnamese, on the secondary OLED; telemetry returns "
+        "afterward.",
         PropertyList({
             Property("text", kPropertyTypeString),
             Property("duration_ms", kPropertyTypeInteger, 5000, 500, 60000),

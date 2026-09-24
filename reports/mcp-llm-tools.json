@@ -52,7 +52,7 @@
         "type": "object",
         "properties": {
           "direction": { "type": "string" },
-          "duration_ms": { "type": "integer", "default": 250, "minimum": 50, "maximum": 2000 }
+          "duration_ms": { "type": "integer", "default": 250, "minimum": 50, "maximum": 5000 }
         },
         "required": ["direction"]
       }
@@ -116,7 +116,7 @@
     "type": "function",
     "function": {
       "name": "self_secondary_display_show_text",
-      "description": "Show temporary ASCII text on the secondary OLED; telemetry returns afterward.",
+      "description": "Show short UTF-8 text, including Vietnamese, on the secondary OLED; telemetry returns afterward.",
       "parameters": {
         "type": "object",
         "properties": {

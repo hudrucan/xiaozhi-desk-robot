@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <utility>
 
@@ -19,8 +18,58 @@
 
 namespace {
 
-constexpr int kWidgetSchemaVersion = 3;
+constexpr int kWidgetSchemaVersion = 4;
 constexpr size_t kVersion2WidgetCount = 8;
+constexpr size_t kVersion3WidgetCount = 9;
+
+bool DecodeUtf8Codepoint(const std::string& text, size_t& offset, uint32_t& codepoint) {
+    const size_t begin = offset;
+    const auto first = static_cast<uint8_t>(text[offset]);
+    size_t length = 0;
+    if (first < 0x80) {
+        length = 1;
+        codepoint = first;
+    } else if ((first & 0xe0) == 0xc0) {
+        length = 2;
+        codepoint = first & 0x1f;
+    } else if ((first & 0xf0) == 0xe0) {
+        length = 3;
+        codepoint = first & 0x0f;
+    } else if ((first & 0xf8) == 0xf0) {
+        length = 4;
+        codepoint = first & 0x07;
+    } else {
+        ++offset;
+        return false;
+    }
+    if (begin + length > text.size()) {
+        offset = text.size();
+        return false;
+    }
+    for (size_t index = 1; index < length; ++index) {
+        const auto continuation = static_cast<uint8_t>(text[begin + index]);
+        if ((continuation & 0xc0) != 0x80) {
+            ++offset;
+            return false;
+        }
+        codepoint = (codepoint << 6) | (continuation & 0x3f);
+    }
+    offset += length;
+    if ((length == 2 && codepoint < 0x80) || (length == 3 && codepoint < 0x800) ||
+        (length == 4 && codepoint < 0x10000) ||
+        (codepoint >= 0xd800 && codepoint <= 0xdfff) || codepoint > 0x10ffff) {
+        return false;
+    }
+    return true;
+}
+
+bool IsUnicodeWhitespace(uint32_t codepoint) {
+    return codepoint == 0x20 || (codepoint >= 0x09 && codepoint <= 0x0d) || codepoint == 0x85 ||
+           codepoint == 0xa0 || codepoint == 0x1680 ||
+           (codepoint >= 0x2000 && codepoint <= 0x200a) || codepoint == 0x2028 ||
+           codepoint == 0x2029 || codepoint == 0x202f || codepoint == 0x205f ||
+           codepoint == 0x3000;
+}
 
 }  // namespace
 
@@ -60,25 +109,41 @@ const char* SecondaryDisplayController::WidgetTypeName(SecondaryOled::WidgetType
             return "light";
         case SecondaryOled::WidgetType::kBatteryRemaining:
             return "battery_remaining";
+        case SecondaryOled::WidgetType::kNetwork:
+            return "network";
     }
     return "branding";
 }
 
-std::string SecondaryDisplayController::NormalizeConfigText(const std::string& text,
-                                                            const char* fallback) {
+std::string SecondaryDisplayController::NormalizeUtf8Text(const std::string& text,
+                                                          size_t max_codepoints,
+                                                          const char* fallback) {
     std::string normalized;
-    normalized.reserve(std::min<size_t>(text.size(), 20));
+    normalized.reserve(std::min(text.size(), max_codepoints * 4));
     bool previous_space = true;
-    for (unsigned char character : text) {
-        if (normalized.size() >= 20) {
-            break;
+    size_t codepoint_count = 0;
+    for (size_t offset = 0; offset < text.size() && codepoint_count < max_codepoints;) {
+        const size_t begin = offset;
+        uint32_t codepoint = 0;
+        if (!DecodeUtf8Codepoint(text, offset, codepoint)) {
+            continue;
         }
-        if (std::isalnum(character) || character == '-') {
-            normalized.push_back(static_cast<char>(character));
-            previous_space = false;
-        } else if (std::isspace(character) && !previous_space) {
-            normalized.push_back(' ');
-            previous_space = true;
+        if (IsUnicodeWhitespace(codepoint)) {
+            if (!previous_space) {
+                normalized.push_back(' ');
+                previous_space = true;
+                ++codepoint_count;
+            }
+            continue;
+        }
+        if (codepoint < 0x20 || codepoint == 0x7f) {
+            continue;
+        }
+        normalized.append(text, begin, offset - begin);
+        previous_space = false;
+        ++codepoint_count;
+        if (normalized.size() >= max_codepoints * 4) {
+            break;
         }
     }
     while (!normalized.empty() && normalized.back() == ' ') {
@@ -87,20 +152,24 @@ std::string SecondaryDisplayController::NormalizeConfigText(const std::string& t
     return normalized.empty() ? fallback : normalized;
 }
 
+std::string SecondaryDisplayController::NormalizeConfigText(const std::string& text,
+                                                            const char* fallback) {
+    return NormalizeUtf8Text(text, 20, fallback);
+}
+
 bool SecondaryDisplayController::LoadWidgets(Settings& settings, SecondaryOled::Config& config) {
     const int version = settings.GetInt("oled_w_ver", 0);
-    if (version != 2 && version != kWidgetSchemaVersion) {
+    if (version != 2 && version != 3 && version != kWidgetSchemaVersion) {
         return false;
     }
-    const size_t stored_count =
-        version == 2 ? kVersion2WidgetCount : config.widgets.size();
+    const size_t stored_count = version == 2   ? kVersion2WidgetCount
+                                : version == 3 ? kVersion3WidgetCount
+                                               : config.widgets.size();
     auto widgets = config.widgets;
     std::array<bool, secondary_oled_layout::kMaxWidgets> seen = {};
     for (size_t index = 0; index < stored_count; ++index) {
         const int type = settings.GetInt(WidgetKey(index, "type"), -1);
-        const int type_limit = version == 2
-                                   ? static_cast<int>(kVersion2WidgetCount)
-                                   : static_cast<int>(secondary_oled_layout::kMaxWidgets);
+        const int type_limit = static_cast<int>(stored_count);
         if (type < 0 || type >= type_limit || seen[type]) {
             ESP_LOGW(TAG, "Ignoring invalid persisted secondary OLED widget order");
             return false;
@@ -134,8 +203,10 @@ bool SecondaryDisplayController::Initialize(i2c_master_bus_handle_t bus, std::mu
     if (config.auto_contrast_maximum < config.auto_contrast_minimum) {
         config.auto_contrast_maximum = config.auto_contrast_minimum;
     }
-    config.brand = settings.GetString("oled_brand", "Desk Robot");
-    config.distance_prefix = settings.GetString("oled_prefix", "Dist");
+    config.brand = NormalizeUtf8Text(settings.GetString("oled_brand", "Desk Robot"), 20,
+                                     "Desk Robot");
+    config.distance_prefix =
+        NormalizeUtf8Text(settings.GetString("oled_prefix", "Dist"), 10, "Dist");
     const bool migrate_widgets = LoadWidgets(settings, config);
     if (!oled_.Initialize(bus, bus_mutex, SECONDARY_OLED_I2C_ADDRESS, SECONDARY_OLED_WIDTH,
                           SECONDARY_OLED_HEIGHT, config.flip_180)) {
@@ -213,11 +284,8 @@ void SecondaryDisplayController::QueueConfig(SecondaryOled::Config config) {
     if (config.auto_contrast_maximum < config.auto_contrast_minimum) {
         config.auto_contrast_maximum = config.auto_contrast_minimum;
     }
-    config.brand = NormalizeConfigText(config.brand, "Desk Robot");
-    config.distance_prefix = NormalizeConfigText(config.distance_prefix, "Dist");
-    if (config.distance_prefix.size() > 10) {
-        config.distance_prefix.resize(10);
-    }
+    config.brand = NormalizeUtf8Text(config.brand, 20, "Desk Robot");
+    config.distance_prefix = NormalizeUtf8Text(config.distance_prefix, 10, "Dist");
     Application::GetInstance().Schedule([this, config = std::move(config)]() {
         if (oled_.Configure(config)) {
             PersistConfig(config);

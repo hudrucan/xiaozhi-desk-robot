@@ -94,6 +94,39 @@ constexpr uint8_t kWifiIcon[8] = {
 constexpr uint8_t kTurnIcon[8] = {
     0x18, 0x24, 0x42, 0x42, 0x52, 0x32, 0x70, 0x00,
 };
+
+std::string TruncateUtf8Codepoints(const std::string& text, size_t maximum) {
+    size_t offset = 0;
+    size_t count = 0;
+    while (offset < text.size() && count < maximum) {
+        const size_t begin = offset;
+        const auto first = static_cast<uint8_t>(text[offset++]);
+        size_t length = 1;
+        if (first >= 0x80) {
+            if ((first & 0xe0) == 0xc0) {
+                length = 2;
+            } else if ((first & 0xf0) == 0xe0) {
+                length = 3;
+            } else if ((first & 0xf8) == 0xf0) {
+                length = 4;
+            } else {
+                return text.substr(0, begin);
+            }
+            if (begin + length > text.size()) {
+                return text.substr(0, begin);
+            }
+            for (size_t index = 1; index < length; ++index) {
+                if ((static_cast<uint8_t>(text[begin + index]) & 0xc0) != 0x80) {
+                    return text.substr(0, begin);
+                }
+            }
+            offset = begin + length;
+        }
+        ++count;
+    }
+    return text.substr(0, offset);
+}
+
 std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
     if (text.empty()) {
         return {"", ""};
@@ -109,6 +142,11 @@ std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
         split = middle;
     } else if (middle > 0 && text[middle - 1] == ' ') {
         split = middle - 1;
+    }
+    // Never split a UTF-8 sequence if a compact text path receives multibyte input.
+    while (split > 0 && split < text.size() &&
+           (static_cast<uint8_t>(text[split]) & 0xc0) == 0x80) {
+        --split;
     }
     std::string first = text.substr(0, split);
     std::string second = text.substr(split);
@@ -204,17 +242,13 @@ bool SecondaryOled::Configure(const Config& config) {
     if (normalized.auto_contrast_maximum < normalized.auto_contrast_minimum) {
         normalized.auto_contrast_maximum = normalized.auto_contrast_minimum;
     }
+    normalized.brand = TruncateUtf8Codepoints(normalized.brand, 20);
     if (normalized.brand.empty()) {
         normalized.brand = "Desk Robot";
     }
-    if (normalized.brand.size() > 20) {
-        normalized.brand.resize(20);
-    }
+    normalized.distance_prefix = TruncateUtf8Codepoints(normalized.distance_prefix, 10);
     if (normalized.distance_prefix.empty()) {
         normalized.distance_prefix = "Dist";
-    }
-    if (normalized.distance_prefix.size() > 10) {
-        normalized.distance_prefix.resize(10);
     }
     std::array<bool, secondary_oled_layout::kMaxWidgets> seen_types = {};
     for (auto& widget : normalized.widgets) {
@@ -382,6 +416,7 @@ void SecondaryOled::UpdateTelemetry(const Telemetry& telemetry) {
                          telemetry.capacity_seconds != telemetry_.capacity_seconds ||
                          telemetry.cliff_detected != telemetry_.cliff_detected ||
                          telemetry.network_state != telemetry_.network_state ||
+                         telemetry.ip_address != telemetry_.ip_address ||
                          telemetry.gyro_turn_pending != telemetry_.gyro_turn_pending ||
                          telemetry.gyro_turn_active != telemetry_.gyro_turn_active ||
                          telemetry.gyro_turn_target_deg != telemetry_.gyro_turn_target_deg ||
@@ -508,13 +543,7 @@ void SecondaryOled::RenderDashboardLocked() {
 
 void SecondaryOled::RenderTemporaryTextLocked() {
     Clear();
-    if (MeasureTextWidth(temporary_text_, FontSize::kRegular) <= width_ - 4) {
-        DrawTextFitted(2, 0, width_ - 4, height_, temporary_text_, FontSize::kEmphasis);
-        return;
-    }
-    const auto lines = SplitForTwoLines(temporary_text_);
-    DrawTwoLinesFitted(2, 0, width_ - 4, height_, lines.first, lines.second,
-                       FontSize::kRegular);
+    DrawNotoTextFitted(2, 0, width_ - 4, height_, temporary_text_);
 }
 
 void SecondaryOled::RenderEventLocked(EventType event) {

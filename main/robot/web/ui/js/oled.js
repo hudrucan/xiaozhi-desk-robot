@@ -8,6 +8,7 @@ const oledMeta = {
   pressure: ["Pressure", "BMP280 pressure", "hPa"],
   light: ["Light", "BH1750 illuminance", "Lux"],
   battery_remaining: ["Battery remaining", "Estimated charge left", "mAh left"],
+  network: ["Network", "Local Wi-Fi address", "IP"],
 };
 
 function oledModeOptions(type, selected) {
@@ -116,7 +117,7 @@ function renderOledEditor(status, widgets) {
   $("#oledWidgets").innerHTML = widgets.map((widget, index) => {
     const meta = oledMeta[widget.type] || [widget.type, ""];
     const modeDisabled = widget.type === "branding" || widget.type === "distance" ||
-      widget.type === "battery_remaining";
+      widget.type === "battery_remaining" || widget.type === "network";
     return '<div class="oled-widget"><div class="oled-order">' +
       '<button data-oled-up="' + index + '" ' + (index === 0 ? "disabled" : "") +
       ' aria-label="Move up">↑</button>' +

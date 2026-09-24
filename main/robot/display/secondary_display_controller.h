@@ -37,6 +37,8 @@ public:
 
     static int WidgetActionIndex(const std::string& action, const std::string& prefix);
     static const char* WidgetTypeName(SecondaryOled::WidgetType type);
+    static std::string NormalizeUtf8Text(const std::string& text, size_t max_codepoints,
+                                         const char* fallback = "");
     static std::string NormalizeConfigText(const std::string& text, const char* fallback);
 
 private:

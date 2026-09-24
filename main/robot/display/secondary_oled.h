@@ -23,6 +23,7 @@ public:
         kPressure,
         kLight,
         kBatteryRemaining,
+        kNetwork,
     };
 
     enum class PowerMode : uint8_t {
@@ -95,6 +96,7 @@ public:
             {WidgetType::kPressure, WidgetSize::kSmall, false, 0},
             {WidgetType::kLight, WidgetSize::kSmall, false, 2},
             {WidgetType::kBatteryRemaining, WidgetSize::kMedium, true, 0},
+            {WidgetType::kNetwork, WidgetSize::kMedium, true, 0},
         }};
     };
 
@@ -114,6 +116,7 @@ public:
         uint32_t capacity_seconds = 0;
         bool cliff_detected = false;
         NetworkState network_state = NetworkState::kConnecting;
+        std::string ip_address;
         bool gyro_turn_pending = false;
         bool gyro_turn_active = false;
         int gyro_turn_target_deg = 0;
@@ -171,6 +174,8 @@ private:
     static int FontWidth(FontSize font);
     static int FontHeight(FontSize font);
     static int MeasureTextWidth(const std::string& text, FontSize font);
+    static bool HasNonAscii(const std::string& text);
+    static int MeasureNotoTextWidth(const std::string& text);
     static FontSize SelectSingleLineFont(const std::string& text, int width, int height,
                                          FontSize preferred);
     static FontSize SelectTwoLineFont(const std::string& first, const std::string& second,
@@ -188,6 +193,8 @@ private:
     void DrawEventMessageFitted(const uint8_t* icon, const std::string& first,
                                 const std::string& second);
     void DrawText(int x, int y, const std::string& text, FontSize font, int max_width);
+    void DrawNotoText(int x, int y, const std::string& text, int max_width);
+    void DrawNotoTextFitted(int x, int y, int width, int height, const std::string& text);
     void DrawTextFitted(int x, int y, int width, int height, const std::string& text,
                         FontSize preferred = FontSize::kRegular, bool center_horizontal = true);
     void DrawTwoLinesFitted(int x, int y, int width, int height, const std::string& first,
