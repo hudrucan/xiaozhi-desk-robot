@@ -35,8 +35,10 @@ cJSON* RobotWebStatus::CreateSystem() {
     cJSON_AddStringToObject(root, "server_transport", status.server_transport.c_str());
     cJSON_AddBoolToObject(root, "server_connected", status.server_connected);
     cJSON_AddNumberToObject(root, "free_internal_bytes", status.free_internal_bytes);
+    cJSON_AddNumberToObject(root, "total_internal_bytes", status.total_internal_bytes);
     cJSON_AddNumberToObject(root, "minimum_free_internal_bytes",
                             status.minimum_free_internal_bytes);
     cJSON_AddNumberToObject(root, "free_psram_bytes", status.free_psram_bytes);
+    cJSON_AddNumberToObject(root, "total_psram_bytes", status.total_psram_bytes);
     return root;
 }

@@ -81,6 +81,8 @@ struct RobotStatus {
     std::string server_transport = "none";
     bool server_connected = false;
     size_t free_internal_bytes = 0;
+    size_t total_internal_bytes = 0;
     size_t minimum_free_internal_bytes = 0;
     size_t free_psram_bytes = 0;
+    size_t total_psram_bytes = 0;
 };

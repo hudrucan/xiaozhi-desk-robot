@@ -27,9 +27,9 @@ const tabMeta = {
     description: "Audio, displays, lighting, and environment sensors.",
   },
   diagnostics: {
-    kicker: "System health",
+    kicker: "Runtime inspection",
     title: "Diagnostics",
-    description: "Memory, reset state, vision health, and live device logs.",
+    description: "Live firmware logs and runtime events.",
   },
 };
 let activeTab = "overview";
@@ -52,15 +52,27 @@ function updateTabPanels(tab) {
   });
   layoutLanes.forEach((lane) => { lane.hidden = false; });
 
-  const visiblePanels = tabPanels.filter((panel) => !panel.hidden);
+  const tabSuffix = tab.charAt(0).toUpperCase() + tab.slice(1);
+  const orderKey = "order" + tabSuffix;
+  const laneKey = "lane" + tabSuffix;
+  const visiblePanels = tabPanels
+    .filter((panel) => !panel.hidden)
+    .sort((left, right) => {
+      const leftOrder = Number(left.dataset[orderKey] || 100);
+      const rightOrder = Number(right.dataset[orderKey] || 100);
+      return leftOrder - rightOrder;
+    });
   const useSingleColumn = compactLayoutQuery.matches ||
     visiblePanels.length <= 2 || singleColumnTabs.has(tab);
   if (useSingleColumn) {
     visiblePanels.forEach((panel) => layoutLanes[0].appendChild(panel));
   } else {
     visiblePanels.forEach((panel) => {
-      const target = layoutLanes[0].scrollHeight <= layoutLanes[1].scrollHeight
-        ? layoutLanes[0] : layoutLanes[1];
+      const explicitLane = Number(panel.dataset[laneKey]);
+      const target = explicitLane === 0 || explicitLane === 1
+        ? layoutLanes[explicitLane]
+        : layoutLanes[0].scrollHeight <= layoutLanes[1].scrollHeight
+          ? layoutLanes[0] : layoutLanes[1];
       target.appendChild(panel);
     });
   }

@@ -25,9 +25,9 @@ const statusDomainsByTab = {
   overview: ["core", "system", "camera", "sensors", "battery", "environment"],
   control: ["core", "system", "motors", "sensors", "battery", "display", "camera"],
   chat: ["core", "system", "chat", "asr"],
-  camera: ["core", "camera", "system"],
+  camera: ["core", "camera"],
   device: ["core", "system", "audio", "display", "environment"],
-  diagnostics: ["core", "system", "camera"],
+  diagnostics: ["core", "system"],
 };
 let activeStatusDomains = new Set();
 
@@ -352,7 +352,34 @@ function renderAudioStatus(status) {
   $("#micClip").classList.toggle("on", !!status.microphone_muted || !!status.microphone_clipping);
 }
 
+function memoryResource(freeBytes, totalBytes) {
+  const free = Number(freeBytes);
+  const total = Number(totalBytes);
+  if (!Number.isFinite(free) || !Number.isFinite(total) || total <= 0) {
+    return { label: "—", usedPercent: 0 };
+  }
+  const clampedFree = Math.max(0, Math.min(total, free));
+  return {
+    label: fmtBytes(clampedFree) + " / " + fmtBytes(total),
+    usedPercent: Math.round((1 - clampedFree / total) * 100),
+  };
+}
+
+function wifiResource(rssi) {
+  const value = Number(rssi);
+  if (!Number.isFinite(value) || value === 0) {
+    return { percent: 0, quality: "Unavailable" };
+  }
+  const percent = Math.round(Math.max(0, Math.min(100, (value + 100) * 100 / 60)));
+  const quality = value >= -55 ? "Excellent" : value >= -67 ? "Good" :
+    value >= -75 ? "Fair" : "Weak";
+  return { percent, quality };
+}
+
 function renderSystemStatus(status) {
+  const internal = memoryResource(status.free_internal_bytes, status.total_internal_bytes);
+  const psram = memoryResource(status.free_psram_bytes, status.total_psram_bytes);
+  const wifi = wifiResource(status.rssi);
   $("#uptime").textContent = fmtTime(status.uptime_sec);
   $("#overviewUptime").textContent = fmtTime(status.uptime_sec);
   $("#version").textContent = "v" + (status.version || "—");
@@ -365,11 +392,28 @@ function renderSystemStatus(status) {
   $("#serverConnection").textContent = transport + " · " +
     (status.server_connected ? "connected" : "disconnected");
   $("#resetReason").textContent = (status.reset_reason || "unknown").replaceAll("-", " ");
-  $("#sram").textContent = fmtBytes(status.free_internal_bytes) + " · " +
+  $("#sram").textContent = internal.label + " · low " +
     fmtBytes(status.minimum_free_internal_bytes);
-  $("#psram").textContent = fmtBytes(status.free_psram_bytes);
-  $("#sidebarSram").textContent = fmtBytes(status.free_internal_bytes);
-  $("#sidebarPsram").textContent = fmtBytes(status.free_psram_bytes);
+  $("#psram").textContent = psram.label;
+  $("#sidebarUptime").textContent = fmtTime(status.uptime_sec);
+  $("#sidebarIp").textContent = status.ip || "—";
+  $("#sidebarSram").textContent = internal.label;
+  $("#sidebarPsram").textContent = psram.label;
+  $("#sidebarSramBar").style.width = internal.usedPercent + "%";
+  $("#sidebarPsramBar").style.width = psram.usedPercent + "%";
+  $("#overviewInternalValue").textContent = internal.label;
+  $("#overviewInternalLow").textContent = "Low watermark " +
+    fmtBytes(status.minimum_free_internal_bytes);
+  $("#overviewPsramValue").textContent = psram.label;
+  $("#overviewWifiValue").textContent = status.rssi ? status.rssi + " dBm" : "—";
+  $("#overviewWifiQuality").textContent = (status.ssid || "No network") +
+    " · " + wifi.quality;
+  $("#overviewInternalPercent").textContent = internal.usedPercent + "% used";
+  $("#overviewPsramPercent").textContent = psram.usedPercent + "% used";
+  $("#overviewWifiPercent").textContent = wifi.percent + "%";
+  $("#overviewInternalBar").style.width = internal.usedPercent + "%";
+  $("#overviewPsramBar").style.width = psram.usedPercent + "%";
+  $("#overviewWifiBar").style.width = wifi.percent + "%";
 }
 
 function environmentStateLabel(state) {

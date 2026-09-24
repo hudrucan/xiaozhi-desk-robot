@@ -14,15 +14,15 @@
     <main class="app">
       <div class="app-shell">
         <aside class="sidebar">
-          <div class="brand">
-            <div class="mark">
-              <span class="eyes"><i></i><i></i></span>
-            </div>
-            <div>
-              <strong class="brand-title">Xiaozhi</strong>
-              <div class="sub">Desk robot</div>
-            </div>
-          </div>
+          <a class="brand" href="#overview" aria-label="Xiaozhi Desk Robot control">
+            <span class="brand-mark" aria-hidden="true">
+              <span></span><span></span>
+            </span>
+            <span>
+              <strong>Xiaozhi</strong>
+              <small>Desk robot</small>
+            </span>
+          </a>
           <nav class="tab-nav" role="tablist" aria-label="Control sections">
             <button type="button" role="tab" data-tab="overview" aria-label="Overview"><span class="tab-index">01</span><span class="tab-label">Overview</span></button>
             <button type="button" role="tab" data-tab="control" aria-label="Control"><span class="tab-index">02</span><span class="tab-label">Control</span></button>
@@ -31,16 +31,33 @@
             <button type="button" role="tab" data-tab="device" aria-label="Device"><span class="tab-index">05</span><span class="tab-label">Device</span></button>
             <button type="button" role="tab" data-tab="diagnostics" aria-label="Diagnostics"><span class="tab-index">06</span><span class="tab-label">Diagnostics</span></button>
           </nav>
-          <section class="sidebar-status" aria-label="Live device status">
-            <div class="sidebar-status-head">
-              <strong><i></i>Live device</strong><b id="sidebarState">—</b>
-            </div>
-            <dl>
-              <div><dt>Firmware</dt><dd id="sidebarVersion">—</dd></div>
-              <div><dt>Internal</dt><dd id="sidebarSram">—</dd></div>
-              <div><dt>PSRAM</dt><dd id="sidebarPsram">—</dd></div>
-            </dl>
-          </section>
+          <div class="sidebar-footer">
+            <section class="sidebar-status" aria-label="Live device status">
+              <div class="sidebar-status-head">
+                <strong><i></i>Live device</strong><b id="sidebarState">—</b>
+              </div>
+              <div class="sidebar-resource">
+                <div><span>Internal · free / total</span><b id="sidebarSram">—</b></div>
+                <div class="sidebar-meter"><i id="sidebarSramBar"></i></div>
+              </div>
+              <div class="sidebar-resource">
+                <div><span>PSRAM · free / total</span><b id="sidebarPsram">—</b></div>
+                <div class="sidebar-meter"><i id="sidebarPsramBar"></i></div>
+              </div>
+              <div class="sidebar-address">
+                <span>Local address</span><b id="sidebarIp">—</b>
+              </div>
+            </section>
+            <section class="sidebar-runtime" aria-label="Firmware runtime">
+              <div class="sidebar-runtime-head">
+                <strong>Runtime</strong><span>System</span>
+              </div>
+              <dl>
+                <div><dt>Firmware</dt><dd id="sidebarVersion">—</dd></div>
+                <div><dt>Uptime</dt><dd id="sidebarUptime">—</dd></div>
+              </dl>
+            </section>
+          </div>
         </aside>
         <section class="workspace">
           <header class="app-header">
@@ -61,7 +78,7 @@
           </div>
           <div class="dashboard">
         <div class="column left-column">
-          <section class="card" data-tabs="overview camera diagnostics">
+          <section class="card" data-tabs="overview">
             <div class="section-title">
               <strong data-caption="Connectivity, memory, and vision">Health</strong><span id="version">—</span>
             </div>
@@ -82,16 +99,50 @@
                 <span>Reset reason</span><b id="resetReason">—</b>
               </div>
               <div class="device-row">
-                <span>Internal RAM · low</span><b id="sram">—</b>
+                <span>Internal RAM · free / total / low</span><b id="sram">—</b>
               </div>
               <div class="device-row">
-                <span>PSRAM free</span><b id="psram">—</b>
+                <span>PSRAM · free / total</span><b id="psram">—</b>
               </div>
               <div class="device-row">
                 <span>Camera health</span><b id="cameraHealth">—</b>
               </div>
               <div class="device-row wide">
                 <span>Last vision request</span><b id="cameraLastRequest">Never</b>
+              </div>
+            </div>
+          </section>
+          <section class="card resource-card" data-tabs="overview">
+            <div class="section-title">
+              <strong data-caption="Live heap and network pressure">Resources</strong
+              ><span>Live</span>
+            </div>
+            <div class="resource-summary">
+              <div class="resource-summary-item">
+                <span>Internal RAM · free / total</span><b id="overviewInternalValue">—</b
+                ><small id="overviewInternalLow">Waiting for device</small>
+              </div>
+              <div class="resource-summary-item">
+                <span>PSRAM · free / total</span><b id="overviewPsramValue">—</b
+                ><small>Camera, UI, and image buffers</small>
+              </div>
+              <div class="resource-summary-item">
+                <span>Wi-Fi signal</span><b id="overviewWifiValue">—</b
+                ><small id="overviewWifiQuality">Waiting for device</small>
+              </div>
+            </div>
+            <div class="resource-meters">
+              <div class="resource-meter">
+                <div><span>Internal memory pressure</span><b id="overviewInternalPercent">—</b></div>
+                <div class="resource-track"><i id="overviewInternalBar"></i></div>
+              </div>
+              <div class="resource-meter">
+                <div><span>PSRAM pressure</span><b id="overviewPsramPercent">—</b></div>
+                <div class="resource-track"><i id="overviewPsramBar"></i></div>
+              </div>
+              <div class="resource-meter">
+                <div><span>Wi-Fi link quality</span><b id="overviewWifiPercent">—</b></div>
+                <div class="resource-track signal"><i id="overviewWifiBar"></i></div>
               </div>
             </div>
           </section>
@@ -135,7 +186,12 @@
               </div>
             </div>
           </section>
-          <section class="card" data-tabs="device">
+          <section
+            class="card environment-card"
+            data-tabs="device"
+            data-lane-device="0"
+            data-order-device="20"
+          >
             <div class="section-title">
               <strong data-caption="Ambient sensors">Environment</strong
               ><span id="environmentSummary">Waiting</span>
@@ -155,7 +211,12 @@
               </div>
             </div>
           </section>
-          <section class="card" data-tabs="control">
+          <section
+            class="card"
+            data-tabs="control"
+            data-lane-control="1"
+            data-order-control="20"
+          >
             <div class="section-title">
               <strong data-caption="Motion and safety telemetry">Robot status</strong><span id="uptime">—</span>
             </div>
@@ -233,7 +294,7 @@
               >
             </div>
           </section>
-          <section class="card" data-tabs="chat">
+          <section class="card" data-tabs="chat" data-order-chat="20">
             <div class="section-title">
               <strong data-caption="Recognition provider">ASR</strong><span id="asrStatus">Checking</span>
             </div>
@@ -267,7 +328,7 @@
               listening turn. The API key is saved separately.
             </p>
           </section>
-          <section class="card" data-tabs="chat">
+          <section class="card" data-tabs="chat" data-order-chat="30">
             <div class="section-title">
               <strong data-caption="Bootstrap endpoint">Xiaozhi server</strong><span id="serverStatus">Checking</span>
             </div>
@@ -292,7 +353,12 @@
               Wi-Fi credentials are not changed.
             </p>
           </section>
-          <section class="card" data-tabs="control">
+          <section
+            class="card"
+            data-tabs="control"
+            data-lane-control="0"
+            data-order-control="30"
+          >
             <div class="section-title">
               <strong data-caption="Mochan face preview">Emotions</strong><span>5-second preview</span>
             </div>
@@ -330,14 +396,25 @@
           </section>
         </div>
         <div class="column center-column">
-          <section id="safety" class="card safety" data-tabs="control">
+          <section
+            id="safety"
+            class="card safety"
+            data-tabs="control"
+            data-lane-control="0"
+            data-order-control="0"
+          >
             <div>
               <b>Table edge detected</b
               ><small>Forward and turns are locked. Reverse only.</small>
             </div>
             <button data-stop>STOP</button>
           </section>
-          <section class="card" data-tabs="control">
+          <section
+            class="card"
+            data-tabs="control"
+            data-lane-control="0"
+            data-order-control="10"
+          >
             <div class="section-title">
               <strong data-caption="Direct motion control">Drive</strong
               ><div class="drive-mode" role="group" aria-label="Drive control mode">
@@ -474,7 +551,12 @@
               STOP cancels
             </p>
           </section>
-          <section class="card" data-tabs="device">
+          <section
+            class="card"
+            data-tabs="device"
+            data-lane-device="0"
+            data-order-device="10"
+          >
             <div class="section-title">
               <strong data-caption="Input, output, and illumination">Audio &amp; lighting</strong>
             </div>
@@ -563,7 +645,12 @@
               /><span class="audio-value" id="statusLightValue">100%</span>
             </div>
           </section>
-          <section class="card" data-tabs="device">
+          <section
+            class="card"
+            data-tabs="device"
+            data-lane-device="1"
+            data-order-device="30"
+          >
             <div class="section-title">
               <strong data-caption="Mochan and secondary OLED">Displays</strong><span>Saved automatically</span>
             </div>
@@ -655,7 +742,11 @@
         </div>
         <div class="column right-column">
           <div class="control-stack">
-            <section class="card conversation-card" data-tabs="chat">
+            <section
+              class="card conversation-card"
+              data-tabs="chat"
+              data-order-chat="10"
+            >
               <div class="conversation-head">
                 <strong data-caption="Typed or spoken assistant session">Conversation</strong>
                 <div class="conversation-actions">
@@ -798,7 +889,12 @@
                 </div>
               </details>
             </section>
-            <section class="card" data-tabs="overview control">
+            <section
+              class="card"
+              data-tabs="overview control"
+              data-lane-control="1"
+              data-order-control="40"
+            >
               <div class="section-title">
                 <strong data-caption="Common device operations">Quick actions</strong><span id="danceState">Ready</span>
               </div>

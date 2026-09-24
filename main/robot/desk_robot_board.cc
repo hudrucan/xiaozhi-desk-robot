@@ -1674,9 +1674,11 @@ private:
         status.server_transport = app.GetServerTransport();
         status.server_connected = app.IsServerConnected();
         status.free_internal_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        status.total_internal_bytes = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
         status.minimum_free_internal_bytes =
             heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
         status.free_psram_bytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        status.total_psram_bytes = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
         return status;
     }
 
