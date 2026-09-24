@@ -1,5 +1,6 @@
 let cameraSettingsData = null;
 let cameraSettingsSaving = false;
+let cameraNavigationStopPending = false;
 
 const cameraAdvancedIds = ["cameraBrightness", "cameraContrast", "cameraSaturation",
   "cameraAeLevel", "cameraAutoExposure", "cameraAec2", "cameraManualExposure",
@@ -57,8 +58,10 @@ async function loadCameraSettings() {
     const result = await response.json();
     if (!response.ok || !result.ok) throw Error(result.message || "Unable to load camera settings");
     populateCameraSettings(result);
+    return true;
   } catch (error) {
     notify(error.message || "Unable to load camera settings");
+    return false;
   }
 }
 
@@ -192,6 +195,7 @@ async function setWebCameraMode(mode) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
+      keepalive: mode === "off",
     });
     const result = await response.json();
     if (!response.ok || !result.ok) throw Error(result.message || "Camera mode failed");
@@ -202,6 +206,13 @@ async function setWebCameraMode(mode) {
     notify(error.message || "Camera mode failed");
     return false;
   }
+}
+
+function stopBrowserLiveForNavigation(message) {
+  if (cameraNavigationStopPending || (!browserLive && !statusCache.web_camera_live)) return;
+  cameraNavigationStopPending = true;
+  stopBrowserLive(message, true);
+  setWebCameraMode("off").finally(() => { cameraNavigationStopPending = false; });
 }
 
 async function toggleBrowserLive() {
@@ -236,6 +247,17 @@ const logOutput = $("#logOutput");
 const pauseLog = $("#pauseLog");
 const logState = $("#logState");
 const autoScroll = $("#autoScroll");
+let logPollTimer = null;
+let logPollingEnabled = false;
+
+function setLogPollingEnabled(enabled) {
+  logPollingEnabled = enabled;
+  clearInterval(logPollTimer);
+  logPollTimer = null;
+  if (!enabled || logPaused || document.hidden) return;
+  fetchLogs();
+  logPollTimer = setInterval(fetchLogs, 1000);
+}
 
 function stripAnsi(text) {
   return text.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
@@ -314,7 +336,12 @@ function toggleLogPause() {
   logPaused = !logPaused;
   pauseLog.textContent = logPaused ? "Resume" : "Pause";
   logState.textContent = logPaused ? "Log paused" : "Live system log";
-  if (!logPaused) fetchLogs();
+  if (logPaused) {
+    clearInterval(logPollTimer);
+    logPollTimer = null;
+  } else if (logPollingEnabled) {
+    setLogPollingEnabled(true);
+  }
 }
 
 function clearLogs() {

@@ -12,23 +12,58 @@
   </head>
   <body>
     <main class="app">
-      <header>
-        <div class="brand">
-          <div class="mark">
-            <span class="eyes"><i></i><i></i></span>
+      <div class="app-shell">
+        <aside class="sidebar">
+          <div class="brand">
+            <div class="mark">
+              <span class="eyes"><i></i><i></i></span>
+            </div>
+            <div>
+              <strong class="brand-title">Xiaozhi</strong>
+              <div class="sub">Desk robot</div>
+            </div>
           </div>
-          <div>
-            <h1>Xiaozhi Desk Robot</h1>
-            <div class="sub">Local control · port 8080</div>
+          <nav class="tab-nav" role="tablist" aria-label="Control sections">
+            <button type="button" role="tab" data-tab="overview" aria-label="Overview"><span class="tab-index">01</span><span class="tab-label">Overview</span></button>
+            <button type="button" role="tab" data-tab="control" aria-label="Control"><span class="tab-index">02</span><span class="tab-label">Control</span></button>
+            <button type="button" role="tab" data-tab="chat" aria-label="Chat"><span class="tab-index">03</span><span class="tab-label">Chat</span></button>
+            <button type="button" role="tab" data-tab="camera" aria-label="Camera"><span class="tab-index">04</span><span class="tab-label">Camera</span></button>
+            <button type="button" role="tab" data-tab="device" aria-label="Device"><span class="tab-index">05</span><span class="tab-label">Device</span></button>
+            <button type="button" role="tab" data-tab="diagnostics" aria-label="Diagnostics"><span class="tab-index">06</span><span class="tab-label">Diagnostics</span></button>
+          </nav>
+          <section class="sidebar-status" aria-label="Live device status">
+            <div class="sidebar-status-head">
+              <strong><i></i>Live device</strong><b id="sidebarState">—</b>
+            </div>
+            <dl>
+              <div><dt>Firmware</dt><dd id="sidebarVersion">—</dd></div>
+              <div><dt>Internal</dt><dd id="sidebarSram">—</dd></div>
+              <div><dt>PSRAM</dt><dd id="sidebarPsram">—</dd></div>
+            </dl>
+          </section>
+        </aside>
+        <section class="workspace">
+          <header class="app-header">
+            <div>
+              <div class="app-header-kicker">Desk robot control room</div>
+              <strong>Robot console</strong>
+            </div>
+            <div id="online" class="online"><i></i><span>Connecting</span></div>
+          </header>
+          <div class="page-header">
+            <div class="page-heading">
+              <div id="pageKicker" class="page-kicker">System snapshot</div>
+              <h1 id="pageTitle">Overview</h1>
+              <p id="pageDescription" class="page-description">
+                Live health and essential robot actions.
+              </p>
+            </div>
           </div>
-        </div>
-        <div id="online" class="online"><i></i><span>Connecting</span></div>
-      </header>
-      <div class="dashboard">
+          <div class="dashboard">
         <div class="column left-column">
-          <section class="card">
+          <section class="card" data-tabs="overview camera diagnostics">
             <div class="section-title">
-              <strong>Health</strong><span id="version">—</span>
+              <strong data-caption="Connectivity, memory, and vision">Health</strong><span id="version">—</span>
             </div>
             <div class="device-grid">
               <div class="device-row">
@@ -60,9 +95,49 @@
               </div>
             </div>
           </section>
-          <section class="card">
+          <section class="card overview-telemetry" data-tabs="overview">
             <div class="section-title">
-              <strong>Environment</strong
+              <strong data-caption="Motion, power, and room telemetry">Live robot snapshot</strong
+              ><span>Slow refresh</span>
+            </div>
+            <div class="overview-stats">
+              <div class="overview-stat">
+                <span>Assistant</span><b id="overviewAssistant">—</b
+                ><small>Current session state</small>
+              </div>
+              <div class="overview-stat">
+                <span>Uptime</span><b id="overviewUptime">—</b
+                ><small>Since the last restart</small>
+              </div>
+              <div class="overview-stat">
+                <span>Battery</span><b id="overviewBattery">Checking</b
+                ><small>INA219 state of charge</small>
+              </div>
+              <div class="overview-stat">
+                <span>Current · power</span><b id="overviewPower">—</b
+                ><small>Live energy flow</small>
+              </div>
+              <div class="overview-stat">
+                <span>Floor distance</span><b id="overviewDistance">Checking</b
+                ><small>Downward cliff sensor</small>
+              </div>
+              <div class="overview-stat">
+                <span>Room climate</span><b id="overviewClimate">Checking</b
+                ><small>AHT20 temperature · humidity</small>
+              </div>
+              <div class="overview-stat">
+                <span>Pressure</span><b id="overviewPressure">Checking</b
+                ><small>BMP280 atmosphere</small>
+              </div>
+              <div class="overview-stat">
+                <span>Ambient light</span><b id="overviewLight">Checking</b
+                ><small>BH1750 illuminance</small>
+              </div>
+            </div>
+          </section>
+          <section class="card" data-tabs="device">
+            <div class="section-title">
+              <strong data-caption="Ambient sensors">Environment</strong
               ><span id="environmentSummary">Waiting</span>
             </div>
             <div class="status">
@@ -80,9 +155,9 @@
               </div>
             </div>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="control">
             <div class="section-title">
-              <strong>Robot status</strong><span id="uptime">—</span>
+              <strong data-caption="Motion and safety telemetry">Robot status</strong><span id="uptime">—</span>
             </div>
             <div class="status">
               <div class="metric">
@@ -158,9 +233,9 @@
               >
             </div>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="chat">
             <div class="section-title">
-              <strong>ASR</strong><span id="asrStatus">Checking</span>
+              <strong data-caption="Recognition provider">ASR</strong><span id="asrStatus">Checking</span>
             </div>
             <div class="display-settings">
               <label class="field">
@@ -192,9 +267,9 @@
               listening turn. The API key is saved separately.
             </p>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="chat">
             <div class="section-title">
-              <strong>Xiaozhi server</strong><span id="serverStatus">Checking</span>
+              <strong data-caption="Bootstrap endpoint">Xiaozhi server</strong><span id="serverStatus">Checking</span>
             </div>
             <label class="field">
               <span>Bootstrap / OTA endpoint</span>
@@ -217,9 +292,9 @@
               Wi-Fi credentials are not changed.
             </p>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="control">
             <div class="section-title">
-              <strong>Emotions</strong><span>5-second preview</span>
+              <strong data-caption="Mochan face preview">Emotions</strong><span>5-second preview</span>
             </div>
             <div class="emotion-grid">
               <button class="emotion" data-emotion="neutral">Neutral</button
@@ -255,16 +330,16 @@
           </section>
         </div>
         <div class="column center-column">
-          <section id="safety" class="card safety">
+          <section id="safety" class="card safety" data-tabs="control">
             <div>
               <b>Table edge detected</b
               ><small>Forward and turns are locked. Reverse only.</small>
             </div>
             <button data-stop>STOP</button>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="control">
             <div class="section-title">
-              <strong>Drive</strong
+              <strong data-caption="Direct motion control">Drive</strong
               ><div class="drive-mode" role="group" aria-label="Drive control mode">
                 <button id="padMode" class="active" type="button">Pad</button
                 ><button id="joystickMode" type="button">Joystick</button>
@@ -394,10 +469,14 @@
               ><span>Time <b id="motorTime">0 ms</b></span>
             </div>
             <div class="progress"><i id="danceProgress"></i></div>
+            <p class="hint drive-hint">
+              Local network only · tap a direction to run for the selected time ·
+              STOP cancels
+            </p>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="device">
             <div class="section-title">
-              <strong>Audio &amp; lighting</strong>
+              <strong data-caption="Input, output, and illumination">Audio &amp; lighting</strong>
             </div>
             <div class="audio-row">
               <span class="audio-name"
@@ -484,9 +563,9 @@
               /><span class="audio-value" id="statusLightValue">100%</span>
             </div>
           </section>
-          <section class="card">
+          <section class="card" data-tabs="device">
             <div class="section-title">
-              <strong>Displays</strong><span>Saved automatically</span>
+              <strong data-caption="Mochan and secondary OLED">Displays</strong><span>Saved automatically</span>
             </div>
             <div class="display-actions">
               <button
@@ -573,16 +652,12 @@
               </div>
             </div>
           </section>
-          <p class="hint">
-            Local network only · tap a direction to run for the selected time ·
-            STOP cancels
-          </p>
         </div>
         <div class="column right-column">
           <div class="control-stack">
-            <section class="card conversation-card">
+            <section class="card conversation-card" data-tabs="chat">
               <div class="conversation-head">
-                <strong>Conversation</strong>
+                <strong data-caption="Typed or spoken assistant session">Conversation</strong>
                 <div class="conversation-actions">
                   <span id="chatState" class="chat-state">Ready</span
                   ><button
@@ -622,9 +697,9 @@
                 </div>
               </div>
             </section>
-            <section class="card">
+            <section class="card" data-tabs="camera">
               <div class="section-title">
-                <strong>Browser camera</strong><span>VGA · JPEG</span>
+                <strong data-caption="Capture, preview, and sensor tuning">Browser camera</strong><span>VGA · JPEG</span>
               </div>
               <div class="camera-body">
                 <div id="snapshot" class="snapshot">
@@ -723,13 +798,13 @@
                 </div>
               </details>
             </section>
-            <section class="card">
+            <section class="card" data-tabs="overview control">
               <div class="section-title">
-                <strong>Quick actions</strong><span id="danceState">Ready</span>
+                <strong data-caption="Common device operations">Quick actions</strong><span id="danceState">Ready</span>
               </div>
               <div class="actions">
                 <button class="action" id="wakeAction" data-action="wake">
-                  <span class="icon">◉</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2"></path></svg></span
                   ><span
                     ><b id="wakeLabel">Wake</b
                     ><small>Start or stop conversation</small></span
@@ -739,13 +814,13 @@
                   id="idleAction"
                   data-action="return_idle"
                 >
-                  <span class="icon">○</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><rect x="9" y="9" width="6" height="6" rx="1"></rect></svg></span
                   ><span
                     ><b>Return to idle</b
                     ><small>Stop activity safely</small></span
                   ></button
                 ><button class="action" id="danceAction" data-action="dance">
-                  <span class="icon">♪</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l10-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="16" cy="16" r="3"></circle></svg></span
                   ><span
                     ><b>Dance</b><small>30–50 randomized steps</small></span
                   ></button
@@ -754,29 +829,29 @@
                   id="lightsAction"
                   data-action="lights_toggle"
                 >
-                  <span class="icon">☀</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></span
                   ><span
                     ><b>Status lights</b><small>Toggle Edison LEDs</small></span
                   ></button
                 ><button class="action" data-action="audio_test">
-                  <span class="icon">♫</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4zM15 9a5 5 0 0 1 0 6M18 6a9 9 0 0 1 0 12"></path></svg></span
                   ><span
                     ><b>Audio test</b><small>Play a speaker tone</small></span
                   ></button
                 ><button class="action danger" data-action="wifi_config">
-                  <span class="icon">⌁</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9a11 11 0 0 1 14 0M8 12a7 7 0 0 1 8 0M11 15a3 3 0 0 1 2 0"></path><circle cx="12" cy="18" r="1"></circle></svg></span
                   ><span
                     ><b>Wi-Fi config</b
                     ><small>Reconnect this robot</small></span
                   ></button
                 ><button class="action danger" data-action="reboot">
-                  <span class="icon">↯</span
+                  <span class="icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v9M6.3 5.7a8 8 0 1 0 11.4 0"></path></svg></span
                   ><span><b>Reboot</b><small>Restart this robot</small></span>
                 </button>
               </div>
             </section>
           </div>
-          <section class="card log-card">
+          <section class="card log-card" data-tabs="diagnostics">
             <div class="log-head">
               <div class="log-state">
                 <i></i><span id="logState">Live system log</span
@@ -809,10 +884,21 @@ Waiting for system logs…</pre
             </div>
           </section>
         </div>
+          </div>
+        </section>
       </div>
     </main>
     <button id="panicStop" class="panic-stop" data-stop>STOP MOTORS</button>
     <div class="toast" id="toast"></div>
+    <script src="js/core.js"></script>
+    <script src="js/drive.js"></script>
+    <script src="js/oled.js"></script>
+    <script src="js/chat_asr.js"></script>
+    <script src="js/server_config.js"></script>
+    <script src="js/status.js"></script>
+    <script src="js/camera_logs.js"></script>
+    <script src="js/tabs.js"></script>
     <script src="app.js"></script>
+    <!-- ROBOT_WEB_CONTROL_SCRIPT -->
   </body>
 </html>

@@ -60,7 +60,7 @@ function bindRangeControls() {
 
 function emergencyStop() {
   stopLiveDrive(true);
-  $$('[data-drive].active').forEach((button) => button.classList.remove("active"));
+  $all('[data-drive].active').forEach((button) => button.classList.remove("active"));
   fetch("/api/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -88,20 +88,20 @@ function bindRobotControls() {
   $("#capacityReset").onclick = () => {
     if (confirm("Reset the saved battery capacity measurement?")) action("battery_capacity_reset");
   };
-  $$('[data-drive]').forEach((button) => {
+  $all('[data-drive]').forEach((button) => {
     button.onclick = () => {
       if (!button.disabled) action(button.dataset.drive, { duration_ms: +duration.value });
     };
     button.oncontextmenu = (event) => event.preventDefault();
   });
-  $$('[data-turn]').forEach((button) => {
+  $all('[data-turn]').forEach((button) => {
     button.onclick = () => {
       if (!button.disabled) action("turn_relative", { value: +button.dataset.turn });
     };
     button.oncontextmenu = (event) => event.preventDefault();
   });
-  $$('[data-stop]').forEach((button) => { button.onclick = () => action("stop"); });
-  $$('[data-action]').forEach((button) => {
+  $all('[data-stop]').forEach((button) => { button.onclick = () => action("stop"); });
+  $all('[data-action]').forEach((button) => {
     button.onclick = () => {
       const name = button.dataset.action;
       if (name === "wifi_config" && !confirm("Open Wi-Fi setup mode? This page will disconnect.")) return;
@@ -114,7 +114,7 @@ function bindRobotControls() {
       action(name);
     };
   });
-  $$('[data-emotion]').forEach((button) => {
+  $all('[data-emotion]').forEach((button) => {
     button.onclick = () => action("emotion", { text: button.dataset.emotion, duration_ms: 5000 });
   });
   window.addEventListener("blur", emergencyStop);
@@ -158,10 +158,6 @@ bindServerConfigControls();
 bindRangeControls();
 bindRobotControls();
 bindCameraAndLogControls();
-loadCameraSettings();
-loadServerConfig();
 bindOledPreviewToggle();
 restoreLogs();
-startStatusPolling();
-fetchLogs();
-setInterval(fetchLogs, 1000);
+bindTabs();

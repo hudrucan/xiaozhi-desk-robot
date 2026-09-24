@@ -21,20 +21,40 @@ const domainConfig = {
   asr: { path: "/api/asr", render: applyAsrStatus },
 };
 
+const statusDomainsByTab = {
+  overview: ["core", "system", "camera", "sensors", "battery", "environment"],
+  control: ["core", "system", "motors", "sensors", "battery", "display", "camera"],
+  chat: ["core", "system", "chat", "asr"],
+  camera: ["core", "camera", "system"],
+  device: ["core", "system", "audio", "display", "environment"],
+  diagnostics: ["core", "system", "camera"],
+};
+let activeStatusDomains = new Set();
+
 function domainInterval(name) {
+  if (document.hidden || !activeStatusDomains.has(name)) return null;
   if (name === "core") return robotActive ? 400 : 1000;
   if (name === "motors") return motorsActive ? 250 : 1000;
-  if (name === "sensors") return motorsActive ? 300 : 1000;
-  if (["battery", "camera", "audio"].includes(name)) return 1000;
+  if (name === "sensors") {
+    return motorsActive ? 300 : activeTab === "control" ? 1000
+      : activeTab === "overview" ? 5000 : 2000;
+  }
+  if (name === "battery") return activeTab === "control" ? 3000
+    : activeTab === "overview" ? 10000 : 2000;
+  if (name === "camera") return activeTab === "camera" ? 1000 : 2500;
+  if (name === "audio") return 1000;
   if (name === "display") {
     return statusCache.auto_brightness_enabled || statusCache.oled_auto_contrast_enabled
       ? 1000
       : null;
   }
-  if (name === "environment") return 1500;
-  if (name === "system") return 5000;
+  if (name === "environment") return activeTab === "overview" ? 10000 : 3000;
+  if (name === "system") {
+    return activeTab === "diagnostics" ? 2000
+      : ["overview", "camera"].includes(activeTab) ? 5000 : 30000;
+  }
   if (name === "chat") return ["Sending", "Waiting", "Speaking"].includes(chatBackendState)
-    ? 500 : 1500;
+    ? 500 : 2000;
   return null;
 }
 
@@ -52,22 +72,24 @@ function renderCoreStatus(status) {
       ? status.asr_preparing ? "preparing ASR" : "processing"
       : (status.state || "idle").replaceAll("_", " ");
   $("#state").textContent = visibleState;
+  $("#overviewAssistant").textContent = visibleState;
+  $("#sidebarState").textContent = visibleState;
   $("#wakeAction").classList.toggle("on", chatActive);
   $("#wakeLabel").textContent = chatActive ? "End chat" : "Wake";
   if (document.activeElement !== $("#emotionMovement")) {
     $("#emotionMovement").checked = !!status.emotion_movement_enabled;
   }
-  $$('[data-emotion]').forEach((button) => {
+  $all('[data-emotion]').forEach((button) => {
     button.classList.toggle("on", button.dataset.emotion === (status.emotion || "neutral"));
   });
   renderCameraStatus(statusCache);
 }
 
 function updateDriveAvailability() {
-  $$('[data-turn]').forEach((button) => {
+  $all('[data-turn]').forEach((button) => {
     button.disabled = cliffDetected || !!statusCache.gyro_turn_pending || motorsActive;
   });
-  $$('[data-drive]').forEach((button) => {
+  $all('[data-drive]').forEach((button) => {
     button.disabled = cliffDetected && button.dataset.drive !== "backward";
   });
   $("#safety").classList.toggle("show", cliffDetected);
@@ -108,6 +130,8 @@ function renderSensorStatus(status) {
   Object.assign(statusCache, status);
   cliffDetected = !!status.cliff_detected;
   $("#distance").textContent = status.distance_valid ? status.distance_mm + " mm" : "—";
+  $("#overviewDistance").textContent = status.distance_valid
+    ? status.distance_mm + " mm" : "No floor return";
   $("#rangeState").textContent = cliffDetected
     ? "Edge · reverse only"
     : status.distance_valid ? "Floor detected" : "No floor return";
@@ -140,6 +164,9 @@ function renderBatteryStatus(status) {
       ? flow + " · " + status.battery_percent + "% · " +
         Number(status.battery_voltage_v).toFixed(2) + " V"
       : "Waiting";
+  $("#overviewBattery").textContent = !status.battery_available
+    ? "Offline"
+    : ready ? flow + " · " + status.battery_percent + "%" : "Waiting";
   $("#power").textContent = ready
     ? (currentMa >= 0 ? "+" : "") + Math.round(currentMa) + " mA · " +
       (Number(status.battery_power_mw) / 1000).toFixed(2) + " W"
@@ -147,6 +174,10 @@ function renderBatteryStatus(status) {
       ? "Invalid · CNVR " + (status.battery_conversion_ready ? "yes" : "no") +
         " · OVF " + (status.battery_math_overflow ? "yes" : "no")
       : "—";
+  $("#overviewPower").textContent = ready
+    ? (currentMa >= 0 ? "+" : "") + Math.round(currentMa) + " mA · " +
+      (Number(status.battery_power_mw) / 1000).toFixed(2) + " W"
+    : "—";
 
   const capacityMah = Number(status.battery_capacity_test_mah) || 0;
   const capacityActive = !!status.battery_capacity_test_active;
@@ -323,7 +354,9 @@ function renderAudioStatus(status) {
 
 function renderSystemStatus(status) {
   $("#uptime").textContent = fmtTime(status.uptime_sec);
+  $("#overviewUptime").textContent = fmtTime(status.uptime_sec);
   $("#version").textContent = "v" + (status.version || "—");
+  $("#sidebarVersion").textContent = "v" + (status.version || "—");
   $("#ssid").textContent = status.ssid || "—";
   $("#rssi").textContent = status.rssi ? status.rssi + " dBm" : "—";
   $("#ip").textContent = status.ip || "—";
@@ -335,6 +368,8 @@ function renderSystemStatus(status) {
   $("#sram").textContent = fmtBytes(status.free_internal_bytes) + " · " +
     fmtBytes(status.minimum_free_internal_bytes);
   $("#psram").textContent = fmtBytes(status.free_psram_bytes);
+  $("#sidebarSram").textContent = fmtBytes(status.free_internal_bytes);
+  $("#sidebarPsram").textContent = fmtBytes(status.free_psram_bytes);
 }
 
 function environmentStateLabel(state) {
@@ -358,6 +393,10 @@ function renderEnvironmentStatus(status) {
 
   const summary = [temperature, humidity, pressure, illuminance].filter(Boolean);
   $("#environmentSummary").textContent = summary.length ? summary.join(" · ") : "No data";
+  $("#overviewClimate").textContent = [temperature, humidity].filter(Boolean).join(" · ") ||
+    "Unavailable";
+  $("#overviewPressure").textContent = pressure || "Unavailable";
+  $("#overviewLight").textContent = illuminance || "Unavailable";
   $("#aht20Status").textContent = [environmentStateLabel(aht20.state), temperature, humidity]
     .filter(Boolean).join(" · ");
   $("#bmp280Status").textContent = [environmentStateLabel(bmp280.state), pressure]
@@ -368,10 +407,12 @@ function renderEnvironmentStatus(status) {
 
 function scheduleStatusLoop(delay = 0) {
   clearTimeout(statusTimer);
+  if (document.hidden) return;
   statusTimer = setTimeout(runStatusScheduler, Math.max(0, delay));
 }
 
 function queueDomains(names, delay = 0) {
+  if (document.hidden) return;
   const due = performance.now() + delay;
   names.forEach((name) => {
     if (domainConfig[name]) {
@@ -385,6 +426,7 @@ function markCoreOnline() {
   coreFailures = 0;
   $("#online").classList.add("ok");
   $("#online span").textContent = "Online";
+  $(".sidebar-status").classList.add("is-online");
 }
 
 function markCoreFailure() {
@@ -392,10 +434,11 @@ function markCoreFailure() {
   if (coreFailures < 3) return;
   $("#online").classList.remove("ok");
   $("#online span").textContent = "Offline";
+  $(".sidebar-status").classList.remove("is-online");
 }
 
 async function runStatusScheduler() {
-  if (statusPending) return;
+  if (document.hidden || statusPending) return;
   const now = performance.now();
   const next = [...domainSchedule.entries()].sort((left, right) => left[1] - right[1])[0];
   if (!next) return;
@@ -424,7 +467,16 @@ async function runStatusScheduler() {
   }
 }
 
-function startStatusPolling() {
+function pauseStatusPolling() {
+  clearTimeout(statusTimer);
+  statusTimer = null;
+  domainSchedule.clear();
+}
+
+function setStatusTab(tab) {
+  pauseStatusPolling();
+  activeStatusDomains = new Set(statusDomainsByTab[tab] || statusDomainsByTab.overview);
+  if (document.hidden) return;
   const now = performance.now();
   const initialOffsets = {
     core: 0,
@@ -439,6 +491,8 @@ function startStatusPolling() {
     chat: 600,
     asr: 700,
   };
-  Object.entries(initialOffsets).forEach(([name, offset]) => domainSchedule.set(name, now + offset));
+  Object.entries(initialOffsets).forEach(([name, offset]) => {
+    if (activeStatusDomains.has(name)) domainSchedule.set(name, now + offset);
+  });
   scheduleStatusLoop(0);
 }

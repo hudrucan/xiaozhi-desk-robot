@@ -137,6 +137,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         "${ROBOT_WEB_UI_DIR}/js/server_config.js"
         "${ROBOT_WEB_UI_DIR}/js/status.js"
         "${ROBOT_WEB_UI_DIR}/js/camera_logs.js"
+        "${ROBOT_WEB_UI_DIR}/js/tabs.js"
         "${ROBOT_WEB_UI_DIR}/app.js"
     )
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -164,13 +165,22 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ROBOT_WEB_CONTROL_PAGE
         "${ROBOT_WEB_CONTROL_PAGE}"
     )
+    foreach(ROBOT_WEB_JS_FILE IN LISTS ROBOT_WEB_JS_FILES)
+        file(RELATIVE_PATH ROBOT_WEB_JS_RELATIVE "${ROBOT_WEB_UI_DIR}" "${ROBOT_WEB_JS_FILE}")
+        string(REPLACE
+            "    <script src=\"${ROBOT_WEB_JS_RELATIVE}\"></script>\n"
+            ""
+            ROBOT_WEB_CONTROL_PAGE
+            "${ROBOT_WEB_CONTROL_PAGE}"
+        )
+    endforeach()
     string(REPLACE
-        "    <script src=\"app.js\"></script>"
+        "    <!-- ROBOT_WEB_CONTROL_SCRIPT -->"
         "    <script>\n${ROBOT_WEB_CONTROL_SCRIPT}\n    </script>"
         ROBOT_WEB_CONTROL_PAGE
         "${ROBOT_WEB_CONTROL_PAGE}"
     )
-    if(ROBOT_WEB_CONTROL_PAGE MATCHES "(style\\.css|app\\.js)")
+    if(ROBOT_WEB_CONTROL_PAGE MATCHES "(style\\.css|<script src=|ROBOT_WEB_CONTROL_SCRIPT)")
         message(FATAL_ERROR "Web Control UI assembly failed")
     endif()
 

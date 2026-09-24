@@ -60,28 +60,28 @@ function oledPages(widgets) {
 }
 
 function bindOledEditorActions() {
-  $$('[data-oled-on]').forEach((element) => {
+  $all('[data-oled-on]').forEach((element) => {
     element.onchange = () => action("oled_widget_on_" + element.dataset.oledOn, {
       value: element.checked ? 1 : 0,
     });
   });
-  $$('[data-oled-size]').forEach((element) => {
+  $all('[data-oled-size]').forEach((element) => {
     element.onchange = () => action("oled_widget_size_" + element.dataset.oledSize, {
       value: +element.value,
     });
   });
-  $$('[data-oled-mode]').forEach((element) => {
+  $all('[data-oled-mode]').forEach((element) => {
     element.onchange = () => action("oled_widget_mode_" + element.dataset.oledMode, {
       value: +element.value,
     });
   });
-  $$('[data-oled-up]').forEach((element) => {
+  $all('[data-oled-up]').forEach((element) => {
     element.onclick = () => action("oled_widget_up_" + element.dataset.oledUp);
   });
-  $$('[data-oled-down]').forEach((element) => {
+  $all('[data-oled-down]').forEach((element) => {
     element.onclick = () => action("oled_widget_down_" + element.dataset.oledDown);
   });
-  $$('[data-oled-custom]').forEach((element) => {
+  $all('[data-oled-custom]').forEach((element) => {
     element.onchange = () => action(
       element.dataset.oledCustom === "brand" ? "oled_brand" : "oled_prefix",
       { text: element.value },

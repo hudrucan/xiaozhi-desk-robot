@@ -1,6 +1,6 @@
 const CHAT_MAX_CHARS = 512;
 const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => document.querySelectorAll(selector);
+const $all = (selector) => document.querySelectorAll(selector);
 const toast = $("#toast");
 
 let toastTimer;

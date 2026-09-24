@@ -19,9 +19,11 @@ async function loadServerConfig() {
     const result = await response.json();
     if (!response.ok || !result.ok) throw Error(result.message || "Unable to load server");
     applyServerConfig(result);
+    return true;
   } catch (error) {
     $("#serverStatus").textContent = "Unavailable";
     notify(error.message || "Unable to load server");
+    return false;
   }
 }
 
