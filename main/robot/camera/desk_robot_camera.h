@@ -37,9 +37,11 @@ public:
         size_t image_bytes = 0;
         size_t response_bytes = 0;
     };
+    using McpStateCallback = std::function<void(McpRequestState)>;
 
     DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
-                    const CameraSettingsConfig& settings, CameraImagePolicy& image_policy);
+                    const CameraSettingsConfig& settings, CameraImagePolicy& image_policy,
+                    McpStateCallback mcp_state_callback);
 
     bool Capture() override;
     bool StartWebLive();
@@ -76,6 +78,7 @@ private:
     bool ApplyModeCaptureSettings(CameraResolution resolution, int jpeg_quality);
     bool ApplyModeSensorSettings(const CameraSensorSettings& settings);
     CameraSensorSettings ResolveSensorSettings(const CameraSensorSettings& settings) const;
+    void UpdateMcpRequestState(McpRequestState state);
     static framesize_t ToFrameSize(CameraResolution resolution);
     static gainceiling_t ToGainCeiling(CameraGainCeiling ceiling);
     static CameraSensorControls ToSensorControls(const CameraSensorSettings& settings);
@@ -94,4 +97,5 @@ private:
     mutable std::mutex settings_mutex_;
     CameraSettingsConfig settings_;
     CameraImagePolicy& image_policy_;
+    McpStateCallback mcp_state_callback_;
 };

@@ -92,7 +92,7 @@
 
 class DeskRobotBoard : public WifiBoard, public RobotController {
 private:
-    enum class EmotionSource : uint8_t { kAssistant, kPreview, kMpuReaction };
+    enum class EmotionSource : uint8_t { kAssistant, kPreview, kMpuReaction, kSystem };
 
     static constexpr int kDefaultDriveDurationMs = 250;
     static constexpr uint32_t kLiveDriveLeaseMs = 350;
@@ -581,8 +581,11 @@ private:
         config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode = CAMERA_GRAB_LATEST;
-        camera_ = new DeskRobotCamera(config, primary_i2c_.mutex(), camera_settings,
-                                      camera_image_policy_);
+        camera_ = new DeskRobotCamera(
+            config, primary_i2c_.mutex(), camera_settings, camera_image_policy_,
+            [this](DeskRobotCamera::McpRequestState state) {
+                OnCameraMcpRequestStateChanged(state);
+            });
 
         const bool flipped = camera_settings.sensor.mirror && camera_settings.sensor.flip;
         camera_flipped_.store(flipped);
@@ -790,7 +793,8 @@ private:
 
     void MaybeStartEmotionMovement(const std::string& emotion, EmotionSource source) {
         if (!emotion_movement_enabled_.load(std::memory_order_relaxed) ||
-            source == EmotionSource::kMpuReaction || motors_.IsActive()) {
+            source == EmotionSource::kMpuReaction || source == EmotionSource::kSystem ||
+            motors_.IsActive()) {
             return;
         }
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -849,6 +853,30 @@ private:
             ESP_ERROR_CHECK(esp_timer_start_once(face_reset_timer_, safe_duration * 1000ULL));
         }
         return true;
+    }
+
+    void OnCameraMcpRequestStateChanged(DeskRobotCamera::McpRequestState state) {
+        switch (state) {
+            case DeskRobotCamera::McpRequestState::kCapturing:
+                QueueTemporaryEmotion("surprised", CAMERA_REACTION_PENDING_MS,
+                                      EmotionSource::kSystem);
+                break;
+            case DeskRobotCamera::McpRequestState::kAnalyzing:
+                QueueTemporaryEmotion("thinking", CAMERA_REACTION_PENDING_MS,
+                                      EmotionSource::kSystem);
+                break;
+            case DeskRobotCamera::McpRequestState::kSucceeded:
+                QueueTemporaryEmotion("happy", CAMERA_REACTION_SUCCESS_MS,
+                                      EmotionSource::kSystem);
+                break;
+            case DeskRobotCamera::McpRequestState::kFailed:
+                QueueTemporaryEmotion("confused", CAMERA_REACTION_FAILURE_MS,
+                                      EmotionSource::kSystem);
+                break;
+            case DeskRobotCamera::McpRequestState::kNever:
+            default:
+                break;
+        }
     }
 
     void ResetTemporaryEmotion() {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -29,10 +30,12 @@ bool IsHighResolution(CameraResolution resolution) {
 
 DeskRobotCamera::DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
                                  const CameraSettingsConfig& settings,
-                                 CameraImagePolicy& image_policy)
+                                 CameraImagePolicy& image_policy,
+                                 McpStateCallback mcp_state_callback)
     : Esp32Camera(config, &shared_i2c_mutex),
       settings_(CameraSettingsStore::Normalize(settings)),
-      image_policy_(image_policy) {
+      image_policy_(image_policy),
+      mcp_state_callback_(std::move(mcp_state_callback)) {
     if (Esp32Camera::IsAvailable() &&
         !ApplyModeSensorSettings(settings_.sensor)) {
         ESP_LOGW(TAG, "Some persisted camera sensor settings were rejected");
@@ -51,7 +54,7 @@ bool DeskRobotCamera::Capture() {
     mcp_vision_ms_.store(0, std::memory_order_relaxed);
     mcp_image_bytes_.store(0, std::memory_order_relaxed);
     mcp_response_bytes_.store(0, std::memory_order_relaxed);
-    mcp_request_state_.store(McpRequestState::kCapturing, std::memory_order_release);
+    UpdateMcpRequestState(McpRequestState::kCapturing);
     if (preview_preempted) {
         HidePreviewImage();
     }
@@ -62,7 +65,7 @@ bool DeskRobotCamera::Capture() {
         mcp_capture_ms_.store(
             static_cast<uint32_t>((esp_timer_get_time() - capture_start_us) / 1000),
             std::memory_order_relaxed);
-        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
+        UpdateMcpRequestState(McpRequestState::kFailed);
         EndMcpOperation();
         return false;
     }
@@ -73,7 +76,7 @@ bool DeskRobotCamera::Capture() {
     }
     if (mcp_capture_pending_) {
         ESP_LOGW(TAG, "MCP camera capture rejected: previous snapshot is still pending");
-        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
+        UpdateMcpRequestState(McpRequestState::kFailed);
         EndMcpOperation();
         return false;
     }
@@ -101,7 +104,7 @@ bool DeskRobotCamera::Capture() {
                           std::memory_order_relaxed);
     mcp_image_bytes_.store(image_bytes, std::memory_order_relaxed);
     if (!captured) {
-        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
+        UpdateMcpRequestState(McpRequestState::kFailed);
     }
     ESP_LOGI(TAG,
              "camera_mcp stage=camera_capture_completed success=%d elapsed_ms=%lld "
@@ -319,26 +322,33 @@ const char* DeskRobotCamera::McpRequestStateName(McpRequestState state) {
     }
 }
 
+void DeskRobotCamera::UpdateMcpRequestState(McpRequestState state) {
+    mcp_request_state_.store(state, std::memory_order_release);
+    if (mcp_state_callback_) {
+        mcp_state_callback_(state);
+    }
+}
+
 std::expected<std::string, std::string> DeskRobotCamera::Explain(const std::string& question) {
     if (!mcp_capture_pending_.exchange(false)) {
-        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
+        UpdateMcpRequestState(McpRequestState::kFailed);
         EndMcpOperation();
         return std::unexpected("No MCP camera snapshot is pending");
     }
     ESP_LOGD(TAG, "MCP camera explain begin");
     const int64_t vision_start_us = esp_timer_get_time();
-    mcp_request_state_.store(McpRequestState::kAnalyzing, std::memory_order_release);
+    UpdateMcpRequestState(McpRequestState::kAnalyzing);
     auto result = Esp32Camera::Explain(question);
     const int64_t vision_ms = (esp_timer_get_time() - vision_start_us) / 1000;
     mcp_vision_ms_.store(static_cast<uint32_t>(std::max<int64_t>(0, vision_ms)),
                          std::memory_order_relaxed);
     if (result) {
         mcp_response_bytes_.store(result->size(), std::memory_order_relaxed);
-        mcp_request_state_.store(McpRequestState::kSucceeded, std::memory_order_release);
+        UpdateMcpRequestState(McpRequestState::kSucceeded);
         ESP_LOGI(TAG, "MCP camera explain done");
     } else {
         mcp_response_bytes_.store(0, std::memory_order_relaxed);
-        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
+        UpdateMcpRequestState(McpRequestState::kFailed);
         ESP_LOGE(TAG, "MCP camera explain failed");
     }
     return result;
