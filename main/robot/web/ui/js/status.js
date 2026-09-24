@@ -356,11 +356,17 @@ function memoryResource(freeBytes, totalBytes) {
   const free = Number(freeBytes);
   const total = Number(totalBytes);
   if (!Number.isFinite(free) || !Number.isFinite(total) || total <= 0) {
-    return { label: "—", usedPercent: 0 };
+    return { label: "—", compactLabel: "—", usedPercent: 0 };
   }
   const clampedFree = Math.max(0, Math.min(total, free));
+  const useMegabytes = total >= 1048576;
+  const divisor = useMegabytes ? 1048576 : 1024;
+  const unit = useMegabytes ? " MB" : " KB";
+  const precision = useMegabytes ? 1 : 0;
   return {
     label: fmtBytes(clampedFree) + " / " + fmtBytes(total),
+    compactLabel: (clampedFree / divisor).toFixed(precision) + " / " +
+      (total / divisor).toFixed(precision) + unit,
     usedPercent: Math.round((1 - clampedFree / total) * 100),
   };
 }
@@ -397,8 +403,8 @@ function renderSystemStatus(status) {
   $("#psram").textContent = psram.label;
   $("#sidebarUptime").textContent = fmtTime(status.uptime_sec);
   $("#sidebarIp").textContent = status.ip || "—";
-  $("#sidebarSram").textContent = internal.label;
-  $("#sidebarPsram").textContent = psram.label;
+  $("#sidebarSram").textContent = internal.compactLabel;
+  $("#sidebarPsram").textContent = psram.compactLabel;
   $("#sidebarSramBar").style.width = internal.usedPercent + "%";
   $("#sidebarPsramBar").style.width = psram.usedPercent + "%";
   $("#overviewInternalValue").textContent = internal.label;

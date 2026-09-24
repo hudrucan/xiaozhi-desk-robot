@@ -7,6 +7,7 @@
       content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
     />
     <meta name="theme-color" content="#0b0906" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <title>Xiaozhi Desk Robot</title>
     <link rel="stylesheet" href="style.css" />
   </head>
@@ -37,11 +38,15 @@
                 <strong><i></i>Live device</strong><b id="sidebarState">—</b>
               </div>
               <div class="sidebar-resource">
-                <div><span>Internal · free / total</span><b id="sidebarSram">—</b></div>
+                <div>
+                  <span>Internal RAM</span><b id="sidebarSram">—</b>
+                </div>
                 <div class="sidebar-meter"><i id="sidebarSramBar"></i></div>
               </div>
               <div class="sidebar-resource">
-                <div><span>PSRAM · free / total</span><b id="sidebarPsram">—</b></div>
+                <div>
+                  <span>PSRAM</span><b id="sidebarPsram">—</b>
+                </div>
                 <div class="sidebar-meter"><i id="sidebarPsramBar"></i></div>
               </div>
               <div class="sidebar-address">
@@ -50,12 +55,11 @@
             </section>
             <section class="sidebar-runtime" aria-label="Firmware runtime">
               <div class="sidebar-runtime-head">
-                <strong>Runtime</strong><span>System</span>
+                <strong>Runtime</strong><b id="sidebarUptime">—</b>
               </div>
-              <dl>
-                <div><dt>Firmware</dt><dd id="sidebarVersion">—</dd></div>
-                <div><dt>Uptime</dt><dd id="sidebarUptime">—</dd></div>
-              </dl>
+              <div class="sidebar-runtime-build">
+                <span>Firmware build</span><b id="sidebarVersion">—</b>
+              </div>
             </section>
           </div>
         </aside>

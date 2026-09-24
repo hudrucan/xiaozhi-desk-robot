@@ -143,10 +143,12 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${ROBOT_WEB_UI_DIR}/index.html"
         "${ROBOT_WEB_UI_DIR}/style.css"
+        "${ROBOT_WEB_UI_DIR}/favicon.svg"
         ${ROBOT_WEB_JS_FILES}
     )
     file(READ "${ROBOT_WEB_UI_DIR}/index.html" ROBOT_WEB_CONTROL_PAGE)
     file(READ "${ROBOT_WEB_UI_DIR}/style.css" ROBOT_WEB_CONTROL_STYLE)
+    file(READ "${ROBOT_WEB_UI_DIR}/favicon.svg" ROBOT_WEB_CONTROL_FAVICON)
     set(ROBOT_WEB_CONTROL_SCRIPT "")
     foreach(ROBOT_WEB_JS_FILE IN LISTS ROBOT_WEB_JS_FILES)
         file(READ "${ROBOT_WEB_JS_FILE}" ROBOT_WEB_CONTROL_FRAGMENT)
@@ -159,6 +161,20 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_PAGE "${ROBOT_WEB_CONTROL_PAGE}")
     string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_STYLE "${ROBOT_WEB_CONTROL_STYLE}")
     string(REGEX REPLACE "\n$" "" ROBOT_WEB_CONTROL_SCRIPT "${ROBOT_WEB_CONTROL_SCRIPT}")
+    string(REPLACE "\r" "" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE "\n" "" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE "%" "%25" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE "#" "%23" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE "<" "%3C" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE ">" "%3E" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE " " "%20" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE "\"" "%22" ROBOT_WEB_CONTROL_FAVICON "${ROBOT_WEB_CONTROL_FAVICON}")
+    string(REPLACE
+        "    <link rel=\"icon\" type=\"image/svg+xml\" href=\"favicon.svg\" />"
+        "    <link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,${ROBOT_WEB_CONTROL_FAVICON}\" />"
+        ROBOT_WEB_CONTROL_PAGE
+        "${ROBOT_WEB_CONTROL_PAGE}"
+    )
     string(REPLACE
         "    <link rel=\"stylesheet\" href=\"style.css\" />"
         "    <style>\n${ROBOT_WEB_CONTROL_STYLE}\n    </style>"
@@ -180,7 +196,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         ROBOT_WEB_CONTROL_PAGE
         "${ROBOT_WEB_CONTROL_PAGE}"
     )
-    if(ROBOT_WEB_CONTROL_PAGE MATCHES "(style\\.css|<script src=|ROBOT_WEB_CONTROL_SCRIPT)")
+    if(ROBOT_WEB_CONTROL_PAGE MATCHES "(style\\.css|favicon\\.svg|<script src=|ROBOT_WEB_CONTROL_SCRIPT)")
         message(FATAL_ERROR "Web Control UI assembly failed")
     endif()
 
