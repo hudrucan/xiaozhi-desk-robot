@@ -11,6 +11,7 @@
 #include <esp_network.h>
 #include <esp_log.h>
 #include <esp_wifi.h>
+#include <nvs.h>
 #include <cstring>
 #include <utility>
 
@@ -21,9 +22,43 @@
 
 static const char *TAG = "WifiBoard";
 static constexpr char CONFIG_AP_SSID[] = "xiaozhi-desk-robot";
+static constexpr int MAX_SAVED_WIFI_NETWORKS = 10;
 
 // Connection timeout in seconds
 static constexpr int CONNECT_TIMEOUT_SEC = 60;
+
+namespace {
+
+void ClearSavedWifiChannels() {
+    nvs_handle_t handle = 0;
+    if (nvs_open("wifi", NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+
+    bool changed = false;
+    for (int index = 0; index < MAX_SAVED_WIFI_NETWORKS; ++index) {
+        const std::string key = index == 0 ? "channel" : "channel" + std::to_string(index);
+        const esp_err_t result = nvs_erase_key(handle, key.c_str());
+        if (result == ESP_OK) {
+            changed = true;
+        } else if (result != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Failed to clear saved WiFi channel %s: %s", key.c_str(),
+                     esp_err_to_name(result));
+        }
+    }
+    if (changed) {
+        const esp_err_t result = nvs_commit(handle);
+        if (result == ESP_OK) {
+            ESP_LOGI(TAG, "Cleared saved WiFi channels; next connection will scan all APs");
+        } else {
+            ESP_LOGW(TAG, "Failed to commit cleared WiFi channels: %s",
+                     esp_err_to_name(result));
+        }
+    }
+    nvs_close(handle);
+}
+
+}  // namespace
 
 WifiBoard::WifiBoard() {
     // Create connection timeout timer
@@ -50,6 +85,12 @@ std::string WifiBoard::GetBoardType() {
 
 void WifiBoard::StartNetwork() {
     auto& wifi_manager = WifiManager::GetInstance();
+
+    // The robot may see several access points with the same SSID. A cached channel can select a
+    // weak BSSID and spend multiple retries there before discovering the nearby AP, delaying both
+    // bootstrap and the local Web UI. Force a full scan so the station starts with the strongest
+    // currently visible BSSID.
+    ClearSavedWifiChannels();
 
     // Initialize WiFi manager
     WifiManagerConfig config;
