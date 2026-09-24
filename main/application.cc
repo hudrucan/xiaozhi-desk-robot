@@ -578,14 +578,23 @@ void Application::InitializeProtocol() {
 
     if (ota_->HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
+        server_transport_.store(ServerTransport::kMqtt, std::memory_order_relaxed);
     } else if (ota_->HasWebsocketConfig()) {
         protocol_ = std::make_unique<WebsocketProtocol>();
+        server_transport_.store(ServerTransport::kWebSocket, std::memory_order_relaxed);
     } else {
         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
         protocol_ = std::make_unique<MqttProtocol>();
+        server_transport_.store(ServerTransport::kMqtt, std::memory_order_relaxed);
     }
 
-    protocol_->OnConnected([this]() { DismissAlert(); });
+    server_connected_.store(false, std::memory_order_relaxed);
+    protocol_->OnConnected([this]() {
+        server_connected_.store(true, std::memory_order_relaxed);
+        DismissAlert();
+    });
+    protocol_->OnDisconnected(
+        [this]() { server_connected_.store(false, std::memory_order_relaxed); });
 
     const auto fail_text_chat = [this](const std::string& detail, bool restore_state) {
         return text_chat_controller_.Fail(detail, restore_state);
@@ -1382,6 +1391,20 @@ void Application::ResetProtocol() {
             protocol_->CloseAudioChannel();
         }
         // Reset protocol
+        server_connected_.store(false, std::memory_order_relaxed);
+        server_transport_.store(ServerTransport::kNone, std::memory_order_relaxed);
         protocol_.reset();
     });
+}
+
+const char* Application::GetServerTransport() const {
+    switch (server_transport_.load(std::memory_order_relaxed)) {
+        case ServerTransport::kMqtt:
+            return "mqtt";
+        case ServerTransport::kWebSocket:
+            return "websocket";
+        case ServerTransport::kNone:
+        default:
+            return "none";
+    }
 }

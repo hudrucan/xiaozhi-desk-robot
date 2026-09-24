@@ -39,6 +39,12 @@ struct RobotStatus {
     std::string camera_profile = "normal";
     std::string camera_effective_profile = "normal";
     bool camera_auto_profile_available = false;
+    std::string camera_request_state = "never";
+    int64_t camera_request_age_sec = 0;
+    uint32_t camera_capture_ms = 0;
+    uint32_t camera_vision_ms = 0;
+    size_t camera_image_bytes = 0;
+    size_t camera_response_bytes = 0;
 
     int motor_speed = 0;
     int drive_duration_ms = 0;
@@ -71,6 +77,10 @@ struct RobotStatus {
     std::string ssid = "—";
     int rssi = 0;
     int64_t uptime_sec = 0;
+    std::string reset_reason = "unknown";
+    std::string server_transport = "none";
+    bool server_connected = false;
     size_t free_internal_bytes = 0;
+    size_t minimum_free_internal_bytes = 0;
     size_t free_psram_bytes = 0;
 };

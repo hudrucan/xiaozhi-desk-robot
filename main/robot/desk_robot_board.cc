@@ -1585,6 +1585,19 @@ private:
                 policy.effective_profile == CameraImageProfile::kLowLight
                     ? "low_light"
                     : "normal";
+            const DeskRobotCamera::McpRequestHealth camera_health =
+                camera_->GetMcpRequestHealth();
+            status.camera_request_state =
+                DeskRobotCamera::McpRequestStateName(camera_health.state);
+            status.camera_capture_ms = camera_health.capture_ms;
+            status.camera_vision_ms = camera_health.vision_ms;
+            status.camera_image_bytes = camera_health.image_bytes;
+            status.camera_response_bytes = camera_health.response_bytes;
+            if (camera_health.started_us > 0) {
+                status.camera_request_age_sec =
+                    std::max<int64_t>(0, (esp_timer_get_time() - camera_health.started_us) /
+                                             1000000);
+            }
         }
         status.motor_speed = motors_.GetSpeedPercent();
         status.drive_duration_ms = drive_duration_ms_.load(std::memory_order_relaxed);
@@ -1629,7 +1642,12 @@ private:
             status.rssi = access_point.rssi;
         }
         status.uptime_sec = esp_timer_get_time() / 1000000;
+        status.reset_reason = SystemInfo::GetResetReasonName(esp_reset_reason());
+        status.server_transport = app.GetServerTransport();
+        status.server_connected = app.IsServerConnected();
         status.free_internal_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        status.minimum_free_internal_bytes =
+            heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
         status.free_psram_bytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         return status;
     }

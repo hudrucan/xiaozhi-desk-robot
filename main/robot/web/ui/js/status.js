@@ -287,6 +287,25 @@ function renderCameraStatus(status) {
   $("#liveCamera").disabled = !previewAvailable;
   $("#cameraFlip").classList.toggle("on", !!status.camera_flipped);
   $("#cameraHealth").textContent = available ? "Ready" : "Offline";
+  const requestState = status.camera_request_state || "never";
+  if (requestState === "never") {
+    $("#cameraLastRequest").textContent = "Never";
+  } else {
+    const elapsedMs = (Number(status.camera_capture_ms) || 0) +
+      (Number(status.camera_vision_ms) || 0);
+    const ageSec = Number(status.camera_request_age_sec);
+    const age = Number.isFinite(ageSec)
+      ? (ageSec < 60 ? Math.max(0, Math.floor(ageSec)) + "s" : fmtTime(ageSec)) + " ago"
+      : null;
+    const details = [
+      requestState.charAt(0).toUpperCase() + requestState.slice(1),
+      elapsedMs ? fmtMs(elapsedMs) : null,
+      status.camera_image_bytes ? fmtBytes(status.camera_image_bytes) + " image" : null,
+      status.camera_response_bytes ? fmtBytes(status.camera_response_bytes) + " response" : null,
+      age,
+    ].filter(Boolean);
+    $("#cameraLastRequest").textContent = details.join(" · ");
+  }
 }
 
 function renderAudioStatus(status) {
@@ -308,7 +327,13 @@ function renderSystemStatus(status) {
   $("#ssid").textContent = status.ssid || "—";
   $("#rssi").textContent = status.rssi ? status.rssi + " dBm" : "—";
   $("#ip").textContent = status.ip || "—";
-  $("#sram").textContent = fmtBytes(status.free_internal_bytes);
+  const transport = status.server_transport === "websocket" ? "WebSocket" :
+    status.server_transport === "mqtt" ? "MQTT" : "None";
+  $("#serverConnection").textContent = transport + " · " +
+    (status.server_connected ? "connected" : "disconnected");
+  $("#resetReason").textContent = (status.reset_reason || "unknown").replaceAll("-", " ");
+  $("#sram").textContent = fmtBytes(status.free_internal_bytes) + " · " +
+    fmtBytes(status.minimum_free_internal_bytes);
   $("#psram").textContent = fmtBytes(status.free_psram_bytes);
 }
 

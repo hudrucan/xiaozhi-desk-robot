@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <functional>
 #include <mutex>
@@ -18,6 +19,23 @@ public:
         kOff,
         kWebLive,
         kMochanPreview,
+    };
+
+    enum class McpRequestState : uint8_t {
+        kNever,
+        kCapturing,
+        kAnalyzing,
+        kSucceeded,
+        kFailed,
+    };
+
+    struct McpRequestHealth {
+        McpRequestState state = McpRequestState::kNever;
+        int64_t started_us = 0;
+        uint32_t capture_ms = 0;
+        uint32_t vision_ms = 0;
+        size_t image_bytes = 0;
+        size_t response_bytes = 0;
     };
 
     DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
@@ -46,6 +64,8 @@ public:
     int WebFrameIntervalMs() const;
     const char* SensorName() const;
     CameraImagePolicy::Status GetImagePolicyStatus() const;
+    McpRequestHealth GetMcpRequestHealth() const;
+    static const char* McpRequestStateName(McpRequestState state);
     std::expected<std::string, std::string> Explain(const std::string& question) override;
     void OnMcpResponseSent() override;
 
@@ -65,6 +85,12 @@ private:
     std::atomic<PreviewMode> preview_mode_{PreviewMode::kOff};
     std::atomic_bool mcp_operation_active_{false};
     std::atomic_bool mcp_capture_pending_{false};
+    std::atomic<McpRequestState> mcp_request_state_{McpRequestState::kNever};
+    std::atomic<int64_t> mcp_request_started_us_{0};
+    std::atomic<uint32_t> mcp_capture_ms_{0};
+    std::atomic<uint32_t> mcp_vision_ms_{0};
+    std::atomic_size_t mcp_image_bytes_{0};
+    std::atomic_size_t mcp_response_bytes_{0};
     mutable std::mutex settings_mutex_;
     CameraSettingsConfig settings_;
     CameraImagePolicy& image_policy_;

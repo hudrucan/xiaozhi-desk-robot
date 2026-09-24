@@ -77,6 +77,10 @@ public:
     bool IsGeminiAsrPreparing() const { return gemini_asr_controller_.IsPreparing(); }
     bool IsMicrophoneMuted() const { return audio_service_.IsMicrophoneMuted(); }
     std::string GetServerStatusPhase() const { return server_status_controller_.active_phase(); }
+    bool IsServerConnected() const {
+        return server_connected_.load(std::memory_order_relaxed);
+    }
+    const char* GetServerTransport() const;
 
     /**
      * Request state transition
@@ -146,6 +150,9 @@ private:
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
+    enum class ServerTransport : uint8_t { kNone, kMqtt, kWebSocket };
+    std::atomic<ServerTransport> server_transport_{ServerTransport::kNone};
+    std::atomic_bool server_connected_{false};
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;

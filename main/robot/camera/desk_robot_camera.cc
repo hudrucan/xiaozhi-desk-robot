@@ -45,6 +45,13 @@ bool DeskRobotCamera::Capture() {
         ESP_LOGW(TAG, "MCP camera capture rejected: another operation is active");
         return false;
     }
+    const int64_t capture_start_us = esp_timer_get_time();
+    mcp_request_started_us_.store(capture_start_us, std::memory_order_relaxed);
+    mcp_capture_ms_.store(0, std::memory_order_relaxed);
+    mcp_vision_ms_.store(0, std::memory_order_relaxed);
+    mcp_image_bytes_.store(0, std::memory_order_relaxed);
+    mcp_response_bytes_.store(0, std::memory_order_relaxed);
+    mcp_request_state_.store(McpRequestState::kCapturing, std::memory_order_release);
     if (preview_preempted) {
         HidePreviewImage();
     }
@@ -52,6 +59,10 @@ bool DeskRobotCamera::Capture() {
     std::unique_lock<std::timed_mutex> lock(capture_mutex_, std::defer_lock);
     if (!lock.try_lock_for(std::chrono::seconds(7))) {
         ESP_LOGE(TAG, "MCP camera capture timed out waiting for live preview");
+        mcp_capture_ms_.store(
+            static_cast<uint32_t>((esp_timer_get_time() - capture_start_us) / 1000),
+            std::memory_order_relaxed);
+        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
         EndMcpOperation();
         return false;
     }
@@ -62,10 +73,10 @@ bool DeskRobotCamera::Capture() {
     }
     if (mcp_capture_pending_) {
         ESP_LOGW(TAG, "MCP camera capture rejected: previous snapshot is still pending");
+        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
         EndMcpOperation();
         return false;
     }
-    const int64_t capture_start_us = esp_timer_get_time();
     const CameraSettingsConfig settings = GetSettings();
     const CameraSensorSettings resolved_sensor = ResolveSensorSettings(settings.sensor);
     // Change the sensor mode first because OV2640 set_framesize() rewrites its
@@ -82,8 +93,16 @@ bool DeskRobotCamera::Capture() {
             warmup_frames = std::max(warmup_frames, kMcpHighResolutionWarmupFrames);
         }
     }
-    const bool captured = configured && Esp32Camera::CaptureOwnedJpeg(warmup_frames);
+    size_t image_bytes = 0;
+    const bool captured =
+        configured && Esp32Camera::CaptureOwnedJpeg(warmup_frames, &image_bytes);
     const int64_t capture_ms = (esp_timer_get_time() - capture_start_us) / 1000;
+    mcp_capture_ms_.store(static_cast<uint32_t>(std::max<int64_t>(0, capture_ms)),
+                          std::memory_order_relaxed);
+    mcp_image_bytes_.store(image_bytes, std::memory_order_relaxed);
+    if (!captured) {
+        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
+    }
     ESP_LOGI(TAG,
              "camera_mcp stage=camera_capture_completed success=%d elapsed_ms=%lld "
              "free_internal=%zu free_psram=%zu",
@@ -273,16 +292,53 @@ CameraImagePolicy::Status DeskRobotCamera::GetImagePolicyStatus() const {
     return image_policy_.GetStatus(esp_timer_get_time());
 }
 
+DeskRobotCamera::McpRequestHealth DeskRobotCamera::GetMcpRequestHealth() const {
+    McpRequestHealth health;
+    health.state = mcp_request_state_.load(std::memory_order_acquire);
+    health.started_us = mcp_request_started_us_.load(std::memory_order_relaxed);
+    health.capture_ms = mcp_capture_ms_.load(std::memory_order_relaxed);
+    health.vision_ms = mcp_vision_ms_.load(std::memory_order_relaxed);
+    health.image_bytes = mcp_image_bytes_.load(std::memory_order_relaxed);
+    health.response_bytes = mcp_response_bytes_.load(std::memory_order_relaxed);
+    return health;
+}
+
+const char* DeskRobotCamera::McpRequestStateName(McpRequestState state) {
+    switch (state) {
+        case McpRequestState::kCapturing:
+            return "capturing";
+        case McpRequestState::kAnalyzing:
+            return "analyzing";
+        case McpRequestState::kSucceeded:
+            return "succeeded";
+        case McpRequestState::kFailed:
+            return "failed";
+        case McpRequestState::kNever:
+        default:
+            return "never";
+    }
+}
+
 std::expected<std::string, std::string> DeskRobotCamera::Explain(const std::string& question) {
     if (!mcp_capture_pending_.exchange(false)) {
+        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
         EndMcpOperation();
         return std::unexpected("No MCP camera snapshot is pending");
     }
     ESP_LOGD(TAG, "MCP camera explain begin");
+    const int64_t vision_start_us = esp_timer_get_time();
+    mcp_request_state_.store(McpRequestState::kAnalyzing, std::memory_order_release);
     auto result = Esp32Camera::Explain(question);
+    const int64_t vision_ms = (esp_timer_get_time() - vision_start_us) / 1000;
+    mcp_vision_ms_.store(static_cast<uint32_t>(std::max<int64_t>(0, vision_ms)),
+                         std::memory_order_relaxed);
     if (result) {
+        mcp_response_bytes_.store(result->size(), std::memory_order_relaxed);
+        mcp_request_state_.store(McpRequestState::kSucceeded, std::memory_order_release);
         ESP_LOGI(TAG, "MCP camera explain done");
     } else {
+        mcp_response_bytes_.store(0, std::memory_order_relaxed);
+        mcp_request_state_.store(McpRequestState::kFailed, std::memory_order_release);
         ESP_LOGE(TAG, "MCP camera explain failed");
     }
     return result;

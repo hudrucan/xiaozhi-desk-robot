@@ -75,6 +75,13 @@ cJSON* RobotWebStatus::CreateCamera() {
                             status.camera_effective_profile.c_str());
     cJSON_AddBoolToObject(root, "camera_auto_profile_available",
                           status.camera_auto_profile_available);
+    cJSON_AddStringToObject(root, "camera_request_state",
+                            status.camera_request_state.c_str());
+    cJSON_AddNumberToObject(root, "camera_request_age_sec", status.camera_request_age_sec);
+    cJSON_AddNumberToObject(root, "camera_capture_ms", status.camera_capture_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_ms", status.camera_vision_ms);
+    cJSON_AddNumberToObject(root, "camera_image_bytes", status.camera_image_bytes);
+    cJSON_AddNumberToObject(root, "camera_response_bytes", status.camera_response_bytes);
     return root;
 }
 

@@ -177,7 +177,10 @@ void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token
 
 bool Esp32Camera::Capture() { return CaptureInternal(true, 1); }
 
-bool Esp32Camera::CaptureOwnedJpeg(int warmup_frames) {
+bool Esp32Camera::CaptureOwnedJpeg(int warmup_frames, size_t* captured_size) {
+    if (captured_size != nullptr) {
+        *captured_size = 0;
+    }
     // Show the captured frame once as five-second user feedback. This does not
     // make MCP a persistent preview mode; its camera ownership remains a
     // transient still operation and the framebuffer is returned below.
@@ -199,6 +202,9 @@ bool Esp32Camera::CaptureOwnedJpeg(int warmup_frames) {
     {
         std::lock_guard<std::mutex> lock(mcp_snapshot_mutex_);
         mcp_snapshot_ = std::move(snapshot);
+    }
+    if (captured_size != nullptr) {
+        *captured_size = length;
     }
     ESP_LOGD(TAG, "MCP JPEG copied: %dx%d, len=%zu", width, height, length);
     return true;

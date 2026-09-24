@@ -92,7 +92,7 @@ public:
     virtual std::expected<std::string, std::string> Explain(const std::string& question) override;
 
 protected:
-    bool CaptureOwnedJpeg(int warmup_frames = 1);
+    bool CaptureOwnedJpeg(int warmup_frames = 1, size_t* captured_size = nullptr);
     void ReturnCurrentFrame();
 
 private:

@@ -1037,6 +1037,9 @@
         border-radius: 11px;
         background: rgba(6, 5, 3, 0.42);
       }
+      .device-row.wide {
+        grid-column: 1/-1;
+      }
       .device-row span {
         display: block;
         color: var(--muted);
@@ -1604,6 +1607,7 @@
           grid-template-columns: 1fr;
         }
         .metric.wide,
+        .device-row.wide,
         .field.wide,
         .segment-toggles {
           grid-column: auto;
