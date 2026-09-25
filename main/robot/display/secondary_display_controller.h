@@ -33,7 +33,9 @@ public:
     }
     void QueueConfig(SecondaryOled::Config config);
     void UpdateAmbientLight(bool valid, float illuminance_lux, int64_t timestamp_us);
-    bool QueueTemporaryText(const std::string& text, int duration_ms);
+    bool QueueTemporaryText(const std::string& text, int duration_ms,
+                            uint32_t* generation_out = nullptr);
+    bool CancelTemporaryText(uint32_t expected_generation = 0);
 
     static int WidgetActionIndex(const std::string& action, const std::string& prefix);
     static const char* WidgetTypeName(SecondaryOled::WidgetType type);
@@ -55,6 +57,9 @@ private:
     std::atomic<SecondaryOled::NetworkState> network_state_{
         SecondaryOled::NetworkState::kConnecting};
     std::atomic_bool ambient_light_available_{false};
+    std::atomic_uint32_t temporary_text_generation_{0};
+    std::atomic_int64_t temporary_text_expires_at_us_{0};
+    std::mutex temporary_text_mutex_;
     TaskHandle_t task_ = nullptr;
     esp_timer_handle_t temporary_text_reset_timer_ = nullptr;
     void* telemetry_context_ = nullptr;

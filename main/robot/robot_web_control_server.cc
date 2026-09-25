@@ -728,11 +728,11 @@ esp_err_t RobotWebControlServer::HandleLogs(httpd_req_t* request) {
 
 esp_err_t RobotWebControlServer::HandleAction(httpd_req_t* request) {
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
-    if (request->content_len <= 0 || request->content_len > 256) {
+    if (request->content_len <= 0 || request->content_len > 512) {
         return SendJson(request, "400 Bad Request", R"({"ok":false,"message":"Invalid request"})");
     }
 
-    std::array<char, 257> body = {};
+    std::array<char, 513> body = {};
     const size_t received = static_cast<size_t>(request->content_len);
     if (!ReceiveRequestBody(request, body.data(), received)) {
         return ESP_FAIL;

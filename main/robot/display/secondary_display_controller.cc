@@ -368,24 +368,80 @@ void SecondaryDisplayController::UpdateAmbientLight(bool valid, float illuminanc
     });
 }
 
-bool SecondaryDisplayController::QueueTemporaryText(const std::string& text, int duration_ms) {
+bool SecondaryDisplayController::QueueTemporaryText(const std::string& text, int duration_ms,
+                                                    uint32_t* generation_out) {
     if (text.empty() || !oled_.IsAvailable()) {
         return false;
     }
     const int safe_duration = std::clamp(duration_ms, 500, 60000);
-    Application::GetInstance().Schedule([this, text]() { oled_.ShowTemporaryText(text); });
-    if (temporary_text_reset_timer_ != nullptr) {
-        esp_timer_stop(temporary_text_reset_timer_);
-        ESP_ERROR_CHECK(
-            esp_timer_start_once(temporary_text_reset_timer_, safe_duration * 1000ULL));
+    uint32_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(temporary_text_mutex_);
+        generation = temporary_text_generation_.fetch_add(1) + 1;
+        temporary_text_expires_at_us_.store(esp_timer_get_time() + safe_duration * 1000LL);
+        if (temporary_text_reset_timer_ != nullptr) {
+            esp_timer_stop(temporary_text_reset_timer_);
+            ESP_ERROR_CHECK(
+                esp_timer_start_once(temporary_text_reset_timer_, safe_duration * 1000ULL));
+        }
     }
+    if (generation_out != nullptr) {
+        *generation_out = generation;
+    }
+    Application::GetInstance().Schedule([this, text, generation]() {
+        if (temporary_text_generation_.load() == generation) {
+            oled_.ShowTemporaryText(text);
+        }
+    });
     return true;
 }
 
 void SecondaryDisplayController::TemporaryTextResetTimer(void* arg) {
-    static_cast<SecondaryDisplayController*>(arg)->ClearTemporaryText();
+    auto* self = static_cast<SecondaryDisplayController*>(arg);
+    uint32_t cleared_generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(self->temporary_text_mutex_);
+        const uint32_t expected_generation = self->temporary_text_generation_.load();
+        const int64_t expected_expiry = self->temporary_text_expires_at_us_.load();
+        if (expected_expiry == 0 || esp_timer_get_time() + 1000 < expected_expiry ||
+            self->temporary_text_generation_.load() != expected_generation ||
+            self->temporary_text_expires_at_us_.load() != expected_expiry) {
+            return;
+        }
+        cleared_generation = expected_generation + 1;
+        self->temporary_text_generation_.store(cleared_generation);
+        self->temporary_text_expires_at_us_.store(0);
+    }
+    Application::GetInstance().Schedule([self, cleared_generation]() {
+        if (self->temporary_text_generation_.load() == cleared_generation) {
+            self->oled_.ClearTemporaryText();
+        }
+    });
 }
 
 void SecondaryDisplayController::ClearTemporaryText() {
     Application::GetInstance().Schedule([this]() { oled_.ClearTemporaryText(); });
+}
+
+bool SecondaryDisplayController::CancelTemporaryText(uint32_t expected_generation) {
+    uint32_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(temporary_text_mutex_);
+        const uint32_t current_generation = temporary_text_generation_.load();
+        if (expected_generation != 0 && current_generation != expected_generation) {
+            return false;
+        }
+        generation = current_generation + 1;
+        temporary_text_generation_.store(generation);
+        temporary_text_expires_at_us_.store(0);
+        if (temporary_text_reset_timer_ != nullptr) {
+            esp_timer_stop(temporary_text_reset_timer_);
+        }
+    }
+    Application::GetInstance().Schedule([this, generation]() {
+        if (temporary_text_generation_.load() == generation) {
+            oled_.ClearTemporaryText();
+        }
+    });
+    return true;
 }

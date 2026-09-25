@@ -153,6 +153,20 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
                                                    : "Status lights disabled";
         return true;
     }
+    if (action == "reaction_cancel") {
+        const bool canceled = controller_.CancelReaction();
+        message = canceled ? "Reaction canceled" : "No active reaction";
+        return true;
+    }
+    const std::string reaction_prefix = "react_";
+    if (action.rfind(reaction_prefix, 0) == 0) {
+        const std::string reaction = action.substr(reaction_prefix.size());
+        const int safe_duration = std::clamp(value, 250, 30000);
+        const bool accepted = controller_.React(reaction, safe_duration, text);
+        message = accepted ? "Reaction: " + reaction
+                           : "Unsupported or blocked by a higher-priority reaction";
+        return accepted;
+    }
     if (action == "emotion") {
         if (controller_.GetStatus().state != "idle") {
             message = "Manual emotions are available only while Idle";

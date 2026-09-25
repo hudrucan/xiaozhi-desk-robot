@@ -21,6 +21,10 @@ public:
     virtual bool Dance() = 0;
     virtual bool TurnRelative(int degrees, std::string& message) = 0;
 
+    virtual bool React(const std::string& reaction, int duration_ms,
+                       const std::string& oled_text = "") = 0;
+    virtual bool CancelReaction() = 0;
+
     virtual bool ShowEmotion(const std::string& emotion, int duration_ms) = 0;
     virtual bool ShowSecondaryText(const std::string& text, int duration_ms) = 0;
     virtual bool SetStatusLightEffect(const std::string& effect, int duration_ms) = 0;

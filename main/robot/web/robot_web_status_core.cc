@@ -17,6 +17,14 @@ cJSON* RobotWebStatus::CreateCore() {
     cJSON_AddStringToObject(root, "emotion", status.emotion.c_str());
     cJSON_AddBoolToObject(root, "emotion_movement_enabled", status.emotion_movement_enabled);
     cJSON_AddBoolToObject(root, "emotion_movement_active", status.emotion_movement_active);
+    cJSON_AddBoolToObject(root, "reaction_active", status.reaction_active);
+    cJSON_AddStringToObject(root, "reaction", status.reaction.c_str());
+    cJSON_AddNumberToObject(root, "reaction_priority", status.reaction_priority);
+    cJSON_AddNumberToObject(root, "reaction_generation", status.reaction_generation);
+    cJSON_AddNumberToObject(root, "reaction_remaining_ms", status.reaction_remaining_ms);
+    cJSON_AddStringToObject(root, "reaction_motion_state",
+                            status.reaction_motion_state.c_str());
+    cJSON_AddBoolToObject(root, "reaction_oled_active", status.reaction_oled_active);
     return root;
 }
 

@@ -50,6 +50,13 @@ struct RobotStatus {
     int drive_duration_ms = 0;
     bool emotion_movement_enabled = false;
     bool emotion_movement_active = false;
+    bool reaction_active = false;
+    std::string reaction;
+    int reaction_priority = 0;
+    uint32_t reaction_generation = 0;
+    int reaction_remaining_ms = 0;
+    std::string reaction_motion_state = "not_requested";
+    bool reaction_oled_active = false;
     MotorController::Status motors;
 
     CliffSensor::Status cliff;

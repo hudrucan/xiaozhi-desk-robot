@@ -1343,6 +1343,159 @@
         color: var(--hi);
         box-shadow: inset 0 0 0 1px rgba(227, 194, 123, 0.12);
       }
+      .reaction-head-status {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        min-width: 0;
+      }
+      .reaction-head-status #reactionState {
+        max-width: none;
+        text-transform: capitalize;
+      }
+      .reaction-cancel {
+        border: 1px solid var(--line2);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        padding: 4px 8px;
+        font: inherit;
+        font-size: 9px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .reaction-cancel:hover {
+        border-color: #6b5432;
+        color: var(--hi);
+      }
+      .reaction-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 7px;
+      }
+      .reaction-tile {
+        min-width: 0;
+        border: 1px solid var(--line2);
+        border-radius: 8px;
+        background: rgba(8, 7, 5, 0.5);
+        color: #d9c8a8;
+        padding: 10px 6px;
+        font: inherit;
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: capitalize;
+        cursor: pointer;
+        transition: 0.14s;
+      }
+      .reaction-tile:hover {
+        border-color: #6b5432;
+        color: var(--hi);
+        transform: translateY(-1px);
+      }
+      .reaction-tile:active {
+        transform: scale(0.97);
+      }
+      .reaction-tile.on {
+        border-color: var(--brass);
+        background: #2a2114;
+        color: var(--hi);
+        box-shadow: inset 0 0 0 1px rgba(227, 194, 123, 0.12);
+      }
+      .reaction-duration {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 9px;
+        margin-top: 13px;
+        color: var(--muted);
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .reaction-duration-presets {
+        display: inline-flex;
+        padding: 2px;
+        border: 1px solid var(--line2);
+        border-radius: 8px;
+        background: #130f09;
+      }
+      .reaction-duration-preset {
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        padding: 4px 8px;
+        font: inherit;
+        font-size: 9px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .reaction-duration-preset.on {
+        background: var(--hi);
+        color: #191107;
+      }
+      .reaction-custom-duration {
+        display: grid;
+        grid-template-columns: minmax(70px, 1fr) 42px;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        flex: 1;
+        color: var(--muted);
+        font-size: 9px;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+      .reaction-oled {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        margin-top: 12px;
+      }
+      .reaction-oled > span {
+        color: var(--muted);
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .reaction-oled small {
+        color: #675940;
+        font-size: 8px;
+        text-transform: none;
+      }
+      .reaction-oled .text-input {
+        padding: 7px 9px;
+        background: rgba(8, 7, 5, 0.45);
+      }
+      .reaction-runtime {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 13px;
+        padding-top: 11px;
+        border-top: 1px solid var(--line2);
+      }
+      .reaction-runtime-item {
+        min-width: 0;
+      }
+      .reaction-runtime-item span {
+        display: block;
+        color: #675940;
+        font-size: 8px;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+      .reaction-runtime-item b {
+        display: block;
+        overflow: hidden;
+        margin-top: 2px;
+        color: #c8b792;
+        font-size: 9px;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
       .device-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));

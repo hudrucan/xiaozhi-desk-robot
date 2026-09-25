@@ -20,6 +20,10 @@ function bindRangeControls() {
   const duration = $("#duration");
   duration.oninput = () => { $("#durationLabel").textContent = fmtMs(+duration.value); };
   duration.onchange = () => action("drive_duration", { value: +duration.value });
+  const reactionDuration = $("#reactionDuration");
+  reactionDuration.oninput = () => {
+    $("#reactionDurationLabel").textContent = fmtMs(+reactionDuration.value);
+  };
   const motorSpeed = $("#motorSpeed");
   motorSpeed.oninput = () => { $("#motorSpeedValue").textContent = motorSpeed.value + "%"; };
   motorSpeed.onchange = () => action("motor_speed", { value: +motorSpeed.value });
@@ -117,6 +121,26 @@ function bindRobotControls() {
   $all('[data-emotion]').forEach((button) => {
     button.onclick = () => action("emotion", { text: button.dataset.emotion, duration_ms: 5000 });
   });
+  $all('[data-reaction]').forEach((button) => {
+    button.onclick = () => action("react_" + button.dataset.reaction, {
+      duration_ms: +$("#reactionDuration").value,
+      text: $("#reactionOledText").value,
+    });
+  });
+  $all('[data-reaction-duration]').forEach((button) => {
+    button.onclick = () => {
+      const custom = button.dataset.reactionDuration === "custom";
+      $all('[data-reaction-duration]').forEach((preset) => {
+        preset.classList.toggle("on", preset === button);
+      });
+      $("#reactionCustomDuration").hidden = !custom;
+      if (!custom) {
+        $("#reactionDuration").value = button.dataset.reactionDuration;
+        $("#reactionDurationLabel").textContent = fmtMs(+button.dataset.reactionDuration);
+      }
+    };
+  });
+  $("#reactionCancel").onclick = () => action("reaction_cancel");
   window.addEventListener("blur", emergencyStop);
   window.addEventListener("pagehide", emergencyStop);
   document.addEventListener("visibilitychange", () => {

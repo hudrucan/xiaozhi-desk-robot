@@ -72,6 +72,25 @@ void RobotMcpTools::Register(RobotController& controller) {
                            return controller.Dance();
                        });
     mcp_server.AddTool(
+        "self.robot.react",
+        "Run one coordinated semantic reaction across the face, status light, optional OLED "
+        "text, and safe optional motion. Reactions: acknowledge, success, celebrate, thinking, "
+        "curious, confused, warning, error, startled, sleepy, nope, attention.",
+        PropertyList({
+            Property("reaction", kPropertyTypeString, "acknowledge"),
+            Property("duration_ms", kPropertyTypeInteger, 3000, 250, 30000),
+            Property("oled_text", kPropertyTypeString, ""),
+        }),
+        [&controller](const PropertyList& properties) -> ToolResult {
+            if (!controller.React(properties["reaction"].value<std::string>(),
+                                  properties["duration_ms"].value<int>(),
+                                  properties["oled_text"].value<std::string>())) {
+                return std::string(
+                    "Unsupported reaction or blocked by a higher-priority active reaction");
+            }
+            return true;
+        });
+    mcp_server.AddTool(
         "self.face.set_emotion",
         "Show a temporary face emotion: neutral, happy, bored, laughing, funny, sad, angry, "
         "crying, loving, "

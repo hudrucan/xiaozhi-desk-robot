@@ -398,6 +398,58 @@
               ><button class="emotion" data-emotion="shake">Shake</button>
             </div>
           </section>
+          <section
+            class="card"
+            data-tabs="control"
+            data-lane-control="0"
+            data-order-control="35"
+          >
+            <div class="section-title">
+              <strong data-caption="Coordinated face, light, OLED, and motion">Reactions</strong
+              ><div class="reaction-head-status">
+                <span id="reactionState">Idle</span>
+                <button id="reactionCancel" class="reaction-cancel" type="button" hidden>
+                  Cancel
+                </button>
+              </div>
+            </div>
+            <div class="reaction-grid">
+              <button class="reaction-tile" data-reaction="acknowledge">Acknowledge</button
+              ><button class="reaction-tile" data-reaction="success">Success</button
+              ><button class="reaction-tile" data-reaction="celebrate">Celebrate</button
+              ><button class="reaction-tile" data-reaction="thinking">Thinking</button
+              ><button class="reaction-tile" data-reaction="curious">Curious</button
+              ><button class="reaction-tile" data-reaction="confused">Confused</button
+              ><button class="reaction-tile" data-reaction="warning">Warning</button
+              ><button class="reaction-tile" data-reaction="error">Error</button
+              ><button class="reaction-tile" data-reaction="startled">Startled</button
+              ><button class="reaction-tile" data-reaction="sleepy">Sleepy</button
+              ><button class="reaction-tile" data-reaction="nope">Nope</button
+              ><button class="reaction-tile" data-reaction="attention">Attention</button>
+            </div>
+            <div class="reaction-duration">
+              <span>Duration</span>
+              <div class="reaction-duration-presets">
+                <button class="reaction-duration-preset" type="button" data-reaction-duration="1000">1s</button>
+                <button class="reaction-duration-preset on" type="button" data-reaction-duration="3000">3s</button>
+                <button class="reaction-duration-preset" type="button" data-reaction-duration="5000">5s</button>
+                <button class="reaction-duration-preset" type="button" data-reaction-duration="custom">Custom</button>
+              </div>
+              <div id="reactionCustomDuration" class="reaction-custom-duration" hidden>
+                <input id="reactionDuration" type="range" min="250" max="30000" step="250" value="3000" />
+                <span id="reactionDurationLabel">3.0 s</span>
+              </div>
+            </div>
+            <label class="reaction-oled">
+              <span>OLED text <small>optional</small></span>
+              <input id="reactionOledText" class="text-input" type="text" maxlength="48" autocomplete="off" placeholder="Temporary OLED message" />
+            </label>
+            <div class="reaction-runtime">
+              <div class="reaction-runtime-item"><span>Face</span><b id="reactionFace">neutral</b></div>
+              <div class="reaction-runtime-item"><span>Light</span><b id="reactionLight">idle</b></div>
+              <div class="reaction-runtime-item"><span>Motion</span><b id="reactionMotion">not requested</b></div>
+            </div>
+          </section>
         </div>
         <div class="column center-column">
           <section

@@ -63,7 +63,7 @@ function renderCoreStatus(status) {
   const idle = status.state === "idle";
   const chatActive = ["connecting", "listening", "speaking"].includes(status.state);
   lastState = status.state || "unknown";
-  robotActive = !idle || motorsActive;
+  robotActive = !idle || motorsActive || !!status.reaction_active;
   if (!idle && browserLive) stopBrowserLive("Live preview stopped outside Idle", true);
 
   const visibleState = status.server_status_phase
@@ -82,6 +82,22 @@ function renderCoreStatus(status) {
   $all('[data-emotion]').forEach((button) => {
     button.classList.toggle("on", button.dataset.emotion === (status.emotion || "neutral"));
   });
+  const reactionName = status.reaction || "none";
+  $("#reactionState").textContent = status.reaction_active
+    ? reactionName + " · " + fmtMs(status.reaction_remaining_ms || 0)
+    : "Idle";
+  $all('[data-reaction]').forEach((button) => {
+    button.classList.toggle(
+      "on",
+      !!status.reaction_active && button.dataset.reaction === reactionName,
+    );
+  });
+  $("#reactionFace").textContent = status.emotion || "neutral";
+  $("#reactionLight").textContent = status.reaction_active ? "active" : "idle";
+  $("#reactionMotion").textContent = String(status.reaction_motion_state || "not_requested")
+    .replaceAll("_", " ");
+  $("#reactionCancel").hidden = !status.reaction_active;
+  $("#reactionCancel").disabled = !status.reaction_active;
   renderCameraStatus(statusCache);
 }
 
@@ -99,7 +115,7 @@ function renderMotorStatus(status) {
   Object.assign(statusCache, status);
   const motors = status.motors || {};
   motorsActive = !!(motors.moving || motors.queued || motors.sequence_active || motors.live_drive);
-  robotActive = lastState !== "idle" || motorsActive;
+  robotActive = lastState !== "idle" || motorsActive || !!statusCache.reaction_active;
   if (document.activeElement !== $("#duration") && Number.isFinite(status.drive_duration_ms)) {
     $("#duration").value = status.drive_duration_ms;
     $("#durationLabel").textContent = fmtMs(status.drive_duration_ms);

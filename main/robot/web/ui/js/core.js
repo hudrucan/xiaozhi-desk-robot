@@ -83,6 +83,7 @@ function setRange(input, value, label, suffix) {
 }
 
 function domainsForAction(name) {
+  if (name.startsWith("react_") || name === "reaction_cancel") return ["core", "motors"];
   if (["forward", "backward", "left", "right", "stop", "turn_relative", "dance",
     "motor_speed", "drive_duration"].includes(name)) return ["motors"];
   if (name === "cliff_threshold" || name === "motion_emotions") return ["sensors"];
