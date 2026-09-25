@@ -26,7 +26,6 @@ public:
         kCameraAnalyzing,
         kCameraSuccess,
         kCameraFailed,
-        kIdleLong,
         kUserAttention,
         kToolSuccess,
         kToolError,
@@ -58,7 +57,6 @@ public:
                         bool conversation_active);
     void ObserveFloor(bool available, bool floor_safe, bool floor_unsafe, bool unsafe_motion,
                       bool gyro_active, int64_t now_us, bool conversation_active);
-    void ObserveIdle(bool idle, int64_t now_us);
     void Tick(int64_t now_us, bool conversation_active);
 
 private:
@@ -96,7 +94,4 @@ private:
     int64_t floor_unsafe_candidate_us_ = 0;
     int64_t floor_safe_candidate_us_ = 0;
 
-    bool idle_observed_ = false;
-    bool idle_event_fired_ = false;
-    int64_t idle_started_us_ = 0;
 };

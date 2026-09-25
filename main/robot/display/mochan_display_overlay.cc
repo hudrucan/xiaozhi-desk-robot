@@ -125,6 +125,16 @@ void MochanDisplay::SetStatus(const char* status) {
         clear_emotion = true;
     }
 
+    AmbientActivity ambient_activity = AmbientActivity::kIdle;
+    if (next_activity == FaceState::kListening) {
+        ambient_activity = AmbientActivity::kListening;
+    } else if (next_activity == FaceState::kThinking) {
+        ambient_activity = AmbientActivity::kThinking;
+    } else if (next_activity == FaceState::kSpeaking) {
+        ambient_activity = AmbientActivity::kSpeaking;
+    }
+    ambient_activity_.store(ambient_activity, std::memory_order_release);
+
     DisplayLockGuard lock(this);
     activity_state_ = next_activity;
     status_dot_busy_ = status_dot_busy;
@@ -139,7 +149,7 @@ void MochanDisplay::SetStatus(const char* status) {
     if (clear_emotion) {
         emotion_active_ = false;
     }
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     if (!emotion_active_) {
         const char* activity_emotion = "neutral";
         if (activity_state_ == FaceState::kListening) {
@@ -171,7 +181,7 @@ void MochanDisplay::RestoreActivityFace() {
     DisplayLockGuard lock(this);
     FreezeMouthForExit();
     emotion_active_ = false;
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     const char* activity_emotion = "neutral";
     if (activity_state_ == FaceState::kListening) {
         activity_emotion = "listening";
@@ -502,7 +512,7 @@ void MochanDisplay::ShowNotification(const char* notification, int duration_ms) 
     }
     DisplayLockGuard lock(this);
     FreezeMouthForExit();
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     lv_label_set_text(notification_, notification);
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     ShowResponseBox();
@@ -524,7 +534,7 @@ void MochanDisplay::SetEmotion(const char* emotion) {
     }
     const std::string requested(emotion);
     DisplayLockGuard lock(this);
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     {
         std::lock_guard<std::mutex> state_lock(emotion_mutex_);
         current_emotion_ = requested;
@@ -673,7 +683,7 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     if (content[0] != '\0') {
         FreezeMouthForExit();
     }
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
     if (content[0] == '\0') {
@@ -706,7 +716,7 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     if (image != nullptr) {
         FreezeMouthForExit();
     }
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     if (image == nullptr) {
         esp_timer_stop(preview_timer_);
         preview_show_pending_ = false;
@@ -767,7 +777,7 @@ void MochanDisplay::ShowBootSplash() {
         return;
     }
     DisplayLockGuard lock(this);
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     SetFaceLayoutTarget(0, esp_timer_get_time());
     splash_ = lv_obj_create(lv_layer_top());
     lv_obj_set_size(splash_, LV_PCT(100), LV_PCT(100));

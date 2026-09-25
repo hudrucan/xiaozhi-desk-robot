@@ -3,6 +3,7 @@
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
+#include "behavior/ambient_behavior.h"
 #include "behavior/proactive_events.h"
 #include "behavior/reaction_engine.h"
 #include "camera/camera_settings.h"
@@ -108,6 +109,7 @@ private:
     MotorController motors_{MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2};
     ExpressiveMotionPlanner expressive_motion_planner_;
     ReactionEngine reaction_engine_;
+    AmbientBehavior ambient_behavior_;
     ProactiveEvents proactive_events_;
     RobotSettings robot_settings_;
     CameraSettingsStore camera_settings_;
@@ -131,6 +133,8 @@ private:
     std::atomic_uint32_t reaction_oled_generation_{0};
     std::atomic_uint32_t reaction_oled_text_generation_{0};
     std::atomic_uint32_t reaction_motion_generation_{0};
+    std::atomic_int64_t ambient_manual_control_until_us_{0};
+    std::atomic_int64_t ambient_tool_active_until_us_{0};
     int64_t last_emotion_movement_us_ = 0;
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
@@ -228,6 +232,82 @@ private:
     static bool IsConversationActive() {
         const DeviceState state = Application::GetInstance().GetDeviceState();
         return state == kDeviceStateListening || state == kDeviceStateSpeaking;
+    }
+
+    void NotifyAmbientInteraction(int manual_hold_ms = 0, int tool_hold_ms = 0) {
+        const int64_t now_us = esp_timer_get_time();
+        manual_hold_ms = std::clamp(manual_hold_ms, 0, 60000);
+        tool_hold_ms = std::clamp(tool_hold_ms, 0, 60000);
+        if (manual_hold_ms > 0) {
+            ambient_manual_control_until_us_.store(
+                now_us + static_cast<int64_t>(manual_hold_ms) * 1000,
+                std::memory_order_release);
+        }
+        if (tool_hold_ms > 0) {
+            ambient_tool_active_until_us_.store(
+                now_us + static_cast<int64_t>(tool_hold_ms) * 1000,
+                std::memory_order_release);
+        }
+        ambient_behavior_.NotifyInteraction(now_us);
+    }
+
+    AmbientBehavior::Activity ResolveAmbientActivity(DeviceState state) const {
+        switch (state) {
+            case kDeviceStateIdle:
+                switch (display_->GetAmbientActivity()) {
+                    case MochanDisplay::AmbientActivity::kListening:
+                        return AmbientBehavior::Activity::kListening;
+                    case MochanDisplay::AmbientActivity::kThinking:
+                        return AmbientBehavior::Activity::kThinking;
+                    case MochanDisplay::AmbientActivity::kSpeaking:
+                        return AmbientBehavior::Activity::kSpeaking;
+                    case MochanDisplay::AmbientActivity::kIdle:
+                        return AmbientBehavior::Activity::kIdle;
+                    case MochanDisplay::AmbientActivity::kSuppressed:
+                        return AmbientBehavior::Activity::kSuppressed;
+                }
+                break;
+            case kDeviceStateListening:
+                return AmbientBehavior::Activity::kListening;
+            case kDeviceStateSpeaking:
+                return AmbientBehavior::Activity::kSpeaking;
+            case kDeviceStateConnecting:
+                return AmbientBehavior::Activity::kThinking;
+            default:
+                break;
+        }
+        return AmbientBehavior::Activity::kSuppressed;
+    }
+
+    void TickAmbientBehavior(DeviceState state, int64_t now_us) {
+        AmbientBehavior::Context context;
+        context.activity = ResolveAmbientActivity(state);
+        context.camera_active = camera_ != nullptr &&
+                                (camera_->IsMcpOperationActive() ||
+                                 camera_->preview_mode() != DeskRobotCamera::PreviewMode::kOff);
+        context.tool_active =
+            now_us < ambient_tool_active_until_us_.load(std::memory_order_acquire);
+        context.manual_control_active =
+            now_us < ambient_manual_control_until_us_.load(std::memory_order_acquire);
+        context.motor_busy = motors_.IsActive() ||
+                             motor_activity_active_.load(std::memory_order_relaxed);
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        const auto cliff = cliff_sensor_.GetStatus();
+        context.floor_safe = !cliff.valid || !cliff.cliff_detected;
+#endif
+#ifdef MPU6050_I2C_ADDRESS
+        const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
+        context.gyro_busy = gyro.pending || gyro.active;
+#endif
+#ifdef INA219_I2C_ADDRESS
+        const auto battery = battery_controller_.GetStatus();
+        context.battery_valid = battery.valid;
+        context.battery_percent = battery.percent;
+        context.charging = battery.charging;
+#endif
+        context.light_level = environment_controller_.GetStatus().light_level;
+        context.gaze_personality = display_->GetAmbientGazePersonality();
+        ambient_behavior_.Tick(context, now_us);
     }
 
 #ifdef MPU6050_I2C_ADDRESS
@@ -408,15 +488,15 @@ private:
                 IsConversationActive());
 #endif
             const DeviceState state = Application::GetInstance().GetDeviceState();
-            proactive_events_.ObserveIdle(state == kDeviceStateIdle, now_us);
             proactive_events_.Tick(now_us, IsConversationActive());
+            TickAmbientBehavior(state, now_us);
             vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_SAMPLE_PERIOD_MS));
         }
     }
 
     void StartAuxiliarySensorTask() {
-        // This existing task also advances ProactiveEvents policy (network debounce, idle and
-        // pickup/put-down latches), so keep it alive even when an auxiliary sensor probe fails.
+        // This existing task also advances ProactiveEvents debounce and AmbientBehavior policy,
+        // so keep it alive even when an auxiliary sensor probe fails.
         if (xTaskCreate(AuxiliarySensorTask, "aux_sensors", 6144, this, 2,
                         &auxiliary_sensor_task_) != pdPASS) {
             auxiliary_sensor_task_ = nullptr;
@@ -1002,6 +1082,7 @@ private:
                 break;
         }
         if (event != ProactiveEvents::Event::kCount) {
+            NotifyAmbientInteraction(0, duration_ms);
             proactive_events_.Signal(event, esp_timer_get_time(), IsConversationActive(),
                                      duration_ms);
         }
@@ -1251,6 +1332,36 @@ private:
     void InitializeProactiveEvents() {
         if (!proactive_events_.Initialize(reaction_engine_)) {
             ESP_LOGE(TAG, "Failed to initialize proactive events");
+        }
+    }
+
+    void InitializeAmbientBehavior() {
+        const bool initialized = ambient_behavior_.Initialize(
+            reaction_engine_,
+            {
+                .reset_primitives =
+                    [this](uint32_t generation) {
+                        display_->ResetAmbientPrimitives(generation);
+                    },
+                .set_gaze =
+                    [this](uint32_t generation, int8_t x, int8_t y) {
+                        display_->SetAmbientGazeTarget(generation, x, y);
+                    },
+                .clear_gaze =
+                    [this](uint32_t generation) {
+                        display_->ClearAmbientGaze(generation);
+                    },
+                .trigger_mouth =
+                    [this](uint32_t generation) {
+                        display_->TriggerAmbientMouth(generation);
+                    },
+                .trigger_yawn =
+                    [this](uint32_t generation) {
+                        display_->TriggerAmbientYawn(generation);
+                    },
+            });
+        if (!initialized) {
+            ESP_LOGE(TAG, "Failed to initialize ambient behavior");
         }
     }
 
@@ -1614,6 +1725,7 @@ private:
     }
 
     bool ToggleLiveCamera() override {
+        NotifyAmbientInteraction(1000);
         if (live_camera_task_ == nullptr) {
             return false;
         }
@@ -1631,6 +1743,7 @@ private:
     }
 
     bool StartWebCameraStream() override {
+        NotifyAmbientInteraction(1000);
         return camera_ != nullptr &&
                Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
                camera_->StartWebLive();
@@ -1657,6 +1770,7 @@ private:
     }
 
     bool Move(MotorController::Direction direction, int duration_ms, MovePolicy policy) override {
+        NotifyAmbientInteraction(std::clamp(duration_ms, 50, 5000));
         const int safe_duration = std::clamp(duration_ms, 50, 5000);
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
         if (IsDirectionBlockedByCliff(direction)) {
@@ -1676,6 +1790,7 @@ private:
     }
 
     bool SetLiveDrive(int left_percent, int right_percent) override {
+        NotifyAmbientInteraction(kLiveDriveLeaseMs);
         const int safe_left = std::clamp(left_percent, -100, 100);
         const int safe_right = std::clamp(right_percent, -100, 100);
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -1722,6 +1837,7 @@ private:
     }
 
     bool Dance() override {
+        NotifyAmbientInteraction(5000);
         if (motors_.IsActive()) {
             return false;
         }
@@ -1730,6 +1846,7 @@ private:
     }
 
     bool TurnRelative(int degrees, std::string& message) override {
+        NotifyAmbientInteraction(5000);
 #ifdef MPU6050_I2C_ADDRESS
         if (reaction_motion_generation_.load(std::memory_order_acquire) != 0) {
             message = "Gyro turn unavailable while reaction motion is active";
@@ -1744,25 +1861,32 @@ private:
 
     bool React(const std::string& reaction, int duration_ms,
                const std::string& oled_text) override {
+        NotifyAmbientInteraction(duration_ms);
         const std::string normalized = NormalizeTemporaryText(oled_text, 48);
         return reaction_engine_.Start(reaction, duration_ms, normalized,
                                       ReactionEngine::Source::kExternal);
     }
 
-    bool CancelReaction() override { return reaction_engine_.Cancel(); }
+    bool CancelReaction() override {
+        NotifyAmbientInteraction();
+        return reaction_engine_.Cancel();
+    }
 
     void NotifyToolResult(bool success) override {
+        NotifyAmbientInteraction(0, 2000);
         proactive_events_.Signal(success ? ProactiveEvents::Event::kToolSuccess
                                          : ProactiveEvents::Event::kToolError,
                                  esp_timer_get_time(), IsConversationActive());
     }
 
     void OnUserAttention() override {
+        NotifyAmbientInteraction();
         proactive_events_.Signal(ProactiveEvents::Event::kUserAttention, esp_timer_get_time(),
                                  IsConversationActive());
     }
 
     bool ShowEmotion(const std::string& emotion, int duration_ms) override {
+        NotifyAmbientInteraction(duration_ms);
         if (!MochanDisplay::IsSupportedEmotion(emotion)) {
             return false;
         }
@@ -1770,6 +1894,7 @@ private:
     }
 
     bool ShowSecondaryText(const std::string& text, int duration_ms) override {
+        NotifyAmbientInteraction(duration_ms);
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         const std::string normalized = NormalizeTemporaryText(text, 48);
         if (!secondary_display_.IsAvailable() || normalized.empty()) {
@@ -1794,6 +1919,7 @@ private:
     }
 
     bool SetStatusLightEffect(const std::string& effect, int duration_ms) override {
+        NotifyAmbientInteraction(duration_ms);
         GpioLed::EffectOverride parsed = GpioLed::EffectOverride::kNone;
         if (!ParseStatusLightEffect(effect, parsed)) {
             return false;
@@ -2162,6 +2288,7 @@ public:
         InitializeLiveCamera();
         InitializeInteractionTimers();
         InitializeReactionEngine();
+        InitializeAmbientBehavior();
         InitializeProactiveEvents();
         RobotMcpTools::Register(*this);
 #ifdef MPU6050_I2C_ADDRESS

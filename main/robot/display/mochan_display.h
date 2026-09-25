@@ -1,5 +1,6 @@
 #pragma once
 
+#include "behavior/ambient_behavior_types.h"
 #include "display/lcd_display.h"
 
 #include <atomic>
@@ -11,6 +12,14 @@
 
 class MochanDisplay : public SpiLcdDisplay {
 public:
+    enum class AmbientActivity : uint8_t {
+        kIdle,
+        kListening,
+        kThinking,
+        kSpeaking,
+        kSuppressed,
+    };
+
     MochanDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
                   int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y,
                   bool swap_xy);
@@ -31,6 +40,13 @@ public:
     void RestoreActivityFace();
     bool SetPanelMirror(bool mirror_x, bool mirror_y);
     std::string GetCurrentEmotion() const;
+    AmbientActivity GetAmbientActivity() const;
+    AmbientGazePersonality GetAmbientGazePersonality() const;
+    void ResetAmbientPrimitives(uint32_t generation);
+    void SetAmbientGazeTarget(uint32_t generation, int8_t x, int8_t y);
+    void ClearAmbientGaze(uint32_t generation);
+    void TriggerAmbientMouth(uint32_t generation);
+    void TriggerAmbientYawn(uint32_t generation);
     static bool IsSupportedEmotion(const std::string& emotion);
 
     void ShowBootSplash();
@@ -128,13 +144,16 @@ private:
     void SetFaceState(FaceState state);
     void AdvanceEyeAnimation();
     void AdvanceFaceLayout(int64_t now_us);
-    void AdvanceSleepyYawn(const std::string& emotion);
-    void AdvanceIdleMouthAnimation(bool idle_eligible);
-    void CancelIdleScheduler(bool restart_session);
-    void UpdateEyes(uint8_t blink_amount, bool idle_eligible);
+    void ConsumeAmbientPrimitiveRequests(const std::string& emotion, bool idle_eligible);
+    void AdvanceYawnAnimation(const std::string& emotion);
+    void AdvanceMouthAnimation(bool idle_eligible);
+    void CancelAmbientAnimations();
+    void UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligible);
     void ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
                          uint8_t blink_amount);
     static bool AllowsNaturalBlink(FaceState state);
+    static bool AllowsAmbientGaze(FaceState state);
+    static AmbientGazePersonality ResolveAmbientGazePersonality(FaceState state);
     bool CanShowFullFace(const std::string& emotion) const;
     bool IsIdleEligible(const std::string& emotion) const;
     void SetFaceLayoutTarget(uint16_t target, int64_t now_us);
@@ -187,6 +206,9 @@ private:
     bool typing_finishing_ = false;
     FaceState face_state_ = FaceState::kIdle;
     FaceState activity_state_ = FaceState::kIdle;
+    std::atomic<AmbientActivity> ambient_activity_{AmbientActivity::kIdle};
+    std::atomic<AmbientGazePersonality> ambient_gaze_personality_{
+        AmbientGazePersonality::kNeutral};
     bool status_dot_busy_ = false;
     bool emotion_active_ = false;
     std::atomic_bool face_override_active_{false};
@@ -216,18 +238,27 @@ private:
     int64_t max_face_work_us_ = 0;
     int64_t max_text_work_us_ = 0;
     int64_t max_callback_duration_us_ = 0;
-    int64_t next_yawn_check_ms_ = 0;
-    int64_t last_yawn_ms_ = 0;
     int64_t yawn_started_ms_ = 0;
-    int64_t next_mouth_motion_ms_ = 0;
     int64_t mouth_motion_started_ms_ = 0;
     uint16_t yawn_amount_ = 0;
     int16_t mouth_motion_amount_ = 0;
-    uint16_t idle_motion_phase_ = 0;
-    int8_t idle_gaze_x_ = 0;
-    int8_t idle_gaze_y_ = 0;
+    int8_t ambient_gaze_x_ = 0;
+    int8_t ambient_gaze_y_ = 0;
+    int8_t ambient_gaze_target_x_ = 0;
+    int8_t ambient_gaze_target_y_ = 0;
     bool yawn_active_ = false;
     bool mouth_motion_active_ = false;
+    std::mutex ambient_primitive_mutex_;
+    uint32_t ambient_primitive_generation_ = 0;
+    uint32_t applied_ambient_primitive_generation_ = 0;
+    int8_t requested_ambient_gaze_x_ = 0;
+    int8_t requested_ambient_gaze_y_ = 0;
+    uint32_t ambient_gaze_request_generation_ = 0;
+    uint32_t ambient_mouth_request_generation_ = 0;
+    uint32_t ambient_yawn_request_generation_ = 0;
+    bool ambient_gaze_requested_ = false;
+    bool ambient_mouth_requested_ = false;
+    bool ambient_yawn_requested_ = false;
     bool response_box_requested_ = false;
     bool preview_show_pending_ = false;
     std::string exiting_mouth_emotion_;

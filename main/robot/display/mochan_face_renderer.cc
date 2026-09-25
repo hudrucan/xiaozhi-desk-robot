@@ -476,7 +476,52 @@ void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGe
     lv_obj_align(eye, LV_ALIGN_CENTER, geometry.x - inset_x / 2, geometry.y - inset_y / 2);
 }
 
-void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
+bool MochanDisplay::AllowsAmbientGaze(FaceState state) {
+    switch (state) {
+        case FaceState::kIdle:
+        case FaceState::kListening:
+        case FaceState::kThinking:
+        case FaceState::kSpeaking:
+        case FaceState::kHappy:
+        case FaceState::kCool:
+        case FaceState::kRelaxed:
+        case FaceState::kSleepy:
+        case FaceState::kConfused:
+        case FaceState::kSuspicious:
+            return true;
+        default:
+            return false;
+    }
+}
+
+AmbientGazePersonality MochanDisplay::ResolveAmbientGazePersonality(FaceState state) {
+    switch (state) {
+        case FaceState::kIdle:
+            return AmbientGazePersonality::kNeutral;
+        case FaceState::kListening:
+            return AmbientGazePersonality::kListening;
+        case FaceState::kThinking:
+            return AmbientGazePersonality::kThinking;
+        case FaceState::kSpeaking:
+            return AmbientGazePersonality::kSpeaking;
+        case FaceState::kHappy:
+            return AmbientGazePersonality::kHappy;
+        case FaceState::kCool:
+            return AmbientGazePersonality::kCool;
+        case FaceState::kRelaxed:
+            return AmbientGazePersonality::kRelaxed;
+        case FaceState::kSleepy:
+            return AmbientGazePersonality::kSleepy;
+        case FaceState::kConfused:
+            return AmbientGazePersonality::kConfused;
+        case FaceState::kSuspicious:
+            return AmbientGazePersonality::kSuspicious;
+        default:
+            return AmbientGazePersonality::kSuppressed;
+    }
+}
+
+void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligible) {
     if (left_eye_ == nullptr || right_eye_ == nullptr) {
         return;
     }
@@ -651,41 +696,24 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool idle_eligible) {
             break;
     }
 
-    int target_gaze_x = 0;
-    int target_gaze_y = 0;
-    if (idle_eligible) {
-        int gaze_amplitude = 8;
-        int gaze_down = 4;
-        if (face_state_ == FaceState::kHappy) {
-            gaze_amplitude = 6;
-            gaze_down = 3;
-        } else if (face_state_ == FaceState::kCool) {
-            gaze_amplitude = 7;
-            gaze_down = 3;
-        } else if (face_state_ == FaceState::kSleepy) {
-            gaze_amplitude = 4;
-            gaze_down = 2;
-        } else if (face_state_ == FaceState::kSurprised) {
-            gaze_amplitude = 5;
-            gaze_down = 1;
-        }
-        const int idle_phase = idle_motion_phase_ % 240;
-        if (idle_phase >= 45 && idle_phase < 85) {
-            target_gaze_x = -gaze_amplitude;
-            target_gaze_y = std::max(1, gaze_down - 1);
-        } else if (idle_phase >= 145 && idle_phase < 185) {
-            target_gaze_x = gaze_amplitude;
-            target_gaze_y = gaze_down;
-        }
+    const bool gaze_eligible = ambient_visual_eligible && AllowsAmbientGaze(face_state_);
+    if (!gaze_eligible) {
+        // Explicit expression geometry wins immediately; never render a residual ambient offset
+        // while an incompatible face is taking ownership of the eyes.
+        ambient_gaze_x_ = 0;
+        ambient_gaze_y_ = 0;
+    } else {
+        ambient_gaze_x_ +=
+            std::clamp(static_cast<int>(ambient_gaze_target_x_ - ambient_gaze_x_), -1, 1);
+        ambient_gaze_y_ +=
+            std::clamp(static_cast<int>(ambient_gaze_target_y_ - ambient_gaze_y_), -1, 1);
+        left.geometry.x += ambient_gaze_x_;
+        right.geometry.x += ambient_gaze_x_;
+        left.geometry.y += ambient_gaze_y_;
+        right.geometry.y += ambient_gaze_y_;
     }
-    idle_gaze_x_ += std::clamp(target_gaze_x - idle_gaze_x_, -1, 1);
-    idle_gaze_y_ += std::clamp(target_gaze_y - idle_gaze_y_, -1, 1);
-    left.geometry.x += idle_gaze_x_;
-    right.geometry.x += idle_gaze_x_;
-    left.geometry.y += idle_gaze_y_;
-    right.geometry.y += idle_gaze_y_;
 
-    if (idle_eligible) {
+    if (mouth_motion_amount_ != 0) {
         const int positive_mouth_motion = std::max<int>(0, mouth_motion_amount_);
         const int mouth_reaction = positive_mouth_motion * 2 / 256;
         if (face_state_ == FaceState::kSurprised) {

@@ -9,7 +9,7 @@
 
 class ReactionEngine {
 public:
-    enum class Source : uint8_t { kExternal, kCamera, kMpu, kProactive };
+    enum class Source : uint8_t { kExternal, kCamera, kMpu, kProactive, kAmbient };
     enum class MotionState : uint8_t {
         kNotRequested,
         kPending,

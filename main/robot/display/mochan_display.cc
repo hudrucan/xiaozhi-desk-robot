@@ -20,7 +20,7 @@ const lv_color_t kEyelidShadow = LV_COLOR_MAKE(0x72, 0x55, 0x2b);
 const lv_color_t kSpinnerTrack = LV_COLOR_MAKE(0x4b, 0x3b, 0x25);
 constexpr int kPreviewDurationMs = 5000;
 constexpr int kResponseTextScale = 210;
-// Keep full-face motion and idle cadence tunables together for hardware iteration.
+// Keep full-face animation curves together for hardware iteration. AmbientBehavior owns cadence.
 constexpr int kFaceAnimationPeriodMs = 33;
 constexpr int kFaceLayoutTransitionMs = 450;
 constexpr int kEmotionLayoutTransitionMs = 200;
@@ -28,15 +28,10 @@ constexpr int kResponseBoxFadeMs = 200;
 constexpr int kResponseFadeInStartFaceProgress = 144;
 constexpr int kFaceReturnStartResponseProgress = 96;
 constexpr int64_t kPerformanceLogIntervalUs = 5000000;
-constexpr int kIdleSleepyHoldMinMs = 14000;
-constexpr int kIdleSleepyHoldMaxMs = 24000;
-constexpr int kYawnCooldownMs = 180000;
 constexpr int kYawnOpenMs = 500;
 constexpr int kYawnHoldMs = 350;
 constexpr int kYawnCloseMs = 500;
 constexpr int kYawnSettleMs = 250;
-constexpr int kMouthMotionIntervalMinMs = 8000;
-constexpr int kMouthMotionIntervalMaxMs = 14000;
 constexpr int kMouthMotionOpenMs = 350;
 constexpr int kMouthMotionHoldMs = 400;
 constexpr int kMouthMotionCloseMs = 500;
@@ -106,6 +101,68 @@ MochanDisplay::~MochanDisplay() {
     if (mouth_raster_.pixels != nullptr) {
         lv_image_cache_drop(&mouth_raster_.descriptor);
         heap_caps_free(mouth_raster_.pixels);
+    }
+}
+
+MochanDisplay::AmbientActivity MochanDisplay::GetAmbientActivity() const {
+    return ambient_activity_.load(std::memory_order_acquire);
+}
+
+AmbientGazePersonality MochanDisplay::GetAmbientGazePersonality() const {
+    return ambient_gaze_personality_.load(std::memory_order_acquire);
+}
+
+void MochanDisplay::ResetAmbientPrimitives(uint32_t generation) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation < ambient_primitive_generation_) {
+        return;
+    }
+    ambient_primitive_generation_ = generation;
+    requested_ambient_gaze_x_ = 0;
+    requested_ambient_gaze_y_ = 0;
+    ambient_gaze_request_generation_ = 0;
+    ambient_mouth_request_generation_ = 0;
+    ambient_yawn_request_generation_ = 0;
+    ambient_gaze_requested_ = false;
+    ambient_mouth_requested_ = false;
+    ambient_yawn_requested_ = false;
+}
+
+void MochanDisplay::SetAmbientGazeTarget(uint32_t generation, int8_t x, int8_t y) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation != ambient_primitive_generation_) {
+        return;
+    }
+    requested_ambient_gaze_x_ = x;
+    requested_ambient_gaze_y_ = y;
+    ambient_gaze_request_generation_ = generation;
+    ambient_gaze_requested_ = true;
+}
+
+void MochanDisplay::ClearAmbientGaze(uint32_t generation) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation != ambient_primitive_generation_) {
+        return;
+    }
+    requested_ambient_gaze_x_ = 0;
+    requested_ambient_gaze_y_ = 0;
+    ambient_gaze_request_generation_ = generation;
+    ambient_gaze_requested_ = false;
+}
+
+void MochanDisplay::TriggerAmbientMouth(uint32_t generation) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation == ambient_primitive_generation_) {
+        ambient_mouth_request_generation_ = generation;
+        ambient_mouth_requested_ = true;
+    }
+}
+
+void MochanDisplay::TriggerAmbientYawn(uint32_t generation) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation == ambient_primitive_generation_) {
+        ambient_yawn_request_generation_ = generation;
+        ambient_yawn_requested_ = true;
     }
 }
 
@@ -296,6 +353,8 @@ void MochanDisplay::SetupUI() {
 }
 
 void MochanDisplay::SetFaceState(FaceState state) {
+    ambient_gaze_personality_.store(ResolveAmbientGazePersonality(state),
+                                    std::memory_order_release);
     if (face_state_ == state) {
         UpdateStatusDot();
         return;
@@ -336,7 +395,7 @@ void MochanDisplay::UpdateStatusDot() {
 
 void MochanDisplay::ShowResponseBox() {
     FreezeMouthForExit();
-    CancelIdleScheduler(true);
+    CancelAmbientAnimations();
     response_box_requested_ = true;
     const int64_t now_us = esp_timer_get_time();
     SetFaceLayoutTarget(0, now_us);
@@ -479,44 +538,74 @@ void MochanDisplay::AdvanceFaceLayout(int64_t now_us) {
     face_layout_offset_y_ = face_layout_full_offset_y_ * static_cast<int>(eased) / 256;
 }
 
-void MochanDisplay::CancelIdleScheduler(bool restart_session) {
+void MochanDisplay::CancelAmbientAnimations() {
     yawn_active_ = false;
     yawn_amount_ = 0;
     yawn_started_ms_ = 0;
     mouth_motion_active_ = false;
     mouth_motion_amount_ = 0;
     mouth_motion_started_ms_ = 0;
-    next_mouth_motion_ms_ = 0;
-    next_yawn_check_ms_ = 0;
-    if (restart_session) {
-        idle_motion_phase_ = 0;
+    ambient_gaze_target_x_ = 0;
+    ambient_gaze_target_y_ = 0;
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    requested_ambient_gaze_x_ = 0;
+    requested_ambient_gaze_y_ = 0;
+    ambient_gaze_request_generation_ = 0;
+    ambient_mouth_request_generation_ = 0;
+    ambient_yawn_request_generation_ = 0;
+    ambient_gaze_requested_ = false;
+    ambient_mouth_requested_ = false;
+    ambient_yawn_requested_ = false;
+}
+
+void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
+                                                    bool idle_eligible) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (applied_ambient_primitive_generation_ != ambient_primitive_generation_) {
+        applied_ambient_primitive_generation_ = ambient_primitive_generation_;
+        yawn_active_ = false;
+        yawn_amount_ = 0;
+        yawn_started_ms_ = 0;
+        mouth_motion_active_ = false;
+        mouth_motion_amount_ = 0;
+        mouth_motion_started_ms_ = 0;
+    }
+    const bool gaze_request_current =
+        ambient_gaze_request_generation_ == ambient_primitive_generation_;
+    ambient_gaze_target_x_ =
+        ambient_gaze_requested_ && gaze_request_current ? requested_ambient_gaze_x_ : 0;
+    ambient_gaze_target_y_ =
+        ambient_gaze_requested_ && gaze_request_current ? requested_ambient_gaze_y_ : 0;
+    if (ambient_mouth_requested_ &&
+        ambient_mouth_request_generation_ == ambient_primitive_generation_ &&
+        idle_eligible && !yawn_active_) {
+        ambient_mouth_requested_ = false;
+        ambient_mouth_request_generation_ = 0;
+        mouth_motion_active_ = true;
+        mouth_motion_started_ms_ = esp_timer_get_time() / 1000;
+    }
+    if (ambient_yawn_requested_ &&
+        ambient_yawn_request_generation_ == ambient_primitive_generation_ &&
+        emotion == "sleepy" && idle_eligible) {
+        ambient_yawn_requested_ = false;
+        ambient_yawn_request_generation_ = 0;
+        mouth_motion_active_ = false;
+        mouth_motion_amount_ = 0;
+        yawn_active_ = true;
+        yawn_started_ms_ = esp_timer_get_time() / 1000;
     }
 }
 
-void MochanDisplay::AdvanceIdleMouthAnimation(bool idle_eligible) {
+void MochanDisplay::AdvanceMouthAnimation(bool idle_eligible) {
     const int64_t now_ms = esp_timer_get_time() / 1000;
     if (!idle_eligible || yawn_active_) {
         mouth_motion_active_ = false;
         mouth_motion_amount_ = 0;
         mouth_motion_started_ms_ = 0;
-        if (!idle_eligible) {
-            next_mouth_motion_ms_ = 0;
-        }
         return;
     }
-
     if (!mouth_motion_active_) {
-        if (next_mouth_motion_ms_ == 0) {
-            const int interval =
-                kMouthMotionIntervalMinMs +
-                esp_random() % (kMouthMotionIntervalMaxMs - kMouthMotionIntervalMinMs + 1);
-            next_mouth_motion_ms_ = now_ms + interval;
-        }
-        if (now_ms < next_mouth_motion_ms_) {
-            return;
-        }
-        mouth_motion_active_ = true;
-        mouth_motion_started_ms_ = now_ms;
+        return;
     }
 
     const int64_t elapsed = now_ms - mouth_motion_started_ms_;
@@ -542,14 +631,10 @@ void MochanDisplay::AdvanceIdleMouthAnimation(bool idle_eligible) {
         mouth_motion_active_ = false;
         mouth_motion_amount_ = 0;
         mouth_motion_started_ms_ = 0;
-        const int interval =
-            kMouthMotionIntervalMinMs +
-            esp_random() % (kMouthMotionIntervalMaxMs - kMouthMotionIntervalMinMs + 1);
-        next_mouth_motion_ms_ = now_ms + interval;
     }
 }
 
-void MochanDisplay::AdvanceSleepyYawn(const std::string& emotion) {
+void MochanDisplay::AdvanceYawnAnimation(const std::string& emotion) {
     const int64_t now_ms = esp_timer_get_time() / 1000;
     const bool eligible = emotion == "sleepy" && CanShowFullFace(emotion) &&
                           response_box_progress_ == 0 && splash_ == nullptr &&
@@ -561,7 +646,6 @@ void MochanDisplay::AdvanceSleepyYawn(const std::string& emotion) {
         yawn_active_ = false;
         yawn_amount_ = 0;
         yawn_started_ms_ = 0;
-        next_yawn_check_ms_ = 0;
         return;
     }
 
@@ -579,27 +663,8 @@ void MochanDisplay::AdvanceSleepyYawn(const std::string& emotion) {
         } else {
             yawn_active_ = false;
             yawn_amount_ = 0;
-            next_yawn_check_ms_ = now_ms + kIdleSleepyHoldMinMs;
         }
-        return;
     }
-
-    if (next_yawn_check_ms_ == 0) {
-        next_yawn_check_ms_ = now_ms;
-    }
-    if (now_ms < next_yawn_check_ms_) {
-        return;
-    }
-
-    const bool yawn_ready =
-        last_yawn_ms_ == 0 || now_ms - last_yawn_ms_ >= kYawnCooldownMs;
-    if (yawn_ready && esp_random() % 5 == 0) {
-        yawn_active_ = true;
-        yawn_started_ms_ = now_ms;
-        last_yawn_ms_ = now_ms;
-    }
-    const int hold_range = kIdleSleepyHoldMaxMs - kIdleSleepyHoldMinMs + 1;
-    next_yawn_check_ms_ = now_ms + kIdleSleepyHoldMinMs + esp_random() % hold_range;
 }
 
 void MochanDisplay::AdvanceEyeAnimation() {
@@ -618,12 +683,10 @@ void MochanDisplay::AdvanceEyeAnimation() {
         emotion = current_emotion_;
     }
     ++animation_phase_;
-    AdvanceSleepyYawn(emotion);
     const bool idle_eligible = IsIdleEligible(emotion);
-    if (idle_eligible) {
-        ++idle_motion_phase_;
-    }
-    AdvanceIdleMouthAnimation(idle_eligible);
+    ConsumeAmbientPrimitiveRequests(emotion, idle_eligible);
+    AdvanceYawnAnimation(emotion);
+    AdvanceMouthAnimation(idle_eligible);
     UpdateFaceLayoutTarget(emotion, callback_started_us);
     AdvanceFaceLayout(callback_started_us);
     AdvanceResponseBoxTransition(callback_started_us);
@@ -650,7 +713,12 @@ void MochanDisplay::AdvanceEyeAnimation() {
         blink_amount = std::max<uint8_t>(blink_amount, yawn_amount_ * 72 / 256);
     }
     const int64_t face_work_started_us = esp_timer_get_time();
-    UpdateEyes(blink_amount, idle_eligible);
+    const bool ambient_visual_eligible = response_box_progress_ == 0 && splash_ == nullptr &&
+                                         (camera_image_ == nullptr ||
+                                          lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN)) &&
+                                         (notification_ == nullptr ||
+                                          lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN));
+    UpdateEyes(blink_amount, ambient_visual_eligible);
     UpdateMouth(blink_amount, emotion);
     max_face_work_us_ = std::max(max_face_work_us_, esp_timer_get_time() - face_work_started_us);
     // Keep typewriter work on the face frame clock. Time-based glyph credit

@@ -6,7 +6,6 @@
 
 namespace {
 
-constexpr int kPriorityAmbient = 20;
 constexpr int kPriorityInfo = 40;
 constexpr int kPriorityInteraction = 60;
 constexpr int kPrioritySystemHigh = 80;
@@ -33,7 +32,6 @@ constexpr std::array<Definition, static_cast<size_t>(Event::kCount)> kDefinition
     {"thinking", "", CAMERA_REACTION_PENDING_MS, kPriorityInteraction, 0, false},
     {"success", "", CAMERA_REACTION_SUCCESS_MS, kPriorityInteraction, 0, false},
     {"confused", "", CAMERA_REACTION_FAILURE_MS, kPrioritySystemHigh, 0, false},
-    {"sleepy", "", 5000, kPriorityAmbient, PROACTIVE_IDLE_COOLDOWN_MS, true},
     {"attention", "", 1800, kPriorityInteraction, PROACTIVE_USER_ATTENTION_COOLDOWN_MS, false},
     {"success", "", 1500, kPriorityInfo, PROACTIVE_TOOL_RESULT_COOLDOWN_MS, true},
     {"error", "", 1800, kPrioritySystemHigh, PROACTIVE_TOOL_RESULT_COOLDOWN_MS, false},
@@ -285,17 +283,6 @@ void ProactiveEvents::ObserveFloor(bool available, bool floor_safe, bool floor_u
     }
 }
 
-void ProactiveEvents::ObserveIdle(bool idle, int64_t now_us) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    idle_observed_ = idle;
-    if (!idle) {
-        idle_started_us_ = 0;
-        idle_event_fired_ = false;
-    } else if (idle_started_us_ == 0) {
-        idle_started_us_ = now_us;
-    }
-}
-
 void ProactiveEvents::Tick(int64_t now_us, bool conversation_active) {
     std::lock_guard<std::mutex> lock(mutex_);
     RefreshOwnedReactionLocked();
@@ -315,11 +302,5 @@ void ProactiveEvents::Tick(int64_t now_us, bool conversation_active) {
         network_lost_latched_ = false;
         network_connected_observed_ = false;
         network_candidate_us_ = 0;
-    }
-
-    if (idle_observed_ && !idle_event_fired_ && idle_started_us_ != 0 &&
-        now_us - idle_started_us_ >= MillisecondsToMicroseconds(PROACTIVE_IDLE_LONG_MS)) {
-        TriggerLocked(Event::kIdleLong, now_us, conversation_active);
-        idle_event_fired_ = true;
     }
 }

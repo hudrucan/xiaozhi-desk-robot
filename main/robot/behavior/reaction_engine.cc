@@ -98,7 +98,14 @@ bool ReactionEngine::Start(const std::string& name, int duration_ms,
         if (!initialized_) {
             return false;
         }
-        if (active_ && source != source_ && plan.priority < plan_.priority) {
+        if (active_ && source == Source::kAmbient && source_ != Source::kAmbient) {
+            return false;
+        }
+        const bool ambient_priority_downgrade =
+            source == Source::kAmbient && source_ == Source::kAmbient &&
+            plan.priority < plan_.priority;
+        if (active_ && plan.priority < plan_.priority &&
+            (source != source_ || ambient_priority_downgrade)) {
             return false;
         }
         const bool previous_active = active_;
