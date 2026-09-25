@@ -1110,7 +1110,7 @@ private:
     }
 
     void StartReactionMotion(const ReactionEngine::Plan& plan, uint32_t generation) {
-        if (plan.motion_emotion.empty()) {
+        if (plan.motion_profile.empty()) {
             reaction_engine_.SetMotionState(generation,
                                             ReactionEngine::MotionState::kNotRequested);
             return;
@@ -1135,7 +1135,7 @@ private:
             return;
         }
 #endif
-        auto movements = expressive_motion_planner_.BuildEmotionMovement(plan.motion_emotion);
+        auto movements = expressive_motion_planner_.BuildReactionMovement(plan.motion_profile);
         if (movements.empty() || !motors_.PlaySequence(movements)) {
             reaction_engine_.SetMotionState(generation,
                                             ReactionEngine::MotionState::kRejected);

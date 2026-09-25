@@ -10,23 +10,23 @@ struct ReactionDefinition {
     const char* name;
     const char* emotion;
     const char* light_effect;
-    const char* motion_emotion;
+    const char* motion_profile;
     int priority;
 };
 
 constexpr std::array<ReactionDefinition, 12> kDefinitions = {{
     {"acknowledge", "happy", "steady", "", 40},
-    {"success", "happy", "steady", "happy", 60},
-    {"celebrate", "laughing", "blink", "laughing", 70},
+    {"success", "happy", "steady", "success", 60},
+    {"celebrate", "laughing", "blink", "celebrate", 70},
     {"thinking", "thinking", "breathe", "", 30},
-    {"curious", "suspicious", "breathe", "thinking", 35},
+    {"curious", "suspicious", "breathe", "curious", 35},
     {"confused", "confused", "blink", "confused", 45},
     {"warning", "shocked", "blink", "", 90},
     {"error", "angry", "blink", "", 100},
-    {"startled", "surprised", "blink", "surprised", 80},
+    {"startled", "surprised", "blink", "startled", 80},
     {"sleepy", "sleepy", "breathe", "", 20},
-    {"nope", "shake", "blink", "shake", 50},
-    {"attention", "surprised", "steady", "surprised", 55},
+    {"nope", "shake", "blink", "nope", 50},
+    {"attention", "winking", "steady", "attention", 55},
 }};
 
 }  // namespace
@@ -62,7 +62,7 @@ bool ReactionEngine::ResolvePlan(const std::string& name, Plan& plan) {
                 .name = definition.name,
                 .emotion = definition.emotion,
                 .light_effect = definition.light_effect,
-                .motion_emotion = definition.motion_emotion,
+                .motion_profile = definition.motion_profile,
                 .priority = definition.priority,
             };
             return true;
@@ -110,7 +110,7 @@ bool ReactionEngine::Start(const std::string& name, int duration_ms,
         plan_ = plan;
         source_ = source;
         expires_at_us_ = esp_timer_get_time() + safe_duration * 1000LL;
-        motion_state_ = plan.motion_emotion.empty() ? MotionState::kNotRequested
+        motion_state_ = plan.motion_profile.empty() ? MotionState::kNotRequested
                                                     : MotionState::kPending;
         oled_active_ = !oled_text.empty();
         callbacks = callbacks_;

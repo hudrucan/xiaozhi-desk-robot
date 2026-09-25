@@ -27,7 +27,7 @@ public:
         std::string name;
         std::string emotion;
         std::string light_effect;
-        std::string motion_emotion;
+        std::string motion_profile;
         int priority = 0;
     };
 

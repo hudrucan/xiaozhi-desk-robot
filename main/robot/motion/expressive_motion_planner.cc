@@ -4,6 +4,44 @@
 
 #include <cstddef>
 
+std::vector<MotorController::Movement> ExpressiveMotionPlanner::BuildReactionMovement(
+    const std::string& profile) const {
+    using Direction = MotorController::Direction;
+    const bool mirror = (esp_random() & 1U) != 0;
+    const Direction left = mirror ? Direction::kRight : Direction::kLeft;
+    const Direction right = mirror ? Direction::kLeft : Direction::kRight;
+
+    if (profile == "success") {
+        return {{Direction::kForward, 80, 60}, {Direction::kBackward, 80, 55}};
+    }
+    if (profile == "celebrate") {
+        return {{left, 100, 90},
+                {right, 180, 90},
+                {left, 180, 90},
+                {right, 180, 90},
+                {left, 100, 85}};
+    }
+    if (profile == "curious") {
+        return {{left, 110, 60}};
+    }
+    if (profile == "confused") {
+        return {{left, 80, 65}, {right, 150, 65}, {left, 70, 60}};
+    }
+    if (profile == "startled") {
+        return {{Direction::kBackward, 70, 90}};
+    }
+    if (profile == "nope") {
+        return {{left, 100, 85},
+                {right, 160, 85},
+                {left, 160, 85},
+                {right, 100, 80}};
+    }
+    if (profile == "attention") {
+        return {{left, 70, 60}, {right, 110, 60}, {left, 70, 55}};
+    }
+    return {};
+}
+
 std::vector<MotorController::Movement> ExpressiveMotionPlanner::BuildEmotionMovement(
     const std::string& emotion) {
     enum Group : size_t {
