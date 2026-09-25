@@ -1,372 +1,203 @@
-# Xiaozhi Desk Robot
+<div align="center">
 
-A single-target ESP32-S3 desk robot firmware derived from
-[`78/xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32).
+# 🤖 Xiaozhi Desk Robot
 
-This repository is no longer a generic multi-board firmware tree. It is focused on one
-physical robot: an ESP32-S3 camera board with voice interaction, animated display,
-camera vision, tracked motion, cliff/lift sensing, battery telemetry, MCP device tools,
-and a local web control panel.
+**Purpose-built ESP32-S3 firmware for one expressive, camera-equipped desktop robot.**
 
-## What this build does
+[![Firmware](https://img.shields.io/badge/firmware-v2.5.0-7c3aed?style=flat-square)](CMakeLists.txt)
+[![Target](https://img.shields.io/badge/target-ESP32--S3-ef4444?style=flat-square&logo=espressif&logoColor=white)](main/CMakeLists.txt)
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-6.1-2563eb?style=flat-square&logo=espressif&logoColor=white)](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s3/)
+[![License](https://img.shields.io/badge/license-MIT-16a34a?style=flat-square)](LICENSE)
 
-- Voice assistant using the Xiaozhi protocol stack
-- MQTT + UDP and WebSocket protocol implementations
-- Opus audio streaming, ASR/LLM/TTS flow, wake-word support
-- DVP camera capture and MCP camera vision
-- 240×240 ST7789 main display with the custom Mochan robot face
-- 128×32 SSD1306 secondary OLED for robot telemetry/status
-- Dual N20 motor control through an L298N Mini driver
-- MPU6050 motion/gesture sensing and gyro-assisted relative turns
-- Downward-facing VL53L0X floor/cliff detection
-- INA219 current/power telemetry and persistent battery SoC estimation
-- AHT20 temperature/humidity, BMP280 pressure and BH1750 illuminance sensing
-- Local Web Control UI for status, motion, camera, display, audio and diagnostics
-- Typed Web Chat using the same Xiaozhi session, MCP tools and TTS output
-- Device-side MCP tools for robot status, motion, sensors, camera and control
-- Persistent robot settings through NVS
+[Web Control](#web-control) · [Hardware](#hardware) · [Build](#build) · [Architecture](#architecture) · [Companion server](#companion-server)
+
+</div>
+
+---
+
+This is a focused fork of [`78/xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32), trimmed to a single physical target:
+
+```text
+esp32-s3-n16r8-cam · ESP32-S3 · 16 MB flash · 8 MB octal PSRAM
+```
+
+It keeps Xiaozhi's reusable application, audio, protocol and MCP foundations, then adds the hardware control, safety, face, sensors and local dashboard required by the Desk Robot. It is **not** the upstream multi-board firmware tree.
+
+## Highlights
+
+| | Capability | What is included |
+| --- | --- | --- |
+| 🗣️ | Conversation | Xiaozhi voice sessions, wake word, Opus audio, typed chat and streamed notification playback |
+| 🧠 | Speech recognition | Xiaozhi ASR or optional Gemini ASR with prewarm, VAD and turn recovery |
+| 👀 | Character | Animated Mochan face, emotions, gaze, Vietnamese glyph fallback and status overlays |
+| 🎥 | Vision | DVP camera, safe browser streaming, persistent capture profiles and MCP vision |
+| 🛞 | Motion | Differential tracked drive, live joystick, expressive movement and gyro-assisted turns |
+| 🛡️ | Safety | Downward cliff sensing, movement interlock and bounded automatic retreat |
+| 🌡️ | Telemetry | Battery/SoC, motion, temperature, humidity, pressure and ambient light |
+| 🧰 | Control | Responsive local dashboard, server/ASR setup, device health, logs and MCP tools |
+
+## Current scope
+
+| Item | Status |
+| --- | --- |
+| Hardware target | `esp32-s3-n16r8-cam` only |
+| Preferred SDK | ESP-IDF `v6.1` |
+| Firmware version | `2.5.0` |
+| Languages | `en-US`, `vi-VN` |
+| Protocols | MQTT + UDP (production path), WebSocket (retained extension path) |
+| Local dashboard | Web Control on port `8080` |
+| Device tools | Generic MCP framework plus robot motion, face, camera, display and sensor tools |
+| Firmware OTA | Official firmware download/auto-upgrade intentionally absent |
+| Bootstrap | Activation, server configuration, server time and running-image validation retained |
 
 ## Hardware
 
-Current physical target:
-
-| Part | Current role |
+| Component | Role |
 | --- | --- |
 | ESP32-S3-WROOM N16R8 camera board | Main controller |
-| DVP camera | Vision / MCP camera input |
-| INMP441 | I2S microphone |
-| MAX98357A-compatible I2S amplifier | Speaker output |
-| ST7789 1.5" 240×240 | Main robot-face display |
-| SSD1306 0.91" 128×32 | Secondary telemetry OLED |
+| DVP camera | Vision and browser preview |
+| INMP441 + MAX98357A-compatible amplifier | I2S microphone and speaker |
+| 1.5-inch ST7789, 240×240 | Mochan face |
+| 0.91-inch SSD1306, 128×32 | Configurable telemetry display |
 | L298N Mini + 2× N20 motors | Tracked drive |
-| VL53L0X | Downward floor / cliff sensing |
-| MPU6050 | Motion, gestures and yaw feedback |
-| INA219 | Battery voltage/current/power telemetry |
-| AHT20 | Ambient temperature and relative humidity |
-| BMP280 | Barometric pressure |
-| BH1750 | Ambient illuminance and optional automatic screen brightness |
-| TTP223 | Touch / boot control |
-| Edison/status LED | Robot status lighting |
+| VL53L0X | Downward floor/cliff sensing |
+| MPU6050 | Gesture, motion and yaw feedback |
+| INA219 | Voltage, current, power and battery SoC |
+| AHT20 · BMP280 · BH1750 | Climate, pressure and ambient light |
+| TTP223 + status LED | Touch input and robot state lighting |
 
-### Important buses and GPIOs
+The complete pin map lives in [`main/robot/config/hardware_config.h`](main/robot/config/hardware_config.h); calibrated behavior belongs in [`main/robot/config/tuning.h`](main/robot/config/tuning.h).
 
-The authoritative pin map is
-[`main/robot/config/hardware_config.h`](main/robot/config/hardware_config.h).
-Behavior thresholds and calibrated runtime values live in
-[`main/robot/config/tuning.h`](main/robot/config/tuning.h).
+### Shared buses
 
-| Function | GPIO |
-| --- | --- |
-| INMP441 WS / BCLK / DATA | 1 / 2 / 42 |
-| Speaker LRCK / BCLK / DATA | 41 / 40 / 39 |
-| Touch / boot input | 0 |
-| Status LED | 48 |
-| Main display SCLK / MOSI / RST / DC / BL | 19 / 20 / 21 / 47 / 45 |
-| Left motor IN1 / IN2 | 43 / 44 |
-| Right motor IN1 / IN2 | 3 / 46 |
-| Primary I2C0 SDA / SCL (camera SCCB + VL53L0X + environment sensors) | 4 / 5 |
-| Auxiliary I2C1 SDA / SCL (SSD1306 + INA219 + MPU6050) | 38 / 14 |
+```text
+GPIO 4/5   · I2C0 · camera SCCB + VL53L0X + AHT20 + BMP280 + BH1750
+GPIO 38/14 · I2C1 · SSD1306 + INA219 + MPU6050
+```
 
-Two bus-sharing details are intentional:
+These assignments are intentional. GPIO availability is tight, the camera reuses the primary bus owner, and auxiliary devices are initialized later and serially to avoid boot-time contention. The VL53L0X points **downward** and is a cliff/lift sensor—not a front obstacle sensor.
 
-- The camera SCCB, VL53L0X, AHT20, BMP280 and BH1750 reuse one primary I2C0 owner on GPIO4/5.
-- SSD1306, INA219 and MPU6050 share the auxiliary I2C1 bus on GPIO38/14.
+## Web Control
 
-Do not move these devices casually: GPIO availability on this board is tight and the
-camera/PSRAM configuration already consumes most usable pins.
+Open `http://<robot-ip>:8080` after the robot joins Wi-Fi.
 
-Environment sensor addresses are fixed to the known module variants; firmware does not scan the
-whole bus:
+The self-contained dashboard is served directly by the firmware and provides:
 
-| Device | Address |
-| --- | --- |
-| VL53L0X | `0x29` |
-| AHT20 | `0x38` |
-| BMP280 | `0x76`, fallback `0x77` |
-| BH1750 | `0x23`, fallback `0x5C` |
+- live device health, power, environment, motion and safety telemetry;
+- button drive, live joystick and gyro-assisted relative turns;
+- typed/speech chat, Xiaozhi or Gemini ASR selection and persistent microphone mute;
+- camera snapshots, safe live preview and persistent image/capture tuning;
+- Mochan emotion preview, display brightness and configurable secondary OLED layouts;
+- Xiaozhi bootstrap/server endpoint configuration, audio controls and live logs.
 
-Environment devices are best-effort clients. The robot boots with any combination from zero to
-three sensors, isolates repeated per-device failures, and retries a missing device every 30
-seconds. It never resets the shared bus in response to an environment-sensor failure. Software can
-recover from a NACK, open wire, lost module power or reconnect; it cannot isolate a hard short on
-SDA/SCL, which may also disrupt the camera and cliff sensor.
+Typed messages use the existing Xiaozhi session, personality, MCP tools and TTS—there is no second chatbot. The browser accepts up to 512 Unicode codepoints; long input is bridged through the AI-visible `self.web_chat.consume_pending` tool.
 
-Before final assembly, measure the effective SDA/SCL pull-up resistance with the robot unpowered.
-Mount AHT20/BMP280 near an outside edge with airflow and away from the ESP32, camera, motor driver,
-regulators, battery, motors and display backlight. Mount BH1750 facing upward or forward/upward and
-shield it from direct TFT/status-LED light and chassis shadow.
+Web source is editable under [`main/robot/web/ui/`](main/robot/web/ui/). CMake assembles it into a generated build-tree header, so generated output must not be edited.
 
 ## Architecture
 
-The project keeps the reusable Xiaozhi protocol/audio/application layers, but the board
-matrix and unrelated hardware implementations have been removed.
-
 ```text
-main/
-├── application.*                  High-level application/session lifecycle
-├── device_state_machine.*         Runtime state transitions
-├── protocols/                     MQTT+UDP and WebSocket
-├── audio/                         Capture, playback, Opus, wake word and ASR turn control
-├── notify/                        Streamed notification playback and lifecycle control
-├── display/                       Reusable display infrastructure
-├── mcp_server.*                   Device-side MCP framework
-├── platform/                      Board, Wi-Fi and hardware adapters
-└── robot/                         Desk-robot implementation, adapters, UI, config and tuning
+                         ┌─────────────────────────┐
+ Voice / typed text ───▶ │ Application + state     │
+                         │ machine                 │
+                         └────────────┬────────────┘
+                                      │
+                 ┌────────────────────┼────────────────────┐
+                 ▼                    ▼                    ▼
+        Audio / ASR / TTS       Protocol + MCP       Robot controller
+        wake word · Gemini      MQTT+UDP · WS        typed status/actions
+                 │                    │                    │
+                 └────────────────────┼────────────────────┘
+                                      ▼
+                       face · camera · motors · sensors
+                              Web Control · OLED
 ```
 
-The robot-specific subsystem under `main/robot/` owns the motor
-controller, Mochan display, secondary OLED, typed MCP/Web adapters, editable Web UI,
-battery monitor/SoC, MPU6050 integration and other desk-robot behavior.
+Important ownership boundaries:
 
-`main/application.*` remains the central event/session integrator. The stateful Typed Web Chat
-lifecycle and its MCP bridge are isolated in `main/chat/text_chat_controller.*`.
-Gemini provider selection, prewarm, VAD, recovery and audio-route switching are isolated in
-`main/audio/gemini_asr_turn_controller.*`; `GeminiTranscribeClient` remains the transport client.
-Streamed notification playback, subtitle progress and application-state cleanup are isolated in
-`main/notify/notification_controller.*`; `NotifyPlayer` remains the HTTP/Ogg playback worker.
-
-The Mochan face keeps one public `MochanDisplay` API while its implementation is split into
-core animation/lifecycle, eye-and-mouth raster rendering, and overlay/status presentation.
-The secondary OLED likewise keeps one `SecondaryOled` API. Low-level glyph and fitted-text raster
-primitives live in `secondary_oled_renderer.cc`, the original five widget renderers live in
-`secondary_oled_widgets.cc`, and environment widgets live in
-`secondary_oled_environment_widgets.cc`.
-
-## Typed Web Chat
-
-The local Web Control page can submit text directly into the **existing Xiaozhi
-conversation**. It does not create a second chatbot session and does not bypass MCP or
-TTS.
-
-Current flow:
-
-```text
-short typed message (<= 12 Unicode codepoints)
-    -> native detect/text path
-
-long typed message
-    -> short trigger: "web_chat"
-    -> self.web_chat.consume_pending
-    -> original full user text
-    -> existing LLM / personality / context
-    -> normal MCP tools
-    -> normal TTS
-    -> robot speaker
-```
-
-The Web UI accepts up to **512 Unicode codepoints**.
-
-The controller preserves the existing session, timeout/completion handling and listening
-recovery.
-
-When typed chat starts from Idle, the firmware sends one valid Opus silence frame first
-to establish the MQTT gateway's UDP return path. This prevents the first TTS response
-from being lost while avoiding microphone audio leakage into the typed turn.
-
-## Local Web Control
-
-The desk robot exposes a local control UI on port `8080`.
-
-It provides:
-
-- robot/device status
-- motor drive and relative turns
-- cliff threshold and safety status
-- battery/current/power telemetry
-- independent AHT20, BMP280 and BH1750 environment status
-- capacity-test / SoC status
-- MPU6050 state
-- main-display, automatic-brightness and secondary-OLED controls
-- camera snapshot / lightweight browser preview
-- emotion preview
-- speaker, microphone and status-light controls
-- typed conversation
-- live system log
-
-Web Control is split by responsibility:
-
-```text
-main/robot/robot_web_control_server.*       HTTP routes, logs, chat/ASR, snapshots
-main/robot/web/robot_web_adapter.*          Robot actions and status JSON
-main/robot/web/ui/index.html                Editable markup
-main/robot/web/ui/style.css                 Editable styling
-main/robot/web/ui/js/                       Focused browser behavior modules
-main/robot/web/ui/app.js                    Browser event wiring
-main/robot/web/robot_web_control_page.h.in  Build-tree generated-page template
-```
-
-CMake assembles the UI source files into a self-contained generated header in the
-build tree. Edit the HTML/CSS/JavaScript sources, not generated build output. The firmware
-continues to serve the complete page from `/`; no separate asset routes or frontend
-toolchain are required.
-
-Environment telemetry is polled independently through `/api/status/environment`. One missing
-sensor does not mark the robot offline or hide healthy measurements from the other sensors. The
-secondary OLED exposes eight configurable widgets; persisted five-widget layouts are migrated
-from schema v1 to v2 while preserving their existing order and settings.
-
-Automatic main-display brightness is disabled by default. When enabled, it maps filtered BH1750
-lux into persisted minimum/maximum brightness bounds, with hysteresis and a minimum update
-interval to avoid visible flicker. A missing or failed BH1750 holds the current brightness. A
-manual brightness change disables automatic mode and remains the boot fallback.
-
-## MCP
-
-The generic device-side MCP framework is intentionally retained as an extension point.
-
-Robot-specific MCP tools expose hardware state and actions such as camera input, motion,
-distance, battery/status and motor-related behavior.
-
-`self.environment.get` reports the cached AHT20, BMP280 and BH1750 state, raw valid readings,
-light/comfort classifications and pressure trend. It performs no I2C transaction in the MCP
-handler, and reports each sensor independently so partial hardware failure remains visible.
-
-Their robot-facing registration and serialization live in:
-
-```text
-main/robot/mcp/robot_mcp_tools.*
-```
-
-The generic schema, dispatch and tool framework remains in `main/mcp_server.*`.
-
-Typed Web Chat also uses the AI-visible tool:
-
-```text
-self.web_chat.consume_pending
-```
-
-Do not remove or hide this tool from the model: it is the long-text bridge for the
-official MQTT backend.
+- [`main/application.*`](main/application.cc) owns session and application lifecycle.
+- [`main/chat/text_chat_controller.*`](main/chat/text_chat_controller.cc) owns typed Web Chat.
+- [`main/audio/`](main/audio/) owns capture, playback, wake word and Gemini ASR turns.
+- [`main/protocols/`](main/protocols/) contains both MQTT+UDP and WebSocket transports.
+- [`main/mcp_server.*`](main/mcp_server.cc) is the reusable device-side MCP framework.
+- [`main/robot/`](main/robot/) owns Desk Robot hardware, behavior, adapters and UI.
+- [`main/notify/`](main/notify/) owns streamed notification playback and cleanup.
 
 ## Build
 
 ### Requirements
 
-- ESP-IDF v6.1 recommended
-- ESP32-S3 target
-- Python environment required by ESP-IDF
-
-Source the ESP-IDF environment first:
+- ESP-IDF `v6.1` recommended
+- Python from the active ESP-IDF environment
+- the hardware listed above; there is no board-selection step
 
 ```bash
 source /path/to/esp-idf/export.sh
 idf.py --version
-```
 
-The project contains one supported physical target:
-
-```text
-esp32-s3-n16r8-cam
-```
-
-Canonical configured build:
-
-```bash
 python scripts/build.py --language vi-VN
 ```
 
-Fixed hardware-specific sdkconfig values live in `sdkconfig.robot`; the build helper
-combines that fragment with the normal project defaults and requested language/wake word.
-
-Wake word can be selected when needed:
+Optional wake-word selection:
 
 ```bash
-python scripts/build.py --language vi-VN \
-  --wake-word wn9_nihaoxiaozhi_tts
+python scripts/build.py --language vi-VN --wake-word wn9_nihaoxiaozhi_tts
 ```
 
-Useful discovery commands:
+Discovery helpers:
 
 ```bash
 python scripts/build.py --list-languages
 python scripts/build.py --list-wake-words
 ```
 
-After the project has been configured, normal ESP-IDF commands can be used:
+Once configured, standard ESP-IDF commands remain available:
 
 ```bash
 idf.py build
-idf.py flash
-idf.py monitor
+idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-## Development notes
+Fixed target settings are held in [`sdkconfig.robot`](sdkconfig.robot). The helper combines them with the project defaults and the requested language/wake word; it does not rediscover an upstream board matrix.
 
-### Single-target repository
-
-Do not reintroduce the upstream multi-board matrix. If another upstream driver or
-implementation is needed later, fetch it deliberately from the upstream repository
-instead of carrying unused board code here.
-
-The upstream source remains the reference archive:
+## Repository map
 
 ```text
-https://github.com/78/xiaozhi-esp32
+main/
+├── application.*              session and subsystem integration
+├── device_state_machine.*     legal runtime transitions
+├── audio/                     audio pipeline, wake word and Gemini ASR
+├── chat/                      typed Web Chat lifecycle
+├── notify/                    streamed notifications
+├── protocols/                 MQTT+UDP and WebSocket
+├── mcp_server.*               generic MCP schema and dispatch
+├── platform/                  reusable board/network/hardware adapters
+└── robot/
+    ├── camera/                capture ownership and persistent policy
+    ├── control/               typed robot status/control boundary
+    ├── display/               Mochan face and secondary OLED
+    ├── motion/                drive, turns and expressive reactions
+    ├── power/                 INA219 and battery SoC
+    ├── sensors/               shared I2C, cliff, IMU and environment
+    ├── web/                   Web adapter, API serialization and UI source
+    └── desk_robot_board.cc    single board integration/factory
 ```
 
-### Shared I2C initialization
+## Companion server
 
-`SharedI2cBus` owns both buses. Primary I2C0 is initialized before the camera, and the
-camera SCCB plus downward VL53L0X reuse its existing handle. Environment probing starts only
-after camera and VL53L0X initialization. AHT20 conversion is advanced as a non-blocking phase
-machine, while pressure trend uses spaced cached BMP280 samples. SSD1306, INA219 and MPU6050
-initialization on auxiliary I2C1 remains intentionally deferred and serialized to avoid startup
-races. Preserve these ownership and lifecycle rules when adding another device.
+For a lean local backend tailored to this firmware, see [`hudrucan/xiaozhi-desk-robot-server`](https://github.com/hudrucan/xiaozhi-desk-robot-server).
 
-### Persistent environment/display settings
+The firmware can also use a compatible Xiaozhi deployment supplied through its bootstrap endpoint. Server configuration remains separate from device-side robot control: the firmware owns hardware safety and exposes deterministic actions through MCP.
 
-The following NVS entries are persistent behavior/API and should only be renamed with an explicit
-migration:
+## Notes and limitations
 
-| Namespace | Key | Purpose |
-| --- | --- | --- |
-| `desk_robot` | `oled_w_ver` | Secondary OLED widget-layout schema version |
-| `desk_robot` | `owN_type`, `owN_size`, `owN_on`, `owN_mode` | Per-slot OLED widget configuration |
-| `desk_robot` | `auto_bright` | Automatic main-display brightness enabled state |
-| `desk_robot` | `auto_bmin`, `auto_bmax` | Automatic-brightness bounds |
-| `display` | `brightness` | Manual and sensor-less boot fallback brightness |
+- Battery SoC combines coulomb counting, quasi-rest correction and anchors; real-cell calibration is hardware-specific.
+- Environment classifications, pressure trend and adaptive-brightness curves should be validated after final sensor placement.
+- Environment sensors are best-effort clients, but a hard SDA/SCL short can still affect every device sharing that bus.
+- Do not add upstream board/release matrices or restore removed firmware-update paths to this single-target fork.
 
-### Protocols
+## Upstream and license
 
-MQTT + UDP is the current production transport, but the WebSocket implementation is
-intentionally retained. Changes to shared `Protocol` semantics must not assume only one
-transport exists.
+Derived from [`78/xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32). Keep the applicable upstream attribution and license notices when redistributing derived work.
 
-### OTA / bootstrap
-
-The custom desk-robot target ignores any `firmware` object returned by the bootstrap endpoint.
-The existing OTA-named subsystem remains responsible for:
-
-```text
-bootstrap / activation / server config / server time
-```
-
-No official firmware download, partition-write or auto-upgrade path remains. The only retained
-`esp_ota_*` operation marks the currently running image valid after bootstrap succeeds so an
-ESP-IDF pending-verify image does not roll back.
-
-## Known limitations / active work
-
-- Battery SoC estimation supports coulomb counting, quasi-rest correction and anchors;
-  real-cell calibration remains hardware-dependent.
-- The downward VL53L0X is a floor/cliff sensor, not a front obstacle sensor.
-- Environment classifications, pressure-trend sensitivity and the automatic-brightness curve are
-  preliminary until the production sensor modules are mounted and measured on real hardware.
-- Some large robot implementation files are intentionally left intact for now; future
-  modularization should be behavior-preserving rather than a rewrite.
-
-## Upstream
-
-This project is derived from:
-
-- [`78/xiaozhi-esp32`](https://github.com/78/xiaozhi-esp32)
-
-The reusable protocol, audio, application and MCP foundations originate from that
-project. This repository narrows the codebase to the custom ESP32-S3 desk robot and
-adds its robot-specific hardware, UI, Web Control, typed chat and behavior.
-
-Keep upstream attribution and the original license when redistributing derived code.
-
-## License
-
-MIT. See [`LICENSE`](LICENSE).
+Released under the [MIT License](LICENSE).
