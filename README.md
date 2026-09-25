@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🤖 Xiaozhi Desk Robot
+<img src="main/robot/web/ui/favicon.svg" alt="Xiaozhi Desk Robot" width="112" height="112">
+
+# Xiaozhi Desk Robot
 
 **Purpose-built ESP32-S3 firmware for one expressive, camera-equipped desktop robot.**
 
