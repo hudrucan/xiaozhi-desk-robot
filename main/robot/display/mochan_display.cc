@@ -10,9 +10,7 @@
 #include <esp_random.h>
 #include <material_symbols.h>
 #include <algorithm>
-#include <array>
 #include <cstdlib>
-#include <cstring>
 
 namespace {
 const lv_color_t kFaceBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
@@ -30,17 +28,8 @@ constexpr int kResponseBoxFadeMs = 200;
 constexpr int kResponseFadeInStartFaceProgress = 144;
 constexpr int kFaceReturnStartResponseProgress = 96;
 constexpr int64_t kPerformanceLogIntervalUs = 5000000;
-constexpr int kIdleStartDelayMs = 15000;
-constexpr int kIdleEarlyStageMs = 45000;
-constexpr int kIdleSleepyStageMs = 120000;
-constexpr int kIdleEmotionHoldMinMs = 9000;
-constexpr int kIdleEmotionHoldMaxMs = 16000;
-constexpr int kIdleHappyHoldMinMs = 4500;
-constexpr int kIdleHappyHoldMaxMs = 7000;
-constexpr int kIdleSurprisedHoldMs = 1800;
 constexpr int kIdleSleepyHoldMinMs = 14000;
 constexpr int kIdleSleepyHoldMaxMs = 24000;
-constexpr int kYawnMinimumIdleMs = 120000;
 constexpr int kYawnCooldownMs = 180000;
 constexpr int kYawnOpenMs = 500;
 constexpr int kYawnHoldMs = 350;
@@ -375,7 +364,9 @@ bool MochanDisplay::CanShowFullFace(const std::string& emotion) const {
 }
 
 bool MochanDisplay::IsIdleEligible(const std::string& emotion) const {
-    return CanShowFullFace(emotion) && response_box_progress_ == 0 && !emotion_active_ &&
+    const bool semantic_sleepy = emotion_active_ && emotion == "sleepy";
+    return CanShowFullFace(emotion) && response_box_progress_ == 0 &&
+           (!emotion_active_ || semantic_sleepy) &&
            splash_ == nullptr &&
            (camera_image_ == nullptr || lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN)) &&
            (notification_ == nullptr || lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN));
@@ -489,8 +480,6 @@ void MochanDisplay::AdvanceFaceLayout(int64_t now_us) {
 }
 
 void MochanDisplay::CancelIdleScheduler(bool restart_session) {
-    const bool restore_activity = idle_override_active_;
-    idle_override_active_ = false;
     yawn_active_ = false;
     yawn_amount_ = 0;
     yawn_started_ms_ = 0;
@@ -498,27 +487,9 @@ void MochanDisplay::CancelIdleScheduler(bool restart_session) {
     mouth_motion_amount_ = 0;
     mouth_motion_started_ms_ = 0;
     next_mouth_motion_ms_ = 0;
-    next_idle_emotion_ms_ = 0;
+    next_yawn_check_ms_ = 0;
     if (restart_session) {
-        idle_session_started_ms_ = 0;
         idle_motion_phase_ = 0;
-        last_idle_emotion_.clear();
-        idle_repeat_count_ = 0;
-    }
-    if (restore_activity) {
-        const char* activity_emotion = "neutral";
-        if (activity_state_ == FaceState::kListening) {
-            activity_emotion = "listening";
-        } else if (activity_state_ == FaceState::kSpeaking) {
-            activity_emotion = "speaking";
-        } else if (activity_state_ == FaceState::kThinking) {
-            activity_emotion = "thinking";
-        }
-        {
-            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-            current_emotion_ = activity_emotion;
-        }
-        SetFaceState(activity_state_);
     }
 }
 
@@ -578,39 +549,19 @@ void MochanDisplay::AdvanceIdleMouthAnimation(bool idle_eligible) {
     }
 }
 
-void MochanDisplay::ApplyIdleEmotion(const char* emotion) {
-    FaceState state = FaceState::kIdle;
-    if (std::strcmp(emotion, "happy") == 0) {
-        state = FaceState::kHappy;
-    } else if (std::strcmp(emotion, "bored") == 0) {
-        state = FaceState::kCool;
-    } else if (std::strcmp(emotion, "sleepy") == 0) {
-        state = FaceState::kSleepy;
-    } else if (std::strcmp(emotion, "surprised") == 0) {
-        state = FaceState::kSurprised;
-    }
-    {
-        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-        current_emotion_ = emotion;
-    }
-    idle_override_active_ = std::strcmp(emotion, "neutral") != 0;
-    SetFaceState(state);
-}
-
-void MochanDisplay::AdvanceIdleScheduler(std::string& emotion) {
+void MochanDisplay::AdvanceSleepyYawn(const std::string& emotion) {
     const int64_t now_ms = esp_timer_get_time() / 1000;
-    if (!IsIdleEligible(emotion)) {
-        const bool restores_activity_emotion = idle_override_active_;
-        CancelIdleScheduler(true);
-        if (restores_activity_emotion) {
-            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-            emotion = current_emotion_;
-        }
-        return;
-    }
-    if (idle_session_started_ms_ == 0) {
-        idle_session_started_ms_ = now_ms;
-        next_idle_emotion_ms_ = now_ms + kIdleStartDelayMs;
+    const bool eligible = emotion == "sleepy" && CanShowFullFace(emotion) &&
+                          response_box_progress_ == 0 && splash_ == nullptr &&
+                          (camera_image_ == nullptr ||
+                           lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN)) &&
+                          (notification_ == nullptr ||
+                           lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN));
+    if (!eligible) {
+        yawn_active_ = false;
+        yawn_amount_ = 0;
+        yawn_started_ms_ = 0;
+        next_yawn_check_ms_ = 0;
         return;
     }
 
@@ -628,74 +579,27 @@ void MochanDisplay::AdvanceIdleScheduler(std::string& emotion) {
         } else {
             yawn_active_ = false;
             yawn_amount_ = 0;
-            next_idle_emotion_ms_ = now_ms + kIdleSleepyHoldMinMs;
+            next_yawn_check_ms_ = now_ms + kIdleSleepyHoldMinMs;
         }
         return;
     }
-    if (now_ms < next_idle_emotion_ms_) {
+
+    if (next_yawn_check_ms_ == 0) {
+        next_yawn_check_ms_ = now_ms;
+    }
+    if (now_ms < next_yawn_check_ms_) {
         return;
     }
 
-    struct WeightedEmotion {
-        const char* name;
-        uint8_t weight;
-    };
-    constexpr std::array<WeightedEmotion, 5> early = {
-        {{"neutral", 56}, {"bored", 25}, {"sleepy", 0}, {"happy", 16}, {"surprised", 3}}};
-    constexpr std::array<WeightedEmotion, 5> settled = {
-        {{"neutral", 31}, {"bored", 36}, {"sleepy", 23}, {"happy", 8}, {"surprised", 2}}};
-    constexpr std::array<WeightedEmotion, 5> long_idle = {
-        {{"neutral", 15}, {"bored", 30}, {"sleepy", 50}, {"happy", 4}, {"surprised", 1}}};
-    const int64_t idle_elapsed = now_ms - idle_session_started_ms_;
-    const auto& choices = idle_elapsed < kIdleEarlyStageMs
-                              ? early
-                              : (idle_elapsed < kIdleSleepyStageMs ? settled : long_idle);
-    const char* selected = "neutral";
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        int pick = esp_random() % 100;
-        for (const auto& choice : choices) {
-            if (pick < choice.weight) {
-                selected = choice.name;
-                break;
-            }
-            pick -= choice.weight;
-        }
-        if (last_idle_emotion_ != selected || idle_repeat_count_ < 2) {
-            break;
-        }
+    const bool yawn_ready =
+        last_yawn_ms_ == 0 || now_ms - last_yawn_ms_ >= kYawnCooldownMs;
+    if (yawn_ready && esp_random() % 5 == 0) {
+        yawn_active_ = true;
+        yawn_started_ms_ = now_ms;
+        last_yawn_ms_ = now_ms;
     }
-    if (last_idle_emotion_ == selected && idle_repeat_count_ >= 2) {
-        selected = last_idle_emotion_ == "bored" ? "neutral" : "bored";
-    }
-    if (last_idle_emotion_ == selected) {
-        ++idle_repeat_count_;
-    } else {
-        last_idle_emotion_ = selected;
-        idle_repeat_count_ = 1;
-    }
-
-    ApplyIdleEmotion(selected);
-    emotion = selected;
-    int hold_min = kIdleEmotionHoldMinMs;
-    int hold_max = kIdleEmotionHoldMaxMs;
-    if (std::strcmp(selected, "happy") == 0) {
-        hold_min = kIdleHappyHoldMinMs;
-        hold_max = kIdleHappyHoldMaxMs;
-    } else if (std::strcmp(selected, "surprised") == 0) {
-        hold_min = hold_max = kIdleSurprisedHoldMs;
-    } else if (std::strcmp(selected, "sleepy") == 0) {
-        hold_min = kIdleSleepyHoldMinMs;
-        hold_max = kIdleSleepyHoldMaxMs;
-        const bool yawn_ready = idle_elapsed >= kYawnMinimumIdleMs &&
-                                (last_yawn_ms_ == 0 || now_ms - last_yawn_ms_ >= kYawnCooldownMs);
-        if (yawn_ready && esp_random() % 5 == 0) {
-            yawn_active_ = true;
-            yawn_started_ms_ = now_ms;
-            last_yawn_ms_ = now_ms;
-        }
-    }
-    const int hold_range = std::max(1, hold_max - hold_min + 1);
-    next_idle_emotion_ms_ = now_ms + hold_min + esp_random() % hold_range;
+    const int hold_range = kIdleSleepyHoldMaxMs - kIdleSleepyHoldMinMs + 1;
+    next_yawn_check_ms_ = now_ms + kIdleSleepyHoldMinMs + esp_random() % hold_range;
 }
 
 void MochanDisplay::AdvanceEyeAnimation() {
@@ -714,7 +618,7 @@ void MochanDisplay::AdvanceEyeAnimation() {
         emotion = current_emotion_;
     }
     ++animation_phase_;
-    AdvanceIdleScheduler(emotion);
+    AdvanceSleepyYawn(emotion);
     const bool idle_eligible = IsIdleEligible(emotion);
     if (idle_eligible) {
         ++idle_motion_phase_;

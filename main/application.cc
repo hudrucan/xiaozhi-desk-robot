@@ -828,9 +828,10 @@ void Application::Alert(const char* status, const char* message, const char* emo
 void Application::DismissAlert() {
     last_error_message_.clear();
     if (GetDeviceState() == kDeviceStateIdle) {
-        auto display = Board::GetInstance().GetDisplay();
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
-        display->SetEmotion("neutral");
+        board.ApplyDeviceStateEmotion("neutral");
         display->SetChatMessage("system", "");
     }
 }
@@ -997,6 +998,7 @@ void Application::HandleWakeWordDetectedEvent() {
     auto state = GetDeviceState();
     auto wake_word = audio_service_.GetLastWakeWord();
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
+    Board::GetInstance().OnUserAttention();
 
     if (state == kDeviceStateIdle) {
         BeginWakeWordInvoke(wake_word);
@@ -1136,7 +1138,7 @@ void Application::HandleStateChangedEvent() {
             if (last_error_message_.empty()) {
                 set_device_status(Lang::Strings::STANDBY);
                 display->ClearChatMessages();  // Clear messages first
-                display->SetEmotion(
+                board.ApplyDeviceStateEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
             audio_service_.EnableVoiceProcessing(false);
@@ -1144,7 +1146,7 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateConnecting:
             set_device_status(Lang::Strings::CONNECTING);
-            display->SetEmotion("neutral");
+            board.ApplyDeviceStateEmotion("neutral");
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
@@ -1155,7 +1157,7 @@ void Application::HandleStateChangedEvent() {
             } else {
                 set_device_status(Lang::Strings::LISTENING);
             }
-            display->SetEmotion("neutral");
+            board.ApplyDeviceStateEmotion("neutral");
 
             // Idle-origin typed chat is pre-armed synchronously by TextChatController
             // with listen/start plus a deterministic UDP Opus-silence prime.

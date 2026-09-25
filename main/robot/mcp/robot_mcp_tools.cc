@@ -47,11 +47,14 @@ void RobotMcpTools::Register(RobotController& controller) {
             const auto direction = properties["direction"].value<std::string>();
             MotorController::Direction command;
             if (!ParseDirection(direction, command)) {
+                controller.NotifyToolResult(false);
                 return std::string("direction must be forward, backward, left, or right");
             }
             const int duration_ms = properties["duration_ms"].value<int>();
-            if (!controller.Move(command, duration_ms,
-                                 RobotController::MovePolicy::kPreserveQueued)) {
+            const bool moved = controller.Move(command, duration_ms,
+                                               RobotController::MovePolicy::kPreserveQueued);
+            controller.NotifyToolResult(moved);
+            if (!moved) {
                 return std::string(
                     "Movement blocked: table edge detected; reverse remains available");
             }
@@ -69,7 +72,9 @@ void RobotMcpTools::Register(RobotController& controller) {
         });
     mcp_server.AddTool("self.robot.dance", "Run one bounded random dance.",
                        PropertyList(), [&controller](const PropertyList&) -> ReturnValue {
-                           return controller.Dance();
+                           const bool danced = controller.Dance();
+                           controller.NotifyToolResult(danced);
+                           return danced;
                        });
     mcp_server.AddTool(
         "self.robot.react",
@@ -297,7 +302,10 @@ void RobotMcpTools::Register(RobotController& controller) {
         PropertyList({Property("degrees", kPropertyTypeInteger, 90, -180, 180)}),
         [&controller](const PropertyList& properties) -> ToolResult {
             std::string message;
-            if (!controller.TurnRelative(properties["degrees"].value<int>(), message)) {
+            const bool turned =
+                controller.TurnRelative(properties["degrees"].value<int>(), message);
+            controller.NotifyToolResult(turned);
+            if (!turned) {
                 return std::unexpected(message);
             }
             return true;

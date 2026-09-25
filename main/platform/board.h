@@ -69,6 +69,11 @@ public:
     // Route assistant emotions through the board so hardware with expressive
     // actuators can react without coupling Application to a concrete board.
     virtual void ApplyEmotion(const char* emotion);
+    // Update the base face for an application state without replacing a
+    // board-owned temporary/reaction face.
+    virtual void ApplyDeviceStateEmotion(const char* emotion);
+    // Narrow interaction hook; boards without proactive behavior ignore it.
+    virtual void OnUserAttention() {}
     virtual Camera* GetCamera();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;

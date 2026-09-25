@@ -9,7 +9,7 @@
 
 class ReactionEngine {
 public:
-    enum class Source : uint8_t { kExternal, kCamera, kMpu };
+    enum class Source : uint8_t { kExternal, kCamera, kMpu, kProactive };
     enum class MotionState : uint8_t {
         kNotRequested,
         kPending,
@@ -51,8 +51,9 @@ public:
 
     bool Initialize(Callbacks callbacks);
     bool Start(const std::string& name, int duration_ms, const std::string& oled_text,
-               Source source = Source::kExternal);
+               Source source = Source::kExternal, uint32_t* generation_out = nullptr);
     bool Cancel();
+    bool CancelIfGeneration(uint32_t expected_generation);
     Status GetStatus() const;
 
     void SetMotionState(uint32_t generation, MotionState state);

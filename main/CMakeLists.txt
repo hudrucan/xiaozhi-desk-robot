@@ -75,6 +75,7 @@ list(APPEND SOURCES
     "robot/camera/camera_settings.cc"
     "robot/camera/camera_image_policy.cc"
     "robot/camera/desk_robot_camera.cc"
+    "robot/behavior/proactive_events.cc"
     "robot/behavior/reaction_engine.cc"
     "robot/control/robot_controller.cc"
     "robot/control/robot_settings.cc"

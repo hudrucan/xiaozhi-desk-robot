@@ -126,17 +126,20 @@ void MochanDisplay::SetStatus(const char* status) {
     }
 
     DisplayLockGuard lock(this);
-    FreezeMouthForExit();
     activity_state_ = next_activity;
     status_dot_busy_ = status_dot_busy;
-    if (clear_emotion) {
-        emotion_active_ = false;
-    }
-    CancelIdleScheduler(true);
     if (activity_state_ != FaceState::kSpeaking) {
         FinishTyping();
     }
     UpdateStatusDot();
+    if (face_override_active_.load(std::memory_order_acquire)) {
+        return;
+    }
+    FreezeMouthForExit();
+    if (clear_emotion) {
+        emotion_active_ = false;
+    }
+    CancelIdleScheduler(true);
     if (!emotion_active_) {
         const char* activity_emotion = "neutral";
         if (activity_state_ == FaceState::kListening) {
@@ -159,6 +162,32 @@ void MochanDisplay::SetStatus(const char* status) {
     }
     UpdateFaceLayoutTarget(emotion, esp_timer_get_time());
 }
+
+void MochanDisplay::SetFaceOverrideActive(bool active) {
+    face_override_active_.store(active, std::memory_order_release);
+}
+
+void MochanDisplay::RestoreActivityFace() {
+    DisplayLockGuard lock(this);
+    FreezeMouthForExit();
+    emotion_active_ = false;
+    CancelIdleScheduler(true);
+    const char* activity_emotion = "neutral";
+    if (activity_state_ == FaceState::kListening) {
+        activity_emotion = "listening";
+    } else if (activity_state_ == FaceState::kSpeaking) {
+        activity_emotion = "speaking";
+    } else if (activity_state_ == FaceState::kThinking) {
+        activity_emotion = "thinking";
+    }
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        current_emotion_ = activity_emotion;
+    }
+    SetFaceState(activity_state_);
+    UpdateFaceLayoutTarget(activity_emotion, esp_timer_get_time());
+}
+
 void MochanDisplay::RenderTypingText() {
     if (subtitle_ == nullptr) {
         return;

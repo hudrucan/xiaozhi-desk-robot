@@ -53,6 +53,8 @@ Display* Board::GetDisplay() {
 
 void Board::ApplyEmotion(const char* emotion) { GetDisplay()->SetEmotion(emotion); }
 
+void Board::ApplyDeviceStateEmotion(const char* emotion) { GetDisplay()->SetEmotion(emotion); }
+
 Camera* Board::GetCamera() { return nullptr; }
 
 Led* Board::GetLed() {

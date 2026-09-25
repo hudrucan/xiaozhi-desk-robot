@@ -77,7 +77,11 @@ bool ReactionEngine::IsSupported(const std::string& name) {
 }
 
 bool ReactionEngine::Start(const std::string& name, int duration_ms,
-                           const std::string& oled_text, Source source) {
+                           const std::string& oled_text, Source source,
+                           uint32_t* generation_out) {
+    if (generation_out != nullptr) {
+        *generation_out = 0;
+    }
     Plan plan;
     if (!ResolvePlan(name, plan)) {
         return false;
@@ -116,6 +120,8 @@ bool ReactionEngine::Start(const std::string& name, int duration_ms,
             active_ = false;
             expires_at_us_ = 0;
             failed_release_generation = previous_active ? previous_generation : 0;
+        } else if (generation_out != nullptr) {
+            *generation_out = generation;
         }
     }
 
@@ -139,6 +145,34 @@ bool ReactionEngine::Cancel() {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_) {
             return false;
+        }
+        active_ = false;
+        expires_at_us_ = 0;
+        if (motion_state_ == MotionState::kPending || motion_state_ == MotionState::kStarted) {
+            motion_state_ = MotionState::kCanceled;
+        }
+        generation = generation_;
+        callbacks = callbacks_;
+        if (timer_ != nullptr) {
+            esp_timer_stop(timer_);
+        }
+    }
+    if (callbacks.release) {
+        callbacks.release(generation);
+    }
+    return true;
+}
+
+bool ReactionEngine::CancelIfGeneration(uint32_t expected_generation) {
+    uint32_t generation = 0;
+    Callbacks callbacks;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (generation_ != expected_generation) {
+            return false;
+        }
+        if (!active_) {
+            return true;
         }
         active_ = false;
         expires_at_us_ = 0;

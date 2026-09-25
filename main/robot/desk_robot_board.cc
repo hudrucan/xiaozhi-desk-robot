@@ -3,6 +3,7 @@
 #include "application.h"
 #include "assets/lang_config.h"
 #include "button.h"
+#include "behavior/proactive_events.h"
 #include "behavior/reaction_engine.h"
 #include "camera/camera_settings.h"
 #include "camera/desk_robot_camera.h"
@@ -107,6 +108,7 @@ private:
     MotorController motors_{MOTOR_LEFT_IN1, MOTOR_LEFT_IN2, MOTOR_RIGHT_IN1, MOTOR_RIGHT_IN2};
     ExpressiveMotionPlanner expressive_motion_planner_;
     ReactionEngine reaction_engine_;
+    ProactiveEvents proactive_events_;
     RobotSettings robot_settings_;
     CameraSettingsStore camera_settings_;
     CameraImagePolicy camera_image_policy_;
@@ -216,6 +218,18 @@ private:
     }
 #endif
 
+    bool AreMotorsMoving() const {
+        return motors_.IsMoving(MotorController::Direction::kForward) ||
+               motors_.IsMoving(MotorController::Direction::kBackward) ||
+               motors_.IsMoving(MotorController::Direction::kLeft) ||
+               motors_.IsMoving(MotorController::Direction::kRight);
+    }
+
+    static bool IsConversationActive() {
+        const DeviceState state = Application::GetInstance().GetDeviceState();
+        return state == kDeviceStateListening || state == kDeviceStateSpeaking;
+    }
+
 #ifdef MPU6050_I2C_ADDRESS
     static float NormalizeMotionAngle(float angle_deg) {
         while (angle_deg > 180.0f) {
@@ -225,13 +239,6 @@ private:
             angle_deg += 360.0f;
         }
         return angle_deg;
-    }
-
-    bool AreMotorsMoving() const {
-        return motors_.IsMoving(MotorController::Direction::kForward) ||
-               motors_.IsMoving(MotorController::Direction::kBackward) ||
-               motors_.IsMoving(MotorController::Direction::kLeft) ||
-               motors_.IsMoving(MotorController::Direction::kRight);
     }
 
     bool InitializeMotionSensor() {
@@ -271,6 +278,14 @@ private:
 #ifdef INA219_I2C_ADDRESS
             if (battery_controller_.Sample(now_us, !motors_.IsActive())) {
                 const auto status = battery_controller_.GetStatus();
+                proactive_events_.ObserveBattery(
+                    {
+                        .valid = status.valid,
+                        .percent = status.percent,
+                        .charging = status.charging,
+                        .full_anchored = status.soc_full_anchored,
+                    },
+                    now_us, IsConversationActive());
                 Application::GetInstance().Schedule([this, status]() {
                     display_->SetBatteryStatus(status.percent, status.voltage_v, status.charging);
                 });
@@ -354,8 +369,14 @@ private:
                             }
 
                             if (reaction != nullptr) {
-                                reaction_engine_.Start(reaction, decision.duration_ms, "",
-                                                       ReactionEngine::Source::kMpu);
+                                const ProactiveEvents::Event event =
+                                    std::strcmp(reaction, "startled") == 0
+                                        ? ProactiveEvents::Event::kImpact
+                                        : std::strcmp(reaction, "nope") == 0
+                                              ? ProactiveEvents::Event::kShake
+                                              : ProactiveEvents::Event::kUpsideDown;
+                                proactive_events_.Signal(event, now_us, IsConversationActive(),
+                                                         decision.duration_ms);
                                 // A priority rejection still consumes this physical gesture; it
                                 // must not retry on every 40 ms sensor sample.
                                 motion_reactions_.CompleteDecision(true, now_us);
@@ -374,22 +395,28 @@ private:
                 }
             }
 #endif
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+            const auto cliff = cliff_sensor_.GetStatus();
+            bool gyro_active = false;
+#ifdef MPU6050_I2C_ADDRESS
+            const auto gyro = gyro_turn_controller_.GetStatus();
+            gyro_active = gyro.pending || gyro.active;
+#endif
+            proactive_events_.ObserveFloor(
+                cliff.available, cliff.valid && !cliff.cliff_detected,
+                cliff.cliff_detected, AreMotorsMoving(), gyro_active, now_us,
+                IsConversationActive());
+#endif
+            const DeviceState state = Application::GetInstance().GetDeviceState();
+            proactive_events_.ObserveIdle(state == kDeviceStateIdle, now_us);
+            proactive_events_.Tick(now_us, IsConversationActive());
             vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_SAMPLE_PERIOD_MS));
         }
     }
 
     void StartAuxiliarySensorTask() {
-        const bool has_sensor =
-#ifdef INA219_I2C_ADDRESS
-            battery_controller_.IsAvailable() ||
-#endif
-#ifdef MPU6050_I2C_ADDRESS
-            motion_sensor_.IsAvailable() ||
-#endif
-            false;
-        if (!has_sensor) {
-            return;
-        }
+        // This existing task also advances ProactiveEvents policy (network debounce, idle and
+        // pickup/put-down latches), so keep it alive even when an auxiliary sensor probe fails.
         if (xTaskCreate(AuxiliarySensorTask, "aux_sensors", 6144, this, 2,
                         &auxiliary_sensor_task_) != pdPASS) {
             auxiliary_sensor_task_ = nullptr;
@@ -468,6 +495,10 @@ private:
 
     void OnNetworkEvent(NetworkEvent event, const std::string& data = "") override {
         WifiBoard::OnNetworkEvent(event, data);
+
+        proactive_events_.ObserveNetwork(event == NetworkEvent::Connected,
+                                          event == NetworkEvent::Disconnected,
+                                          esp_timer_get_time(), IsConversationActive());
 
         switch (event) {
             case NetworkEvent::Scanning:
@@ -626,6 +657,8 @@ private:
             if (was_moving_forward) {
                 self->QueueCliffRetreat();
             }
+            self->proactive_events_.Signal(ProactiveEvents::Event::kCliffDetected,
+                                           esp_timer_get_time(), IsConversationActive());
         }
     }
 
@@ -801,7 +834,7 @@ private:
     void MaybeStartEmotionMovement(const std::string& emotion, EmotionSource source) {
         if (!emotion_movement_enabled_.load(std::memory_order_relaxed) ||
             source == EmotionSource::kMpuReaction || source == EmotionSource::kSystem ||
-            motors_.IsActive()) {
+            reaction_engine_.IsActive() || motors_.IsActive()) {
             return;
         }
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -835,7 +868,7 @@ private:
     }
 
     bool ApplyRobotEmotion(const std::string& emotion, EmotionSource source) {
-        if (!MochanDisplay::IsSupportedEmotion(emotion)) {
+        if (!MochanDisplay::IsSupportedEmotion(emotion) || reaction_engine_.IsActive()) {
             return false;
         }
         display_->SetEmotion(emotion.c_str());
@@ -844,64 +877,133 @@ private:
     }
 
     void RestoreFaceForCurrentState() {
-        const DeviceState state = Application::GetInstance().GetDeviceState();
-        if (state == kDeviceStateListening) {
-            display_->SetEmotion("listening");
-        } else if (state == kDeviceStateSpeaking) {
-            display_->SetEmotion("speaking");
-        } else if (state == kDeviceStateConnecting || state == kDeviceStateActivating) {
-            display_->SetEmotion("thinking");
-        } else {
-            display_->SetEmotion("neutral");
+        display_->RestoreActivityFace();
+    }
+
+    void RelinquishReactionFaceForExplicitOverride() {
+        if (reaction_face_generation_.exchange(0, std::memory_order_acq_rel) != 0) {
+            display_->SetFaceOverrideActive(false);
+            RestoreFaceForCurrentState();
         }
     }
 
+    void RelinquishReactionLightForExplicitOverride() {
+        if (reaction_light_generation_.exchange(0, std::memory_order_acq_rel) != 0) {
+            static_cast<GpioLed*>(GetLed())
+                ->SetEffectOverride(GpioLed::EffectOverride::kNone);
+        }
+    }
+
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+    void RelinquishReactionOledForExplicitOverride() {
+        reaction_oled_generation_.exchange(0, std::memory_order_acq_rel);
+        const uint32_t oled_generation =
+            reaction_oled_text_generation_.exchange(0, std::memory_order_acq_rel);
+        if (oled_generation != 0) {
+            secondary_display_.CancelTemporaryText(oled_generation);
+        }
+    }
+#endif
+
     bool QueueTemporaryEmotion(const std::string& emotion, int duration_ms,
-                               EmotionSource source = EmotionSource::kPreview) {
+                               EmotionSource source = EmotionSource::kPreview,
+                               bool explicit_override = false) {
         if (!MochanDisplay::IsSupportedEmotion(emotion)) {
             return false;
         }
         const int safe_duration = std::clamp(duration_ms, 250, 30000);
-        const uint32_t generation = temporary_emotion_generation_.fetch_add(1) + 1;
-        temporary_emotion_expires_at_us_.store(esp_timer_get_time() + safe_duration * 1000LL);
-        {
-            std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
-            temporary_emotion_ = emotion;
-        }
-        Application::GetInstance().Schedule([this, emotion, source, generation]() {
-            if (temporary_emotion_generation_.load() == generation &&
-                (source != EmotionSource::kMpuReaction || !reaction_engine_.IsActive())) {
-                ApplyRobotEmotion(emotion, source);
-            }
-        });
-        if (face_reset_timer_ != nullptr) {
-            esp_timer_stop(face_reset_timer_);
-            ESP_ERROR_CHECK(esp_timer_start_once(face_reset_timer_, safe_duration * 1000ULL));
-        }
+        const uint32_t request_reaction_generation =
+            explicit_override ? reaction_engine_.GetStatus().generation : 0;
+        Application::GetInstance().Schedule(
+            [this, emotion, source, safe_duration, explicit_override,
+             request_reaction_generation]() {
+                if (source == EmotionSource::kMpuReaction && reaction_engine_.IsActive()) {
+                    return;
+                }
+                if (explicit_override) {
+                    if (!reaction_engine_.CancelIfGeneration(
+                            request_reaction_generation)) {
+                        return;
+                    }
+                    RelinquishReactionFaceForExplicitOverride();
+                }
+
+                const uint32_t generation = temporary_emotion_generation_.fetch_add(1) + 1;
+                temporary_emotion_expires_at_us_.store(
+                    esp_timer_get_time() + safe_duration * 1000LL);
+                {
+                    std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
+                    temporary_emotion_ = emotion;
+                }
+
+                esp_err_t timer_result = ESP_ERR_INVALID_STATE;
+                if (face_reset_timer_ != nullptr) {
+                    esp_timer_stop(face_reset_timer_);
+                    timer_result =
+                        esp_timer_start_once(face_reset_timer_, safe_duration * 1000ULL);
+                }
+                if (timer_result != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to arm face reset timer: %s",
+                             esp_err_to_name(timer_result));
+                    temporary_emotion_generation_.fetch_add(1);
+                    temporary_emotion_expires_at_us_.store(0);
+                    {
+                        std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
+                        temporary_emotion_.clear();
+                    }
+                    display_->SetFaceOverrideActive(false);
+                    if (!reaction_engine_.IsActive()) {
+                        RestoreFaceForCurrentState();
+                    }
+                    return;
+                }
+
+                // ReactionEngine starts outside the application task. Re-check at the actual
+                // apply boundary so a newer semantic reaction always wins this primitive.
+                if (temporary_emotion_generation_.load() != generation ||
+                    reaction_engine_.IsActive()) {
+                    esp_timer_stop(face_reset_timer_);
+                    temporary_emotion_generation_.fetch_add(1);
+                    temporary_emotion_expires_at_us_.store(0);
+                    std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
+                    temporary_emotion_.clear();
+                    return;
+                }
+                display_->SetFaceOverrideActive(true);
+                if (!ApplyRobotEmotion(emotion, source)) {
+                    display_->SetFaceOverrideActive(false);
+                }
+            });
         return true;
     }
 
     void OnCameraMcpRequestStateChanged(DeskRobotCamera::McpRequestState state) {
+        ProactiveEvents::Event event = ProactiveEvents::Event::kCount;
+        int duration_ms = 0;
         switch (state) {
             case DeskRobotCamera::McpRequestState::kCapturing:
-                reaction_engine_.Start("startled", CAMERA_REACTION_PENDING_MS, "",
-                                       ReactionEngine::Source::kCamera);
+                event = ProactiveEvents::Event::kCameraStart;
+                duration_ms = CAMERA_REACTION_PENDING_MS;
                 break;
             case DeskRobotCamera::McpRequestState::kAnalyzing:
-                reaction_engine_.Start("thinking", CAMERA_REACTION_PENDING_MS, "",
-                                       ReactionEngine::Source::kCamera);
+                event = ProactiveEvents::Event::kCameraAnalyzing;
+                duration_ms = CAMERA_REACTION_PENDING_MS;
                 break;
             case DeskRobotCamera::McpRequestState::kSucceeded:
-                reaction_engine_.Start("success", CAMERA_REACTION_SUCCESS_MS, "",
-                                       ReactionEngine::Source::kCamera);
+                event = ProactiveEvents::Event::kCameraSuccess;
+                duration_ms = CAMERA_REACTION_SUCCESS_MS;
                 break;
             case DeskRobotCamera::McpRequestState::kFailed:
-                reaction_engine_.Start("confused", CAMERA_REACTION_FAILURE_MS, "",
-                                       ReactionEngine::Source::kCamera);
+                event = ProactiveEvents::Event::kCameraFailed;
+                duration_ms = CAMERA_REACTION_FAILURE_MS;
                 break;
             case DeskRobotCamera::McpRequestState::kNever:
             default:
                 break;
+        }
+        if (event != ProactiveEvents::Event::kCount) {
+            proactive_events_.Signal(event, esp_timer_get_time(), IsConversationActive(),
+                                     duration_ms);
         }
     }
 
@@ -922,6 +1024,8 @@ private:
                 std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
                 expected.swap(temporary_emotion_);
             }
+            temporary_emotion_expires_at_us_.store(0);
+            display_->SetFaceOverrideActive(false);
             if (expected.empty() || display_->GetCurrentEmotion() != expected) {
                 return;
             }
@@ -955,24 +1059,53 @@ private:
         return true;
     }
 
-    bool QueueStatusLightEffect(const std::string& effect, int duration_ms) {
+    bool QueueStatusLightEffect(const std::string& effect, int duration_ms,
+                                bool explicit_override = false) {
         GpioLed::EffectOverride override = GpioLed::EffectOverride::kNone;
         if (!ParseStatusLightEffect(effect, override)) {
             return false;
         }
         const int safe_duration = std::clamp(duration_ms, 250, 30000);
-        const uint32_t generation = light_effect_generation_.fetch_add(1) + 1;
-        light_effect_expires_at_us_.store(esp_timer_get_time() + safe_duration * 1000LL);
-        Application::GetInstance().Schedule([this, override, generation]() {
-            if (light_effect_generation_.load() == generation) {
+        const uint32_t request_reaction_generation =
+            explicit_override ? reaction_engine_.GetStatus().generation : 0;
+        Application::GetInstance().Schedule(
+            [this, override, safe_duration, explicit_override,
+             request_reaction_generation]() {
+                if (explicit_override) {
+                    if (!reaction_engine_.CancelIfGeneration(
+                            request_reaction_generation)) {
+                        return;
+                    }
+                    RelinquishReactionLightForExplicitOverride();
+                }
+                if (reaction_engine_.IsActive()) {
+                    return;
+                }
+                const uint32_t generation = light_effect_generation_.fetch_add(1) + 1;
+                light_effect_expires_at_us_.store(
+                    esp_timer_get_time() + safe_duration * 1000LL);
+                esp_err_t timer_result = ESP_ERR_INVALID_STATE;
+                if (light_effect_reset_timer_ != nullptr) {
+                    esp_timer_stop(light_effect_reset_timer_);
+                    timer_result = esp_timer_start_once(light_effect_reset_timer_,
+                                                        safe_duration * 1000ULL);
+                }
+                if (timer_result != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to arm light reset timer: %s",
+                             esp_err_to_name(timer_result));
+                    light_effect_generation_.fetch_add(1);
+                    light_effect_expires_at_us_.store(0);
+                    return;
+                }
+                if (light_effect_generation_.load() != generation ||
+                    reaction_engine_.IsActive()) {
+                    esp_timer_stop(light_effect_reset_timer_);
+                    light_effect_generation_.fetch_add(1);
+                    light_effect_expires_at_us_.store(0);
+                    return;
+                }
                 static_cast<GpioLed*>(GetLed())->SetEffectOverride(override);
-            }
-        });
-        if (light_effect_reset_timer_ != nullptr) {
-            esp_timer_stop(light_effect_reset_timer_);
-            ESP_ERROR_CHECK(
-                esp_timer_start_once(light_effect_reset_timer_, safe_duration * 1000ULL));
-        }
+            });
         return true;
     }
 
@@ -1028,8 +1161,7 @@ private:
                 }
                 {
                     temporary_emotion_generation_.fetch_add(1);
-                    temporary_emotion_expires_at_us_.store(
-                        esp_timer_get_time() + duration_ms * 1000LL);
+                    temporary_emotion_expires_at_us_.store(0);
                     std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
                     temporary_emotion_.clear();
                 }
@@ -1040,6 +1172,7 @@ private:
                     motors_.Stop();
                 }
 
+                display_->SetFaceOverrideActive(true);
                 display_->SetEmotion(plan.emotion.c_str());
                 reaction_face_generation_.store(generation, std::memory_order_release);
 
@@ -1076,6 +1209,7 @@ private:
         Application::GetInstance().Schedule([this, generation]() {
             uint32_t expected = generation;
             if (reaction_face_generation_.compare_exchange_strong(expected, 0)) {
+                display_->SetFaceOverrideActive(false);
                 RestoreFaceForCurrentState();
             }
             expected = generation;
@@ -1114,6 +1248,12 @@ private:
         }
     }
 
+    void InitializeProactiveEvents() {
+        if (!proactive_events_.Initialize(reaction_engine_)) {
+            ESP_LOGE(TAG, "Failed to initialize proactive events");
+        }
+    }
+
     void RelinquishReactionMotion() {
         const uint32_t generation = reaction_motion_generation_.exchange(0);
         if (generation != 0) {
@@ -1125,8 +1265,9 @@ private:
     void CancelReactionForExplicitOverride() {
         const ReactionEngine::Status status = reaction_engine_.GetStatus();
         if (!reaction_engine_.Cancel() && status.generation != 0) {
-            // Expiry may already have marked the engine inactive while its application-task
-            // cleanup is still queued. Queue an idempotent release ahead of the new override.
+            // Expiry may already have marked the engine inactive while cleanup is still queued.
+            // Queue an idempotent release; the explicit transaction invalidates ownership of
+            // the primitive it replaces before applying its own value.
             ReleaseReaction(status.generation);
         }
     }
@@ -1168,7 +1309,6 @@ private:
     }
 
     void ReturnToIdle() {
-        reaction_engine_.Cancel();
         motors_.EmergencyStop();
         if (camera_ != nullptr) {
             camera_->ForceOff();
@@ -1177,6 +1317,18 @@ private:
             xTaskNotifyGive(live_camera_task_);
         }
         Application::GetInstance().Schedule([this]() {
+            CancelReactionForExplicitOverride();
+            reaction_face_generation_.store(0, std::memory_order_release);
+            temporary_emotion_generation_.fetch_add(1);
+            temporary_emotion_expires_at_us_.store(0);
+            display_->SetFaceOverrideActive(false);
+            if (face_reset_timer_ != nullptr) {
+                esp_timer_stop(face_reset_timer_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
+                temporary_emotion_.clear();
+            }
             auto& app = Application::GetInstance();
             const DeviceState state = app.GetDeviceState();
             if (state == kDeviceStateSpeaking) {
@@ -1186,7 +1338,9 @@ private:
             } else if (state == kDeviceStateConnecting || state == kDeviceStateNotifying) {
                 app.SetDeviceState(kDeviceStateIdle);
             }
-            display_->SetEmotion("neutral");
+            if (!reaction_engine_.IsActive()) {
+                display_->SetEmotion("neutral");
+            }
         });
     }
 
@@ -1597,21 +1751,43 @@ private:
 
     bool CancelReaction() override { return reaction_engine_.Cancel(); }
 
+    void NotifyToolResult(bool success) override {
+        proactive_events_.Signal(success ? ProactiveEvents::Event::kToolSuccess
+                                         : ProactiveEvents::Event::kToolError,
+                                 esp_timer_get_time(), IsConversationActive());
+    }
+
+    void OnUserAttention() override {
+        proactive_events_.Signal(ProactiveEvents::Event::kUserAttention, esp_timer_get_time(),
+                                 IsConversationActive());
+    }
+
     bool ShowEmotion(const std::string& emotion, int duration_ms) override {
         if (!MochanDisplay::IsSupportedEmotion(emotion)) {
             return false;
         }
-        CancelReactionForExplicitOverride();
-        return QueueTemporaryEmotion(emotion, duration_ms);
+        return QueueTemporaryEmotion(emotion, duration_ms, EmotionSource::kPreview, true);
     }
 
     bool ShowSecondaryText(const std::string& text, int duration_ms) override {
 #ifdef SECONDARY_OLED_I2C_ADDRESS
-        if (!secondary_display_.IsAvailable() || NormalizeTemporaryText(text, 48).empty()) {
+        const std::string normalized = NormalizeTemporaryText(text, 48);
+        if (!secondary_display_.IsAvailable() || normalized.empty()) {
             return false;
         }
-        CancelReactionForExplicitOverride();
-        return QueueTemporaryOledText(text, duration_ms);
+        const uint32_t request_reaction_generation = reaction_engine_.GetStatus().generation;
+        Application::GetInstance().Schedule(
+            [this, normalized, duration_ms, request_reaction_generation]() {
+                if (!reaction_engine_.CancelIfGeneration(
+                        request_reaction_generation)) {
+                    return;
+                }
+                RelinquishReactionOledForExplicitOverride();
+                if (!reaction_engine_.IsActive()) {
+                    QueueTemporaryOledText(normalized, duration_ms);
+                }
+            });
+        return true;
 #else
         return false;
 #endif
@@ -1622,8 +1798,7 @@ private:
         if (!ParseStatusLightEffect(effect, parsed)) {
             return false;
         }
-        CancelReactionForExplicitOverride();
-        return QueueStatusLightEffect(effect, duration_ms);
+        return QueueStatusLightEffect(effect, duration_ms, true);
     }
 
     bool ToggleCameraFlip() override { return QueueCameraFlip(); }
@@ -1942,6 +2117,7 @@ private:
                 EnterWifiConfigMode();
                 return;
             }
+            OnUserAttention();
             app.ToggleChatState();
         });
 
@@ -1986,6 +2162,7 @@ public:
         InitializeLiveCamera();
         InitializeInteractionTimers();
         InitializeReactionEngine();
+        InitializeProactiveEvents();
         RobotMcpTools::Register(*this);
 #ifdef MPU6050_I2C_ADDRESS
         InitializeGyroTurnController();
@@ -2051,14 +2228,39 @@ public:
     }
 
     Display* GetDisplay() override { return display_; }
+    void ApplyDeviceStateEmotion(const char* emotion) override {
+        if (emotion == nullptr || reaction_engine_.IsActive() ||
+            reaction_face_generation_.load(std::memory_order_acquire) != 0 ||
+            temporary_emotion_expires_at_us_.load(std::memory_order_acquire) != 0) {
+            return;
+        }
+        display_->SetEmotion(emotion);
+    }
+
     void ApplyEmotion(const char* emotion) override {
         if (emotion == nullptr) {
             return;
         }
         const std::string requested(emotion);
-        CancelReactionForExplicitOverride();
-        Application::GetInstance().Schedule([this, requested]() {
-            ApplyRobotEmotion(requested, EmotionSource::kAssistant);
+        const uint32_t request_reaction_generation = reaction_engine_.GetStatus().generation;
+        Application::GetInstance().Schedule([this, requested, request_reaction_generation]() {
+            if (!reaction_engine_.CancelIfGeneration(request_reaction_generation)) {
+                return;
+            }
+            RelinquishReactionFaceForExplicitOverride();
+            temporary_emotion_generation_.fetch_add(1);
+            temporary_emotion_expires_at_us_.store(0);
+            if (face_reset_timer_ != nullptr) {
+                esp_timer_stop(face_reset_timer_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
+                temporary_emotion_.clear();
+            }
+            display_->SetFaceOverrideActive(false);
+            if (!reaction_engine_.IsActive()) {
+                ApplyRobotEmotion(requested, EmotionSource::kAssistant);
+            }
         });
     }
     Camera* GetCamera() override { return camera_; }

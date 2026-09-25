@@ -2,6 +2,7 @@
 
 #include "display/lcd_display.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -26,6 +27,8 @@ public:
     void SetMicrophoneMuted(bool muted) override;
     void SetWifiConnected(bool connected);
     void SetBatteryStatus(int percent, float voltage_v, bool charging);
+    void SetFaceOverrideActive(bool active);
+    void RestoreActivityFace();
     bool SetPanelMirror(bool mirror_x, bool mirror_y);
     std::string GetCurrentEmotion() const;
     static bool IsSupportedEmotion(const std::string& emotion);
@@ -125,10 +128,9 @@ private:
     void SetFaceState(FaceState state);
     void AdvanceEyeAnimation();
     void AdvanceFaceLayout(int64_t now_us);
-    void AdvanceIdleScheduler(std::string& emotion);
+    void AdvanceSleepyYawn(const std::string& emotion);
     void AdvanceIdleMouthAnimation(bool idle_eligible);
     void CancelIdleScheduler(bool restart_session);
-    void ApplyIdleEmotion(const char* emotion);
     void UpdateEyes(uint8_t blink_amount, bool idle_eligible);
     void ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGeometry& geometry,
                          uint8_t blink_amount);
@@ -187,6 +189,7 @@ private:
     FaceState activity_state_ = FaceState::kIdle;
     bool status_dot_busy_ = false;
     bool emotion_active_ = false;
+    std::atomic_bool face_override_active_{false};
     uint16_t animation_phase_ = 0;
     uint16_t blink_countdown_ = 90;
     uint8_t blink_step_ = 0;
@@ -213,8 +216,7 @@ private:
     int64_t max_face_work_us_ = 0;
     int64_t max_text_work_us_ = 0;
     int64_t max_callback_duration_us_ = 0;
-    int64_t idle_session_started_ms_ = 0;
-    int64_t next_idle_emotion_ms_ = 0;
+    int64_t next_yawn_check_ms_ = 0;
     int64_t last_yawn_ms_ = 0;
     int64_t yawn_started_ms_ = 0;
     int64_t next_mouth_motion_ms_ = 0;
@@ -224,13 +226,10 @@ private:
     uint16_t idle_motion_phase_ = 0;
     int8_t idle_gaze_x_ = 0;
     int8_t idle_gaze_y_ = 0;
-    uint8_t idle_repeat_count_ = 0;
-    bool idle_override_active_ = false;
     bool yawn_active_ = false;
     bool mouth_motion_active_ = false;
     bool response_box_requested_ = false;
     bool preview_show_pending_ = false;
-    std::string last_idle_emotion_;
     std::string exiting_mouth_emotion_;
     bool wifi_connected_ = false;
     mutable std::mutex emotion_mutex_;
