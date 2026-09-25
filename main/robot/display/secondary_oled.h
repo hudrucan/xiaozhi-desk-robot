@@ -176,6 +176,7 @@ private:
     static int MeasureTextWidth(const std::string& text, FontSize font);
     static bool HasNonAscii(const std::string& text);
     static int MeasureNotoTextWidth(const std::string& text);
+    static int MeasureTemporaryTextWidth(const std::string& text);
     static FontSize SelectSingleLineFont(const std::string& text, int width, int height,
                                          FontSize preferred);
     static FontSize SelectTwoLineFont(const std::string& first, const std::string& second,
@@ -195,6 +196,7 @@ private:
     void DrawText(int x, int y, const std::string& text, FontSize font, int max_width);
     void DrawNotoText(int x, int y, const std::string& text, int max_width);
     void DrawNotoTextFitted(int x, int y, int width, int height, const std::string& text);
+    void DrawTemporaryText(int x, int y, const std::string& text);
     void DrawTextFitted(int x, int y, int width, int height, const std::string& text,
                         FontSize preferred = FontSize::kRegular, bool center_horizontal = true);
     void DrawTwoLinesFitted(int x, int y, int width, int height, const std::string& first,
@@ -242,6 +244,8 @@ private:
     EventType active_event_ = EventType::kNone;
     bool dirty_ = true;
     std::string temporary_text_;
+    int temporary_text_width_ = 0;
+    int64_t temporary_text_marquee_started_at_us_ = 0;
     mutable std::mutex mutex_;
     std::array<uint8_t, 128 * 32 / 8> framebuffer_ = {};
 };

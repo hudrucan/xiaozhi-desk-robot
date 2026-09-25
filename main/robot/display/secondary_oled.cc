@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <utility>
 
 #define TAG "SecondaryOled"
 
@@ -16,6 +15,10 @@ namespace {
 constexpr int kSsd1306SetContrast = 0x81;
 constexpr int64_t kGestureEventDurationUs = 1500000LL;
 constexpr int64_t kLowBatteryEventDurationUs = 2500000LL;
+constexpr int64_t kTemporaryTextInitialPauseUs = 600000LL;
+constexpr int64_t kTemporaryTextPixelsPerSecond = 25;
+constexpr int kTemporaryTextLoopGap = 20;
+constexpr int kTemporaryTextLineHeight = 20;
 
 using secondary_oled_layout::BuildLayout;
 using secondary_oled_layout::WidgetSize;
@@ -125,35 +128,6 @@ std::string TruncateUtf8Codepoints(const std::string& text, size_t maximum) {
         ++count;
     }
     return text.substr(0, offset);
-}
-
-std::pair<std::string, std::string> SplitForTwoLines(const std::string& text) {
-    if (text.empty()) {
-        return {"", ""};
-    }
-    if (text.size() <= 10 && text.find(' ') == std::string::npos) {
-        return {text, ""};
-    }
-    // Keep both halves balanced. A distant word boundary can make one half overflow a 42-pixel
-    // panel, so only use whitespace immediately adjacent to the midpoint.
-    const size_t middle = text.size() / 2;
-    size_t split = middle;
-    if (middle < text.size() && text[middle] == ' ') {
-        split = middle;
-    } else if (middle > 0 && text[middle - 1] == ' ') {
-        split = middle - 1;
-    }
-    // Never split a UTF-8 sequence if a compact text path receives multibyte input.
-    while (split > 0 && split < text.size() &&
-           (static_cast<uint8_t>(text[split]) & 0xc0) == 0x80) {
-        --split;
-    }
-    std::string first = text.substr(0, split);
-    std::string second = text.substr(split);
-    while (!second.empty() && second.front() == ' ') {
-        second.erase(second.begin());
-    }
-    return {std::move(first), std::move(second)};
 }
 
 }  // namespace
@@ -489,6 +463,10 @@ void SecondaryOled::Tick() {
     } else {
         next_page_at_us_ = 0;
     }
+    if (active_event_ == EventType::kTemporaryText && temporary_text_width_ > width_ &&
+        now_us >= temporary_text_marquee_started_at_us_ + kTemporaryTextInitialPauseUs) {
+        dirty_ = true;
+    }
     if (dirty_) {
         RenderLocked();
     }
@@ -496,19 +474,20 @@ void SecondaryOled::Tick() {
 
 void SecondaryOled::ShowTemporaryText(const std::string& text) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (temporary_text_ != text) {
-        temporary_text_ = text;
-        dirty_ = true;
-    }
+    temporary_text_ = text;
+    temporary_text_width_ = MeasureTemporaryTextWidth(text);
+    temporary_text_marquee_started_at_us_ = esp_timer_get_time();
+    dirty_ = true;
 }
 
 void SecondaryOled::ClearTemporaryText() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!temporary_text_.empty()) {
-        temporary_text_.clear();
-        next_page_at_us_ = 0;
-        dirty_ = true;
-    }
+    const bool had_text = !temporary_text_.empty();
+    temporary_text_.clear();
+    temporary_text_width_ = 0;
+    temporary_text_marquee_started_at_us_ = 0;
+    next_page_at_us_ = 0;
+    dirty_ = dirty_ || had_text;
 }
 
 void SecondaryOled::RenderDashboardLocked() {
@@ -543,7 +522,21 @@ void SecondaryOled::RenderDashboardLocked() {
 
 void SecondaryOled::RenderTemporaryTextLocked() {
     Clear();
-    DrawNotoTextFitted(2, 0, width_ - 4, height_, temporary_text_);
+    const int y = std::max(0, (height_ - kTemporaryTextLineHeight) / 2);
+    if (temporary_text_width_ <= width_) {
+        DrawTemporaryText(std::max(0, (width_ - temporary_text_width_) / 2), y, temporary_text_);
+        return;
+    }
+
+    const int64_t elapsed_us = std::max<int64_t>(
+        0, esp_timer_get_time() - temporary_text_marquee_started_at_us_ -
+               kTemporaryTextInitialPauseUs);
+    const int cycle_width = temporary_text_width_ + kTemporaryTextLoopGap;
+    const int offset = static_cast<int>(
+        (elapsed_us * kTemporaryTextPixelsPerSecond / 1000000LL) % cycle_width);
+    const int first_x = -offset;
+    DrawTemporaryText(first_x, y, temporary_text_);
+    DrawTemporaryText(first_x + cycle_width, y, temporary_text_);
 }
 
 void SecondaryOled::RenderEventLocked(EventType event) {

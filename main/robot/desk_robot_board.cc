@@ -164,7 +164,6 @@ private:
     std::atomic<float> motion_pitch_deg_{0.0f};
     std::atomic<float> motion_acceleration_g_{0.0f};
     std::atomic<float> motion_rotation_dps_{0.0f};
-    std::atomic_bool press_reaction_pending_{false};
 #endif
 #if defined(INA219_I2C_ADDRESS) || defined(MPU6050_I2C_ADDRESS)
     TaskHandle_t auxiliary_sensor_task_ = nullptr;
@@ -338,26 +337,37 @@ private:
                             std::lock_guard<std::mutex> lock(temporary_emotion_mutex_);
                             face_busy = !temporary_emotion_.empty();
                         }
-                        face_busy = face_busy || reaction_engine_.IsActive();
                         const auto decision = motion_reactions_.Evaluate(
                             sample, roll, pitch, can_animate, face_busy, now_us);
                         if (decision.type != MotionReactions::DecisionType::kNone) {
-                            bool accepted = decision.type == MotionReactions::DecisionType::kPress
-                                                ? QueuePressReaction()
-                                                : QueueTemporaryEmotion(
-                                                      decision.emotion, decision.duration_ms,
-                                                      EmotionSource::kMpuReaction);
-                            bool decision_complete =
-                                decision.type == MotionReactions::DecisionType::kEmotion || accepted;
-                            if (!accepted && decision.type == MotionReactions::DecisionType::kPress &&
-                                decision.emotion != nullptr) {
-                                accepted = QueueTemporaryEmotion(
-                                    decision.emotion, decision.duration_ms,
-                                    EmotionSource::kMpuReaction);
-                                decision_complete = true;
+                            const char* reaction = nullptr;
+                            if (decision.type == MotionReactions::DecisionType::kPress ||
+                                (decision.emotion != nullptr &&
+                                 std::strcmp(decision.emotion, "surprised") == 0)) {
+                                reaction = "startled";
+                            } else if (decision.emotion != nullptr &&
+                                       std::strcmp(decision.emotion, "shake") == 0) {
+                                reaction = "nope";
+                            } else if (decision.emotion != nullptr &&
+                                       std::strcmp(decision.emotion, "sleepy") == 0) {
+                                reaction = "sleepy";
                             }
-                            if (decision_complete) {
-                                motion_reactions_.CompleteDecision(accepted, now_us);
+
+                            if (reaction != nullptr) {
+                                reaction_engine_.Start(reaction, decision.duration_ms, "",
+                                                       ReactionEngine::Source::kMpu);
+                                // A priority rejection still consumes this physical gesture; it
+                                // must not retry on every 40 ms sensor sample.
+                                motion_reactions_.CompleteDecision(true, now_us);
+                            } else if (decision.emotion != nullptr) {
+                                const bool accepted =
+                                    !reaction_engine_.IsActive() &&
+                                    QueueTemporaryEmotion(decision.emotion, decision.duration_ms,
+                                                          EmotionSource::kMpuReaction);
+                                // Directional gestures remain face primitives, but never replace
+                                // a semantic reaction which currently owns the face.
+                                motion_reactions_.CompleteDecision(
+                                    accepted || reaction_engine_.IsActive(), now_us);
                             }
                         }
                     }
@@ -859,7 +869,8 @@ private:
             temporary_emotion_ = emotion;
         }
         Application::GetInstance().Schedule([this, emotion, source, generation]() {
-            if (temporary_emotion_generation_.load() == generation) {
+            if (temporary_emotion_generation_.load() == generation &&
+                (source != EmotionSource::kMpuReaction || !reaction_engine_.IsActive())) {
                 ApplyRobotEmotion(emotion, source);
             }
         });
@@ -1205,42 +1216,6 @@ private:
         });
         return true;
     }
-
-#ifdef MPU6050_I2C_ADDRESS
-    bool QueuePressReaction() {
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-        if (!cliff_sensor_.IsFloorSafe()) {
-            return false;
-        }
-#endif
-        if (press_reaction_pending_.exchange(true, std::memory_order_acq_rel)) {
-            return false;
-        }
-
-        const std::vector<MotorController::Movement> movements = {
-            {MotorController::Direction::kLeft, 90},
-            {MotorController::Direction::kRight, 130},
-            {MotorController::Direction::kLeft, 130},
-            {MotorController::Direction::kRight, 90},
-        };
-        Application::GetInstance().Schedule([this, movements]() {
-            const bool idle = Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
-            bool floor_safe = true;
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-            floor_safe = cliff_sensor_.IsFloorSafe();
-#endif
-            if (idle && floor_safe && !motor_activity_active_.load(std::memory_order_relaxed) &&
-                !reaction_engine_.IsActive()) {
-                QueueTemporaryEmotion("surprised", 1600, EmotionSource::kMpuReaction);
-                if (!motors_.PlaySequence(movements)) {
-                    ESP_LOGW(TAG, "Pressed reaction motor sequence was rejected");
-                }
-            }
-            press_reaction_pending_.store(false, std::memory_order_release);
-        });
-        return true;
-    }
-#endif
 
     void InitializeAudioSettings() {
         const int speaker_volume = robot_settings_.GetSpeakerVolume();

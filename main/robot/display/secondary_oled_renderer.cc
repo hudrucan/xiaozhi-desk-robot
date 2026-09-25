@@ -58,6 +58,8 @@ constexpr int kFallbackLineHeight = 28;
 constexpr int kFallbackBaseLine = 8;
 constexpr int kNotoScaleNumerator = 4;
 constexpr int kNotoScaleDenominator = 7;
+constexpr int kTemporaryTextScaleNumerator = 5;
+constexpr int kTemporaryTextScaleDenominator = 7;
 
 struct NotoGlyph {
     uint16_t advance = 0;
@@ -81,14 +83,16 @@ int ScaleRounded(int value, int numerator, int denominator) {
     return -((-value * numerator + denominator / 2) / denominator);
 }
 
-bool ResolveNotoGlyph(uint32_t codepoint, NotoGlyph& glyph) {
+bool ResolveNotoGlyph(uint32_t codepoint, NotoGlyph& glyph,
+                      int scale_numerator = kNotoScaleNumerator,
+                      int scale_denominator = kNotoScaleDenominator) {
     // The main LCD already links this 20px font. Read its immutable raw bitmap directly and
     // downscale to the OLED's 16px line box, avoiding another font asset or an LVGL draw buffer.
     lv_font_glyph_dsc_t descriptor = {};
     if (lv_font_get_glyph_dsc(&font_noto_sans_basic_20_4, &descriptor, codepoint, 0)) {
         descriptor.req_raw_bitmap = 1;
         glyph.advance = static_cast<uint16_t>(std::max(
-            1, ScaleRounded(descriptor.adv_w, kNotoScaleNumerator, kNotoScaleDenominator)));
+            1, ScaleRounded(descriptor.adv_w, scale_numerator, scale_denominator)));
         glyph.box_w = descriptor.box_w;
         glyph.box_h = descriptor.box_h;
         glyph.ofs_x = descriptor.ofs_x;
@@ -99,6 +103,8 @@ bool ResolveNotoGlyph(uint32_t codepoint, NotoGlyph& glyph) {
         glyph.bpp = 4;
         glyph.line_height = descriptor.resolved_font->line_height;
         glyph.base_line = descriptor.resolved_font->base_line;
+        glyph.scale_numerator = scale_numerator;
+        glyph.scale_denominator = scale_denominator;
         return glyph.box_w == 0 || glyph.box_h == 0 || glyph.bitmap != nullptr;
     }
 
@@ -108,7 +114,7 @@ bool ResolveNotoGlyph(uint32_t codepoint, NotoGlyph& glyph) {
     }
     const int source_advance = static_cast<int>((fallback.adv_w + 8) >> 4);
     glyph.advance = static_cast<uint16_t>(std::max(
-        1, ScaleRounded(source_advance, kNotoScaleNumerator, kNotoScaleDenominator)));
+        1, ScaleRounded(source_advance, scale_numerator, scale_denominator)));
     glyph.box_w = fallback.box_w;
     glyph.box_h = fallback.box_h;
     glyph.ofs_x = fallback.ofs_x;
@@ -117,8 +123,8 @@ bool ResolveNotoGlyph(uint32_t codepoint, NotoGlyph& glyph) {
     glyph.bpp = 4;
     glyph.line_height = kFallbackLineHeight;
     glyph.base_line = kFallbackBaseLine;
-    glyph.scale_numerator = kNotoScaleNumerator;
-    glyph.scale_denominator = kNotoScaleDenominator;
+    glyph.scale_numerator = scale_numerator;
+    glyph.scale_denominator = scale_denominator;
     return true;
 }
 
@@ -268,6 +274,22 @@ int SecondaryOled::MeasureNotoTextWidth(const std::string& text) {
         uint32_t codepoint = DecodeUtf8(text, offset);
         NotoGlyph glyph;
         if (!ResolveNotoGlyph(codepoint, glyph) && !ResolveNotoGlyph('?', glyph)) {
+            continue;
+        }
+        width += glyph.advance;
+    }
+    return width;
+}
+
+int SecondaryOled::MeasureTemporaryTextWidth(const std::string& text) {
+    int width = 0;
+    for (size_t offset = 0; offset < text.size();) {
+        const uint32_t codepoint = DecodeUtf8(text, offset);
+        NotoGlyph glyph;
+        if (!ResolveNotoGlyph(codepoint, glyph, kTemporaryTextScaleNumerator,
+                              kTemporaryTextScaleDenominator) &&
+            !ResolveNotoGlyph('?', glyph, kTemporaryTextScaleNumerator,
+                              kTemporaryTextScaleDenominator)) {
             continue;
         }
         width += glyph.advance;
@@ -427,6 +449,47 @@ void SecondaryOled::DrawNotoText(int x, int y, const std::string& text, int max_
                     glyph.box_w - 1, column * glyph.scale_denominator / glyph.scale_numerator);
                 if (NotoGlyphPixel(glyph, source_column, source_row)) {
                     SetPixel(output_x + column, y + output_top + row);
+                }
+            }
+        }
+        x += glyph.advance;
+    }
+}
+
+void SecondaryOled::DrawTemporaryText(int x, int y, const std::string& text) {
+    for (size_t offset = 0; offset < text.size();) {
+        const uint32_t codepoint = DecodeUtf8(text, offset);
+        NotoGlyph glyph;
+        if (!ResolveNotoGlyph(codepoint, glyph, kTemporaryTextScaleNumerator,
+                              kTemporaryTextScaleDenominator) &&
+            !ResolveNotoGlyph('?', glyph, kTemporaryTextScaleNumerator,
+                              kTemporaryTextScaleDenominator)) {
+            continue;
+        }
+
+        const int source_top = glyph.line_height - glyph.base_line - glyph.box_h - glyph.ofs_y;
+        const int output_top = ScaleRounded(source_top, glyph.scale_numerator,
+                                            glyph.scale_denominator);
+        const int output_x = x + ScaleRounded(glyph.ofs_x, glyph.scale_numerator,
+                                              glyph.scale_denominator);
+        const int output_width = std::max(
+            0, ScaleRounded(glyph.box_w, glyph.scale_numerator, glyph.scale_denominator));
+        const int output_height = std::max(
+            0, ScaleRounded(glyph.box_h, glyph.scale_numerator, glyph.scale_denominator));
+        if (output_x >= width_) {
+            break;
+        }
+        if (output_x + output_width > 0) {
+            for (int row = 0; row < output_height; ++row) {
+                const int source_row = std::min<int>(
+                    glyph.box_h - 1, row * glyph.scale_denominator / glyph.scale_numerator);
+                for (int column = 0; column < output_width; ++column) {
+                    const int source_column = std::min<int>(
+                        glyph.box_w - 1,
+                        column * glyph.scale_denominator / glyph.scale_numerator);
+                    if (NotoGlyphPixel(glyph, source_column, source_row)) {
+                        SetPixel(output_x + column, y + output_top + row);
+                    }
                 }
             }
         }
