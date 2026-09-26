@@ -54,6 +54,7 @@ function bindRangeControls() {
     ["screenBrightness", "screenValue", "screen_brightness", "%"],
     ["autoBrightnessMinimum", "autoBrightnessMinimumValue", "auto_brightness_minimum", "%"],
     ["autoBrightnessMaximum", "autoBrightnessMaximumValue", "auto_brightness_maximum", "%"],
+    ["deskModeDelay", "deskModeDelayValue", "desk_mode_delay", " s"],
     ["statusLightBrightness", "statusLightValue", "status_light_brightness", "%"],
     ["cliffThreshold", "cliffValue", "cliff_threshold", " mm"],
   ].forEach(([inputId, labelId, actionName, suffix]) => {
@@ -179,6 +180,10 @@ function bindRobotControls() {
     action("emotion_movement", { value: event.target.checked ? 1 : 0 });
   $("#autoBrightness").onchange = (event) =>
     action("auto_brightness", { value: event.target.checked ? 1 : 0 });
+  $("#deskMode").onchange = (event) =>
+    action("desk_mode", { value: event.target.checked ? 1 : 0 });
+  $("#deskMode24Hour").onchange = (event) =>
+    action("desk_mode_24_hour", { value: event.target.checked ? 1 : 0 });
   $("#microphoneMute").onchange = (event) =>
     action("microphone_mute", { value: event.target.checked ? 1 : 0 });
   bindMicrophoneProfileSelect();

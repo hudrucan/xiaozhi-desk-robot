@@ -259,6 +259,25 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = "Automatic brightness maximum " + std::to_string(safe_brightness) + "%";
         return true;
     }
+    if (action == "desk_mode") {
+        const bool enabled = value != 0;
+        controller_.SetDeskModeEnabled(enabled);
+        message = enabled ? "Desk mode enabled" : "Desk mode disabled";
+        return true;
+    }
+    if (action == "desk_mode_delay") {
+        const int safe_seconds = std::clamp(value, 10, 600);
+        controller_.SetDeskModeDelaySeconds(safe_seconds);
+        message = "Desk mode delay " + std::to_string(safe_seconds) + " s";
+        return true;
+    }
+    if (action == "desk_mode_24_hour") {
+        const bool use_24_hour = value != 0;
+        controller_.SetDeskModeUse24Hour(use_24_hour);
+        message = use_24_hour ? "Desk mode uses 24-hour time"
+                              : "Desk mode uses 12-hour time";
+        return true;
+    }
     if (action == "motor_speed") {
         const int safe_speed = std::clamp(value, MotorController::kMinSpeedPercent,
                                           MotorController::kMaxSpeedPercent);

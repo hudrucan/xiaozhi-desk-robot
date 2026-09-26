@@ -80,6 +80,8 @@ list(APPEND SOURCES
     "robot/behavior/reaction_engine.cc"
     "robot/control/robot_controller.cc"
     "robot/control/robot_settings.cc"
+    "robot/display/desk_mode_view.cc"
+    "robot/display/desk_mode_montserrat_52.cc"
     "robot/display/mochan_display.cc"
     "robot/display/mochan_face_renderer.cc"
     "robot/display/mochan_display_overlay.cc"

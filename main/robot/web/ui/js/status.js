@@ -44,7 +44,8 @@ function domainInterval(name) {
   if (name === "camera") return activeTab === "camera" ? 1000 : 2500;
   if (name === "audio") return 1000;
   if (name === "display") {
-    return statusCache.auto_brightness_enabled || statusCache.oled_auto_contrast_enabled
+    return statusCache.auto_brightness_enabled || statusCache.oled_auto_contrast_enabled ||
+      statusCache.desk_mode_enabled
       ? 1000
       : null;
   }
@@ -254,6 +255,22 @@ function renderDisplayStatus(status) {
     $("#autoBrightnessMaximumValue"), "%");
   $("#autoBrightnessMinimum").disabled = !status.auto_brightness_enabled;
   $("#autoBrightnessMaximum").disabled = !status.auto_brightness_enabled;
+  if (document.activeElement !== $("#deskMode")) {
+    $("#deskMode").checked = !!status.desk_mode_enabled;
+  }
+  setRange($("#deskModeDelay"), status.desk_mode_delay_seconds,
+    $("#deskModeDelayValue"), " s");
+  $("#deskModeDelay").disabled = !status.desk_mode_enabled;
+  if (document.activeElement !== $("#deskMode24Hour")) {
+    $("#deskMode24Hour").checked = !!status.desk_mode_use_24_hour;
+  }
+  $("#deskMode24Hour").disabled = !status.desk_mode_enabled;
+  $("#deskMode24Hour").parentElement.classList.toggle(
+    "disabled", !status.desk_mode_enabled,
+  );
+  $("#deskModeState").textContent = status.desk_mode_active
+    ? "Active on main display"
+    : "Idle clock presentation";
   setRange($("#statusLightBrightness"), status.status_light_brightness,
     $("#statusLightValue"), "%");
   if (Number.isFinite(status.oled_contrast)) {

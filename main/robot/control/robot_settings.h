@@ -33,4 +33,10 @@ public:
     void SetAutoBrightnessMinimum(int brightness) const;
     int GetAutoBrightnessMaximum() const;
     void SetAutoBrightnessMaximum(int brightness) const;
+    bool GetDeskModeEnabled() const;
+    void SetDeskModeEnabled(bool enabled) const;
+    int GetDeskModeDelaySeconds() const;
+    void SetDeskModeDelaySeconds(int seconds) const;
+    bool GetDeskModeUse24Hour() const;
+    void SetDeskModeUse24Hour(bool use_24_hour) const;
 };

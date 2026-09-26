@@ -53,6 +53,7 @@ public:
     bool Initialize(ReactionEngine& reaction_engine, Callbacks callbacks);
     void Tick(const Context& context, int64_t now_us);
     void NotifyInteraction(int64_t now_us);
+    int64_t GetIdleDurationMs(int64_t now_us) const;
 
 private:
     enum class IdleStage : uint8_t { kAwake, kRelaxed, kCurious, kPlayful, kSleepy };
@@ -139,7 +140,7 @@ private:
     bool PrepareSemanticReactionLocked(const char* name, int duration_ms, int64_t now_us,
                                        PendingActions& actions);
 
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     ReactionEngine* reaction_engine_ = nullptr;
     Callbacks callbacks_;
     bool initialized_ = false;

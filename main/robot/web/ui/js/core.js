@@ -88,6 +88,7 @@ function domainsForAction(name) {
     "motor_speed", "drive_duration"].includes(name)) return ["motors"];
   if (name === "cliff_threshold" || name === "motion_emotions") return ["sensors"];
   if (name.startsWith("oled_") || name.startsWith("auto_brightness") ||
+    name.startsWith("desk_mode") ||
     ["display_flip", "screen_brightness",
     "status_light_brightness", "lights_toggle"].includes(name)) return ["display"];
   if (["speaker_volume", "microphone_profile", "microphone_capture_trim",

@@ -10,6 +10,8 @@
 #include <mutex>
 #include <string>
 
+class DeskModeView;
+
 class MochanDisplay : public SpiLcdDisplay {
 public:
     enum class AmbientActivity : uint8_t {
@@ -36,6 +38,11 @@ public:
     void SetMicrophoneMuted(bool muted) override;
     void SetWifiConnected(bool connected);
     void SetBatteryStatus(int percent, float voltage_v, bool charging);
+    void SetDeskModeActive(bool active);
+    bool IsDeskModeActive() const;
+    void SetDeskModeUse24Hour(bool use_24_hour);
+    void SetDeskModeEnvironment(bool temperature_valid, float temperature_c,
+                                bool humidity_valid, float humidity_percent);
     void SetFaceOverrideActive(bool active);
     void RestoreActivityFace();
     bool SetPanelMirror(bool mirror_x, bool mirror_y);
@@ -223,8 +230,11 @@ private:
     void FinishTyping();
     void ResetTyping();
     void RenderTypingText();
+    bool CanShowDeskModeLocked() const;
+    void HideDeskModeLocked();
 
     lv_obj_t* face_ = nullptr;
+    std::unique_ptr<DeskModeView> desk_mode_;
     lv_obj_t* left_eye_ = nullptr;
     lv_obj_t* right_eye_ = nullptr;
     lv_obj_t* left_eyelid_ = nullptr;
@@ -264,6 +274,8 @@ private:
         AmbientGazePersonality::kNeutral};
     bool status_dot_busy_ = false;
     bool emotion_active_ = false;
+    std::atomic_bool desk_mode_active_{false};
+    std::atomic_bool desk_mode_use_24_hour_{true};
     std::atomic_bool face_override_active_{false};
     uint16_t animation_phase_ = 0;
     uint16_t blink_countdown_ = 90;

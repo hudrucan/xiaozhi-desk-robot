@@ -1,5 +1,6 @@
 #include "mochan_display.h"
 
+#include "desk_mode_view.h"
 #include "display/vietnamese_glyph_fallback.h"
 #include "display/lvgl_display/lvgl_theme.h"
 #include "src/misc/cache/instance/lv_image_cache.h"
@@ -11,6 +12,7 @@
 #include <material_symbols.h>
 #include <algorithm>
 #include <cstdlib>
+#include <ctime>
 
 namespace {
 const lv_color_t kFaceBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
@@ -282,10 +284,14 @@ void MochanDisplay::SetupUI() {
         lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
     }
 
+    auto* initial_theme = static_cast<LvglTheme*>(current_theme_);
+    desk_mode_ = std::make_unique<DeskModeView>();
+    desk_mode_->Setup(container_, height_);
+    desk_mode_->SetUse24Hour(
+        desk_mode_use_24_hour_.load(std::memory_order_acquire));
     wifi_icon_ = lv_label_create(container_);
     lv_label_set_text(wifi_icon_, MATERIAL_SYMBOLS_WIFI_OFF);
     lv_obj_set_style_text_color(wifi_icon_, kSpinnerTrack, 0);
-    auto* initial_theme = static_cast<LvglTheme*>(current_theme_);
     if (initial_theme != nullptr && initial_theme->icon_font() != nullptr) {
         lv_obj_set_style_text_font(wifi_icon_, initial_theme->icon_font()->font(), 0);
     }
@@ -419,6 +425,71 @@ void MochanDisplay::SetFaceState(FaceState state) {
     UpdateEyes(0, IsIdleEligible(emotion));
 }
 
+bool MochanDisplay::CanShowDeskModeLocked() const {
+    return desk_mode_ != nullptr && splash_ == nullptr &&
+           activity_state_ == FaceState::kIdle && !emotion_active_ &&
+           !face_override_active_.load(std::memory_order_acquire) &&
+           !response_box_requested_ && response_box_progress_ == 0 &&
+           (notification_ == nullptr || lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) &&
+           (camera_image_ == nullptr || lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN));
+}
+
+void MochanDisplay::HideDeskModeLocked() {
+    if (!desk_mode_active_.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    desk_mode_->Hide();
+    lv_obj_remove_flag(face_, LV_OBJ_FLAG_HIDDEN);
+    if (eye_timer_ != nullptr) {
+        lv_timer_resume(eye_timer_);
+    }
+    ApplyRestingFaceLocked();
+}
+
+void MochanDisplay::SetDeskModeActive(bool active) {
+    DisplayLockGuard lock(this);
+    if (!active || !CanShowDeskModeLocked()) {
+        HideDeskModeLocked();
+        return;
+    }
+    desk_mode_->UpdateClock(time(nullptr));
+    if (desk_mode_active_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    FreezeMouthForExit();
+    CancelAmbientAnimations();
+    lv_obj_add_flag(face_, LV_OBJ_FLAG_HIDDEN);
+    desk_mode_->Show();
+    if (eye_timer_ != nullptr) {
+        lv_timer_pause(eye_timer_);
+    }
+}
+
+bool MochanDisplay::IsDeskModeActive() const {
+    return desk_mode_active_.load(std::memory_order_acquire);
+}
+
+void MochanDisplay::SetDeskModeUse24Hour(bool use_24_hour) {
+    desk_mode_use_24_hour_.store(use_24_hour, std::memory_order_release);
+    DisplayLockGuard lock(this);
+    if (desk_mode_ != nullptr) {
+        desk_mode_->SetUse24Hour(use_24_hour);
+    }
+}
+
+void MochanDisplay::SetDeskModeEnvironment(bool temperature_valid, float temperature_c,
+                                           bool humidity_valid, float humidity_percent) {
+    DisplayLockGuard lock(this);
+    if (desk_mode_ == nullptr) {
+        return;
+    }
+    desk_mode_->SetEnvironment(temperature_valid, temperature_c, humidity_valid,
+                               humidity_percent);
+    if (desk_mode_active_.load(std::memory_order_acquire)) {
+        desk_mode_->UpdateClock(time(nullptr));
+    }
+}
+
 void MochanDisplay::UpdateStatusDot() {
     if (status_dot_ == nullptr) {
         return;
@@ -441,6 +512,7 @@ void MochanDisplay::UpdateStatusDot() {
 }
 
 void MochanDisplay::ShowResponseBox() {
+    HideDeskModeLocked();
     FreezeMouthForExit();
     CancelAmbientAnimations();
     response_box_requested_ = true;

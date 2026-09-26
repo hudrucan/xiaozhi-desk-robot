@@ -1,6 +1,7 @@
 #include "mochan_display.h"
 
 #include "application.h"
+#include "desk_mode_view.h"
 #include "assets/lang_config.h"
 #include "display/lvgl_display/lvgl_theme.h"
 
@@ -240,6 +241,9 @@ void MochanDisplay::SetStatus(const char* status) {
     ambient_activity_.store(ambient_activity, std::memory_order_release);
 
     DisplayLockGuard lock(this);
+    if (next_activity != FaceState::kIdle || status_dot_busy) {
+        HideDeskModeLocked();
+    }
     activity_state_ = next_activity;
     status_dot_busy_ = status_dot_busy;
     if (activity_state_ != FaceState::kSpeaking) {
@@ -268,10 +272,15 @@ void MochanDisplay::SetStatus(const char* status) {
 
 void MochanDisplay::SetFaceOverrideActive(bool active) {
     face_override_active_.store(active, std::memory_order_release);
+    if (active) {
+        DisplayLockGuard lock(this);
+        HideDeskModeLocked();
+    }
 }
 
 void MochanDisplay::RestoreActivityFace() {
     DisplayLockGuard lock(this);
+    HideDeskModeLocked();
     FreezeMouthForExit();
     emotion_active_ = false;
     CancelAmbientAnimations();
@@ -591,6 +600,7 @@ void MochanDisplay::ShowNotification(const char* notification, int duration_ms) 
         return;
     }
     DisplayLockGuard lock(this);
+    HideDeskModeLocked();
     FreezeMouthForExit();
     CancelAmbientAnimations();
     lv_label_set_text(notification_, notification);
@@ -614,6 +624,7 @@ void MochanDisplay::SetEmotion(const char* emotion) {
     }
     const std::string requested(emotion);
     DisplayLockGuard lock(this);
+    HideDeskModeLocked();
     CancelAmbientAnimations();
     FaceState state = FaceState::kIdle;
     if (!ResolveEmotionFaceState(requested, state)) {
@@ -659,6 +670,7 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     content = visible_text.c_str();
     DisplayLockGuard lock(this);
     if (content[0] != '\0') {
+        HideDeskModeLocked();
         FreezeMouthForExit();
     }
     CancelAmbientAnimations();
@@ -692,6 +704,7 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     }
     DisplayLockGuard lock(this);
     if (image != nullptr) {
+        HideDeskModeLocked();
         FreezeMouthForExit();
     }
     CancelAmbientAnimations();
@@ -755,6 +768,7 @@ void MochanDisplay::ShowBootSplash() {
         return;
     }
     DisplayLockGuard lock(this);
+    HideDeskModeLocked();
     CancelAmbientAnimations();
     SetFaceLayoutTarget(0, esp_timer_get_time());
     splash_ = lv_obj_create(lv_layer_top());

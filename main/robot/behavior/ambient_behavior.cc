@@ -915,3 +915,12 @@ void AmbientBehavior::NotifyInteraction(int64_t now_us) {
     }
     ExecuteActions(std::move(actions));
 }
+
+int64_t AmbientBehavior::GetIdleDurationMs(int64_t now_us) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || !idle_session_active_ || idle_started_us_ <= 0 ||
+        now_us <= idle_started_us_) {
+        return 0;
+    }
+    return (now_us - idle_started_us_) / kUsPerMs;
+}

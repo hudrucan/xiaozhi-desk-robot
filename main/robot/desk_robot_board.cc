@@ -57,6 +57,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -120,6 +121,9 @@ private:
     std::atomic_int speaker_volume_{70};
     std::atomic_int status_light_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
+    std::atomic_bool desk_mode_enabled_{true};
+    std::atomic_int desk_mode_delay_seconds_{180};
+    std::atomic_bool desk_mode_use_24_hour_{true};
     std::atomic_bool motor_activity_active_{false};
     std::atomic_int drive_duration_ms_{kDefaultDriveDurationMs};
     std::atomic_uint32_t live_drive_command_{100u | (100u << 8)};
@@ -138,6 +142,7 @@ private:
     std::atomic_uint32_t ambient_motion_generation_{0};
     std::atomic_int64_t ambient_manual_control_until_us_{0};
     std::atomic_int64_t ambient_tool_active_until_us_{0};
+    int64_t last_desk_mode_update_us_ = 0;
     int64_t last_emotion_movement_us_ = 0;
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
@@ -253,6 +258,9 @@ private:
                 std::memory_order_release);
         }
         ambient_behavior_.NotifyInteraction(now_us);
+        if (display_ != nullptr) {
+            display_->SetDeskModeActive(false);
+        }
     }
 
     AmbientBehavior::Activity ResolveAmbientActivity(DeviceState state) const {
@@ -317,6 +325,51 @@ private:
         context.light_level = environment_controller_.GetStatus().light_level;
         context.gaze_personality = display_->GetAmbientGazePersonality();
         ambient_behavior_.Tick(context, now_us);
+    }
+
+    void TickDeskMode(DeviceState state, int64_t now_us) {
+        if (last_desk_mode_update_us_ != 0 &&
+            now_us - last_desk_mode_update_us_ < 1000 * 1000LL) {
+            return;
+        }
+        last_desk_mode_update_us_ = now_us;
+
+        const EnvironmentStatus environment = environment_controller_.GetStatus();
+        display_->SetDeskModeEnvironment(environment.temperature_valid,
+                                         environment.temperature_c,
+                                         environment.humidity_valid,
+                                         environment.humidity_percent);
+
+        const time_t wall_time = time(nullptr);
+        struct tm local_time = {};
+        const bool wall_clock_valid =
+            wall_time > 0 && localtime_r(&wall_time, &local_time) != nullptr &&
+            local_time.tm_year >= 2025 - 1900;
+        bool gyro_busy = false;
+#ifdef MPU6050_I2C_ADDRESS
+        const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
+        gyro_busy = gyro.pending || gyro.active;
+#endif
+        const bool camera_active =
+            camera_ != nullptr &&
+            (camera_->IsMcpOperationActive() ||
+             camera_->preview_mode() != DeskRobotCamera::PreviewMode::kOff);
+        const bool controls_active =
+            now_us < ambient_tool_active_until_us_.load(std::memory_order_acquire) ||
+            now_us < ambient_manual_control_until_us_.load(std::memory_order_acquire) ||
+            motors_.IsActive() || motor_activity_active_.load(std::memory_order_relaxed) ||
+            gyro_busy;
+        const int64_t idle_ms = ambient_behavior_.GetIdleDurationMs(now_us);
+        const int64_t delay_ms =
+            static_cast<int64_t>(desk_mode_delay_seconds_.load(std::memory_order_relaxed)) *
+            1000;
+        const bool eligible = desk_mode_enabled_.load(std::memory_order_relaxed) &&
+                              wall_clock_valid && state == kDeviceStateIdle &&
+                              display_->GetAmbientActivity() ==
+                                  MochanDisplay::AmbientActivity::kIdle &&
+                              idle_ms >= delay_ms && !reaction_engine_.IsActive() &&
+                              !camera_active && !controls_active;
+        display_->SetDeskModeActive(eligible);
     }
 
 #ifdef MPU6050_I2C_ADDRESS
@@ -499,6 +552,7 @@ private:
             const DeviceState state = Application::GetInstance().GetDeviceState();
             proactive_events_.Tick(now_us, IsConversationActive());
             TickAmbientBehavior(state, now_us);
+            TickDeskMode(state, now_us);
             vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_SAMPLE_PERIOD_MS));
         }
     }
@@ -679,6 +733,10 @@ private:
             new MochanDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X,
                               DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X ^ display_flipped,
                               DISPLAY_MIRROR_Y ^ display_flipped, DISPLAY_SWAP_XY);
+        desk_mode_enabled_.store(robot_settings_.GetDeskModeEnabled());
+        desk_mode_delay_seconds_.store(robot_settings_.GetDeskModeDelaySeconds());
+        desk_mode_use_24_hour_.store(robot_settings_.GetDeskModeUse24Hour());
+        display_->SetDeskModeUse24Hour(desk_mode_use_24_hour_.load());
 #if defined(DISPLAY_PANEL_GAP_X) && defined(DISPLAY_PANEL_GAP_Y)
         // A 240x240 ST7789 panel addresses a 240x320 controller RAM. After swapping X/Y,
         // shift the panel window onto the visible 240-pixel area instead of clipping 80 pixels.
@@ -1932,6 +1990,30 @@ private:
         });
     }
 
+    void QueueDeskModeEnabled(bool enabled) {
+        desk_mode_enabled_.store(enabled, std::memory_order_release);
+        NotifyAmbientInteraction();
+        Application::GetInstance().Schedule(
+            [this, enabled]() { robot_settings_.SetDeskModeEnabled(enabled); });
+    }
+
+    void QueueDeskModeDelaySeconds(int seconds) {
+        const int safe_seconds = std::clamp(seconds, 10, 600);
+        desk_mode_delay_seconds_.store(safe_seconds, std::memory_order_release);
+        NotifyAmbientInteraction();
+        Application::GetInstance().Schedule([this, safe_seconds]() {
+            robot_settings_.SetDeskModeDelaySeconds(safe_seconds);
+        });
+    }
+
+    void QueueDeskModeUse24Hour(bool use_24_hour) {
+        desk_mode_use_24_hour_.store(use_24_hour, std::memory_order_release);
+        Application::GetInstance().Schedule([this, use_24_hour]() {
+            display_->SetDeskModeUse24Hour(use_24_hour);
+            robot_settings_.SetDeskModeUse24Hour(use_24_hour);
+        });
+    }
+
     void QueueStatusLightBrightness(int brightness) {
         const int safe_brightness = std::clamp(brightness, 0, 100);
         status_light_brightness_.store(safe_brightness);
@@ -2182,7 +2264,10 @@ private:
     }
 
     bool ToggleCameraFlip() override { return QueueCameraFlip(); }
-    bool ToggleDisplayFlip() override { return QueueDisplayFlip(); }
+    bool ToggleDisplayFlip() override {
+        NotifyAmbientInteraction();
+        return QueueDisplayFlip();
+    }
 
     bool SendSnapshot(const SnapshotSender& sender) override {
         return Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
@@ -2295,15 +2380,28 @@ private:
         Application::GetInstance().Schedule(
             [this, muted]() { robot_settings_.SetMicrophoneMuted(muted); });
     }
-    void SetScreenBrightness(int brightness) override { QueueScreenBrightness(brightness); }
+    void SetScreenBrightness(int brightness) override {
+        NotifyAmbientInteraction();
+        QueueScreenBrightness(brightness);
+    }
     void SetAutoBrightnessEnabled(bool enabled) override {
+        NotifyAmbientInteraction();
         QueueAutoBrightnessEnabled(enabled);
     }
     void SetAutoBrightnessMinimum(int brightness) override {
+        NotifyAmbientInteraction();
         QueueAutoBrightnessMinimum(brightness);
     }
     void SetAutoBrightnessMaximum(int brightness) override {
+        NotifyAmbientInteraction();
         QueueAutoBrightnessMaximum(brightness);
+    }
+    void SetDeskModeEnabled(bool enabled) override { QueueDeskModeEnabled(enabled); }
+    void SetDeskModeDelaySeconds(int seconds) override {
+        QueueDeskModeDelaySeconds(seconds);
+    }
+    void SetDeskModeUse24Hour(bool use_24_hour) override {
+        QueueDeskModeUse24Hour(use_24_hour);
     }
     void SetMotorSpeed(int speed) override { QueueMotorSpeed(speed); }
     void SetDriveDuration(int duration_ms) override { QueueDriveDuration(duration_ms); }
@@ -2387,6 +2485,12 @@ private:
         status.auto_brightness_enabled = auto_brightness.enabled;
         status.auto_brightness_minimum = auto_brightness.minimum_percent;
         status.auto_brightness_maximum = auto_brightness.maximum_percent;
+        status.desk_mode_enabled = desk_mode_enabled_.load(std::memory_order_acquire);
+        status.desk_mode_delay_seconds =
+            desk_mode_delay_seconds_.load(std::memory_order_acquire);
+        status.desk_mode_use_24_hour =
+            desk_mode_use_24_hour_.load(std::memory_order_acquire);
+        status.desk_mode_active = display_->IsDeskModeActive();
         status.status_light_brightness = status_light_brightness_.load();
         status.live_camera_available = live_camera_task_ != nullptr;
         status.live_camera = camera_ != nullptr && camera_->IsMochanPreviewActive();

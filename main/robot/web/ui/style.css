@@ -902,6 +902,10 @@
         border: 4px solid #392b18;
         box-shadow: 0 2px 8px #000;
       }
+      input[type="range"]:disabled {
+        opacity: 0.38;
+        cursor: not-allowed;
+      }
       .motor-state {
         display: flex;
         justify-content: space-between;
@@ -1864,6 +1868,10 @@
         height: 15px;
         margin: 0;
         accent-color: var(--brass);
+      }
+      .toggle.disabled {
+        opacity: 0.38;
+        cursor: not-allowed;
       }
       .oled-designer {
         grid-column: 1/-1;

@@ -674,6 +674,32 @@
                 value="85"
               /><span class="audio-value" id="autoBrightnessMaximumValue">85%</span>
             </div>
+            <div class="audio-row microphone-toggle-row">
+              <span class="audio-name"
+                ><b>Desk mode</b><small id="deskModeState">Idle clock presentation</small></span
+              ><label class="toggle"
+                ><input id="deskMode" type="checkbox" checked /><span>Enabled</span></label
+              >
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"
+                ><b>Enter after</b><small>Continuous idle time</small></span
+              ><input
+                id="deskModeDelay"
+                type="range"
+                min="10"
+                max="600"
+                step="10"
+                value="180"
+              /><span class="audio-value" id="deskModeDelayValue">180 s</span>
+            </div>
+            <div class="audio-row microphone-toggle-row">
+              <span class="audio-name"
+                ><b>24-hour clock</b><small>Disable for AM / PM</small></span
+              ><label class="toggle"
+                ><input id="deskMode24Hour" type="checkbox" checked /><span>24h</span></label
+              >
+            </div>
             <div class="audio-row">
               <span class="audio-name"
                 ><b>Status light</b><small>Edison LED · GPIO48</small></span

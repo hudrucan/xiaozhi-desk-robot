@@ -58,6 +58,9 @@ public:
     virtual void SetAutoBrightnessEnabled(bool enabled) = 0;
     virtual void SetAutoBrightnessMinimum(int brightness) = 0;
     virtual void SetAutoBrightnessMaximum(int brightness) = 0;
+    virtual void SetDeskModeEnabled(bool enabled) = 0;
+    virtual void SetDeskModeDelaySeconds(int seconds) = 0;
+    virtual void SetDeskModeUse24Hour(bool use_24_hour) = 0;
     virtual void SetMotorSpeed(int speed) = 0;
     virtual void SetDriveDuration(int duration_ms) = 0;
     virtual void SetEmotionMovementEnabled(bool enabled) = 0;

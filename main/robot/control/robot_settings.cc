@@ -173,3 +173,36 @@ void RobotSettings::SetAutoBrightnessMaximum(int brightness) const {
     Settings settings("desk_robot", true);
     settings.SetInt("auto_bmax", std::clamp(brightness, 10, 100));
 }
+
+bool RobotSettings::GetDeskModeEnabled() const {
+    Settings settings("desk_robot", false);
+    return settings.GetBool("desk_mode", true);
+}
+
+void RobotSettings::SetDeskModeEnabled(bool enabled) const {
+    Settings settings("desk_robot", true);
+    settings.SetBool("desk_mode", enabled);
+}
+
+int RobotSettings::GetDeskModeDelaySeconds() const {
+    Settings settings("desk_robot", false);
+    const int legacy_minutes =
+        std::clamp(static_cast<int>(settings.GetInt("desk_delay", 3)), 1, 10);
+    return std::clamp(
+        static_cast<int>(settings.GetInt("desk_delay_s", legacy_minutes * 60)), 10, 600);
+}
+
+void RobotSettings::SetDeskModeDelaySeconds(int seconds) const {
+    Settings settings("desk_robot", true);
+    settings.SetInt("desk_delay_s", std::clamp(seconds, 10, 600));
+}
+
+bool RobotSettings::GetDeskModeUse24Hour() const {
+    Settings settings("desk_robot", false);
+    return settings.GetBool("desk_24h", true);
+}
+
+void RobotSettings::SetDeskModeUse24Hour(bool use_24_hour) const {
+    Settings settings("desk_robot", true);
+    settings.SetBool("desk_24h", use_24_hour);
+}

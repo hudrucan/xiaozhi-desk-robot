@@ -19,6 +19,12 @@ cJSON* RobotWebStatus::CreateDisplay() {
     cJSON_AddBoolToObject(root, "auto_brightness_enabled", status.auto_brightness_enabled);
     cJSON_AddNumberToObject(root, "auto_brightness_minimum", status.auto_brightness_minimum);
     cJSON_AddNumberToObject(root, "auto_brightness_maximum", status.auto_brightness_maximum);
+    cJSON_AddBoolToObject(root, "desk_mode_enabled", status.desk_mode_enabled);
+    cJSON_AddNumberToObject(root, "desk_mode_delay_seconds",
+                            status.desk_mode_delay_seconds);
+    cJSON_AddBoolToObject(root, "desk_mode_use_24_hour",
+                          status.desk_mode_use_24_hour);
+    cJSON_AddBoolToObject(root, "desk_mode_active", status.desk_mode_active);
     cJSON_AddNumberToObject(root, "status_light_brightness", status.status_light_brightness);
 #ifdef SECONDARY_OLED_I2C_ADDRESS
     cJSON_AddBoolToObject(root, "oled_available", status.oled_available);

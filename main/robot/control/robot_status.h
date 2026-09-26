@@ -32,6 +32,10 @@ struct RobotStatus {
     bool auto_brightness_enabled = false;
     int auto_brightness_minimum = 15;
     int auto_brightness_maximum = 85;
+    bool desk_mode_enabled = true;
+    int desk_mode_delay_seconds = 180;
+    bool desk_mode_use_24_hour = true;
+    bool desk_mode_active = false;
     int status_light_brightness = 0;
     bool live_camera_available = false;
     bool live_camera = false;
