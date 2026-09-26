@@ -13,80 +13,52 @@
 namespace {
 
 constexpr int kEyeLayoutOffsetY = 10;
-constexpr int kMouthEyeCenterGap = 65;
-constexpr int kSurprisedMouthExtraGap = 10;
 constexpr char kTag[] = "MochanDisplay";
-
-struct MouthPoint {
-    int8_t x;
-    int8_t y;
-};
 
 struct MouthGeometry {
     const char* emotion;
-    int x;
-    int y;
     int width;
     int height;
+    float top_curve;
+    float bottom_curve;
+    float slope;
+    int gap;
     int idle_eye_offset_y;
     int base_scale_y;
     int blink_scale_y;
     int idle_open_scale_y;
-    const MouthPoint* points;
-    size_t point_count;
 };
 
-constexpr MouthPoint kNeutralMouth[] = {
-    // Keep the eyes' full rounded-block silhouette, with a relaxed two-pixel
-    // dip at the lip and a soft lower contour instead of a rigid flat bar.
-    {12, 0}, {22, 1}, {32, 2}, {44, 2}, {54, 1}, {64, 0},
-    {69, 1}, {73, 4}, {75, 8}, {76, 13}, {75, 18}, {73, 22},
-    {69, 25}, {63, 27}, {54, 29}, {44, 30}, {32, 30}, {22, 29},
-    {13, 27}, {7, 25}, {3, 22}, {1, 18}, {0, 13}, {1, 8},
-    {3, 4}, {7, 1},
-};
-constexpr MouthPoint kHappyMouth[] = {
-    // A full, softly opened smile: rounded cheeks instead of sharp raised
-    // tips, and a shallow upper curve instead of a thin crescent/grin.
-    {10, 3}, {20, 5}, {32, 7}, {42, 8}, {52, 7}, {64, 5}, {74, 3},
-    {80, 4}, {83, 8}, {84, 13}, {82, 19}, {76, 25}, {67, 30},
-    {55, 33}, {42, 34}, {29, 33}, {17, 30}, {8, 25}, {2, 19},
-    {0, 13}, {1, 8}, {4, 4},
-};
-constexpr MouthPoint kBoredMouth[] = {
-    {9, 4}, {21, 6}, {34, 7}, {48, 6}, {62, 3}, {73, 1},
-    {78, 2}, {82, 6}, {84, 12}, {83, 18}, {79, 23}, {72, 26},
-    {59, 28}, {45, 30}, {30, 30}, {17, 28}, {8, 25}, {3, 21},
-    {0, 16}, {0, 11}, {3, 6},
-};
-constexpr MouthPoint kSleepyMouth[] = {
-    {24, 1}, {36, 0}, {48, 1}, {59, 4}, {67, 9}, {71, 14},
-    {72, 19}, {69, 25}, {62, 30}, {50, 33}, {36, 34}, {22, 33},
-    {10, 30}, {3, 25}, {0, 19}, {1, 14}, {5, 9}, {13, 4},
-};
-constexpr MouthPoint kSurprisedMouth[] = {
-    {17, 4},  {26, 2},  {34, 1},  {42, 1},  {49, 3},  {56, 6},  {61, 9},  {65, 14},
-    {67, 20}, {69, 28}, {69, 35}, {67, 41}, {63, 47}, {58, 51}, {52, 54}, {45, 56},
-    {36, 56}, {27, 55}, {19, 54}, {13, 50}, {7, 46},  {3, 41},  {1, 35},  {0, 29},
-    {1, 22},  {3, 16},  {6, 11},  {11, 7},  {17, 4},
-};
-constexpr MouthPoint kAngryMouth[] = {
-    {6, 14},  {14, 10}, {23, 6},  {32, 4},  {40, 2},  {44, 1},  {49, 1},  {53, 2},
-    {57, 3},  {65, 5},  {72, 8},  {79, 11}, {86, 15}, {89, 17}, {91, 20}, {92, 23},
-    {92, 27}, {92, 30}, {90, 31}, {88, 31}, {85, 30}, {75, 26}, {66, 23}, {57, 22},
-    {48, 21}, {39, 21}, {29, 23}, {19, 26}, {8, 30},  {4, 31},  {2, 31},  {0, 30},
-    {0, 27},  {0, 23},  {2, 20},  {3, 17},  {6, 14},
-};
+constexpr std::array<MouthGeometry, 24> kMouthGeometries = {{
+    // Base expressions
+    {"neutral", 72, 24, 2.0f, 2.0f, 0.0f, 74, 20, 256, -88, 24},
+    {"happy", 80, 20, 2.5f, 12.0f, 0.0f, 64, 25, 256, -80, 24},
+    {"bored", 76, 22, 0.0f, 0.0f, -1.5f, 72, 16, 256, -88, 32},
+    {"sleepy", 56, 28, -6.0f, 6.0f, 0.0f, 70, 14, 256, -88, 32},
+    {"surprised", 54, 38, -3.0f, 10.0f, 0.0f, 78, 17, 256, -96, 64},
+    {"angry", 78, 24, -10.0f, -6.0f, 0.0f, 74, 17, 256, -96, 72},
+    {"sad", 68, 20, -6.0f, -4.0f, 0.0f, 66, 23, 256, -80, 24},
+    {"crying", 62, 28, -7.5f, 6.0f, 0.0f, 68, 20, 256, -88, 32},
 
-constexpr std::array<MouthGeometry, 6> kMouthGeometries = {{
-    {"neutral", 82, 124, 76, 30, 15, 256, 0, 24, kNeutralMouth, std::size(kNeutralMouth)},
-    {"happy", 78, 120, 84, 34, 13, 256, 0, 24, kHappyMouth, std::size(kHappyMouth)},
-    {"bored", 78, 120, 84, 30, 14, 256, -12, 32, kBoredMouth, std::size(kBoredMouth)},
-    {"sleepy", 84, 120, 72, 34, -2, 256, 0, 32, kSleepyMouth, std::size(kSleepyMouth)},
-    // With the taller surprised eyes/mouth and extra gap, +12 centers their
-    // combined resting bounds at y=120 on the 240px screen.
-    {"surprised", 85, 116, 70, 56, 12, 256, -14, 64, kSurprisedMouth, std::size(kSurprisedMouth)},
-    {"angry", 74, 121, 93, 32, 13, 256, -24, 72, kAngryMouth, std::size(kAngryMouth)},
+    // Extended emotional expressions
+    {"laughing", 84, 36, 4.0f, 20.0f, 0.0f, 62, 19, 256, -96, 64},
+    {"loving", 54, 20, 2.0f, 9.0f, 0.0f, 62, 25, 256, -80, 24},
+    {"winking", 74, 22, 1.5f, 8.0f, 3.5f, 64, 22, 256, -80, 24},
+    {"kissy", 36, 28, -2.0f, 3.0f, 0.0f, 62, 19, 256, -70, 16},
+    {"shocked", 52, 48, -4.0f, 12.0f, 0.0f, 76, 17, 256, -96, 72},
+    {"embarrassed", 56, 16, -2.0f, 1.0f, 2.0f, 64, 22, 256, -80, 24},
+    {"delicious", 74, 26, 2.5f, 14.0f, 0.0f, 64, 21, 256, -80, 32},
+    {"confident", 72, 22, 1.0f, 6.0f, 3.0f, 66, 21, 256, -80, 24},
+    {"cool", 66, 16, 0.0f, 2.0f, 2.0f, 68, 19, 256, -80, 24},
+    {"relaxed", 68, 18, 1.5f, 5.0f, 0.0f, 68, 20, 256, -80, 24},
+    {"confused", 58, 20, -2.0f, 2.0f, 3.5f, 66, 22, 256, -80, 24},
+    {"suspicious", 64, 16, -1.0f, -1.0f, -1.5f, 68, 20, 256, -80, 24},
+
+    // Additional expressions matching control panel
+    {"funny", 68, 26, -3.0f, 6.0f, -4.0f, 68, 21, 256, -80, 24},
+    {"silly", 70, 28, -2.0f, 12.0f, -4.0f, 66, 21, 256, -80, 32},
+    {"thinking", 52, 18, 1.0f, 0.0f, 3.0f, 66, 22, 256, -70, 16},
+    {"shake", 66, 22, 0.0f, 4.0f, 0.0f, 70, 20, 256, -80, 24},
 }};
 
 const MouthGeometry* FindMouthGeometry(const std::string& emotion) {
@@ -95,27 +67,105 @@ const MouthGeometry* FindMouthGeometry(const std::string& emotion) {
     return found == kMouthGeometries.end() ? nullptr : &*found;
 }
 
-bool PointInMouth(float x, float y, const MouthGeometry& geometry) {
-    bool inside = false;
-    for (size_t i = 0, previous = geometry.point_count - 1; i < geometry.point_count;
-         previous = i++) {
-        const auto& a = geometry.points[i];
-        const auto& b = geometry.points[previous];
-        if (((a.y > y) != (b.y > y)) &&
-            x < (b.x - a.x) * (y - a.y) / static_cast<float>(b.y - a.y) + a.x) {
-            inside = !inside;
-        }
-    }
-    return inside;
-}
-
-
-
 int TriangleWave(uint16_t phase, int period, int amplitude) {
     const int position = phase % period;
     const int half = period / 2;
     const int ramp = position < half ? position : period - position;
     return ramp * amplitude * 2 / half - amplitude;
+}
+
+float DistToSegment(float px, float py, float x1, float y1, float x2, float y2) {
+    const float dx = x2 - x1;
+    const float dy = y2 - y1;
+    const float len_sq = dx * dx + dy * dy;
+    const float u = len_sq > 0.0f ? std::clamp(((px - x1) * dx + (py - y1) * dy) / len_sq, 0.0f, 1.0f) : 0.0f;
+    const float qx = px - (x1 + u * dx);
+    const float qy = py - (y1 + u * dy);
+    return std::sqrt(qx * qx + qy * qy);
+}
+
+float DistToZ(float px, float py, float cx, float cy, float w, float h) {
+    const float lx = px - cx;
+    const float ly = py - cy;
+    const float x0 = -w * 0.5f;
+    const float x1 =  w * 0.5f;
+    const float y0 = -h * 0.5f;
+    const float y1 =  h * 0.5f;
+    const float d1 = DistToSegment(lx, ly, x0, y0, x1, y0);
+    const float d2 = DistToSegment(lx, ly, x1, y0, x0, y1);
+    const float d3 = DistToSegment(lx, ly, x0, y1, x1, y1);
+    return std::min({d1, d2, d3});
+}
+
+float RoundedDistance(float x, float y, float half_width, float half_height, float radius) {
+    const float qx = std::fabs(x) - half_width + radius;
+    const float qy = std::fabs(y) - half_height + radius;
+    const float dx = std::max(qx, 0.0f);
+    const float dy = std::max(qy, 0.0f);
+    return (dx > 0.0f && dy > 0.0f ? std::sqrt(dx * dx + dy * dy) : dx + dy) +
+           std::min(std::max(qx, qy), 0.0f) - radius;
+}
+
+uint32_t BlendRgb(uint32_t first_color, uint32_t second_color, float amount) {
+    uint32_t result = 0;
+    for (int shift : {0, 8, 16}) {
+        const float first = (first_color >> shift) & 0xff;
+        const float second = (second_color >> shift) & 0xff;
+        result |= static_cast<uint32_t>(first + (second - first) * amount) << shift;
+    }
+    return result;
+}
+
+float SmoothStep(float value) {
+    return value * value * (3.0f - 2.0f * value);
+}
+
+void RenderMouthSdf(uint32_t* pixels, lv_image_dsc_t* descriptor, int raster_width,
+                    int raster_height, float width, float height, float top_curve,
+                    float bottom_curve, float slope) {
+    if (pixels == nullptr || descriptor == nullptr) {
+        return;
+    }
+    const float h = std::max(7.0f, height);
+    const float half_width = width * 0.5f;
+    lv_image_cache_drop(descriptor);
+    for (int x = 0; x < raster_width; ++x) {
+        const float px = x + 0.5f - raster_width * 0.5f;
+        const float u = std::clamp(px / half_width, -1.0f, 1.0f);
+        const float curve = 1.0f - u * u;
+        const float tilt = slope * u;
+        const float top = -h * 0.5f + top_curve * curve + tilt;
+        const float bottom = h * 0.5f + bottom_curve * curve;
+        const float half_height = std::max(3.5f, (bottom - top) * 0.5f);
+        const float center = (top + bottom) * 0.5f;
+        const float radius = std::min(18.0f, std::min(half_width, half_height));
+
+        const float layer_scale = std::clamp(h / 54.0f, 0.0f, 1.0f);
+        const float inner_x = px - 5.0f * layer_scale;
+        const float inner_u = std::clamp(inner_x / half_width, -1.0f, 1.0f);
+        const float inner_curve = 1.0f - inner_u * inner_u;
+        const float inner_top = -h * 0.5f + (top_curve * inner_curve + slope * inner_u);
+        const float inner_bottom = h * 0.5f + bottom_curve * inner_curve;
+        const float inner_half_height = std::max(3.5f, (inner_bottom - inner_top) * 0.5f);
+        const float inner_center = (inner_top + inner_bottom) * 0.5f - 6.0f * layer_scale;
+        const float inner_radius = std::min(18.0f, std::min(half_width, inner_half_height));
+
+        for (int y = 0; y < raster_height; ++y) {
+            const float py = y + 0.5f - raster_height * 0.5f;
+            const float distance = RoundedDistance(px, py - center, half_width, half_height, radius);
+            const float coverage = std::clamp(0.5f - distance, 0.0f, 1.0f);
+            if (coverage == 0.0f) {
+                pixels[y * raster_width + x] = 0;
+                continue;
+            }
+            const float inner_distance = RoundedDistance(inner_x, py - inner_center, half_width,
+                                                          inner_half_height, inner_radius);
+            const float t = std::clamp((1.0f - inner_distance) / 2.0f, 0.0f, 1.0f);
+            const uint32_t color = BlendRgb(0x896a36, 0xc6a15b, SmoothStep(t));
+            pixels[y * raster_width + x] =
+                (static_cast<uint32_t>(coverage * 255.0f) << 24) | color;
+        }
+    }
 }
 
 }  // namespace
@@ -136,8 +186,6 @@ bool MochanDisplay::GetMouthIdleEyeOffset(const std::string& emotion, int& offse
 bool MochanDisplay::InitializeEyeRasters() {
     constexpr size_t bytes = EyeRaster::kWidth * EyeRaster::kHeight * sizeof(uint32_t);
     for (auto* raster : {&left_raster_, &right_raster_}) {
-        // Allocate once in PSRAM, never in the animation/audio loop. If PSRAM
-        // is unavailable, preserve the existing lightweight rounded-eye UI.
         raster->pixels =
             static_cast<uint32_t*>(heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (raster->pixels == nullptr) {
@@ -160,6 +208,7 @@ bool MochanDisplay::InitializeEyeRasters() {
 }
 
 bool MochanDisplay::InitializeMouthRaster() {
+    mouth_morph_state_ = {};
     constexpr size_t bytes = MouthRaster::kWidth * MouthRaster::kHeight * sizeof(uint32_t);
     mouth_raster_.pixels =
         static_cast<uint32_t*>(heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -179,56 +228,137 @@ bool MochanDisplay::InitializeMouthRaster() {
     return true;
 }
 
-bool MochanDisplay::RenderMouthTarget(const std::string& emotion) {
-    const auto* geometry = FindMouthGeometry(emotion);
-    if (geometry == nullptr || mouth_raster_.pixels == nullptr) {
+bool MochanDisplay::InitializeSleepyZzRaster() {
+    sleepy_zz_raster_ = {};
+    constexpr size_t bytes =
+        SleepyZzRaster::kWidth * SleepyZzRaster::kHeight * sizeof(uint32_t);
+    sleepy_zz_raster_.pixels =
+        static_cast<uint32_t*>(
+            heap_caps_calloc(1, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (sleepy_zz_raster_.pixels == nullptr) {
+        ESP_LOGW(kTag, "Sleepy zZ raster allocation unavailable");
         return false;
     }
-    if (mouth_raster_.rendered_emotion == emotion) {
-        return false;
-    }
-    const int64_t render_started_us = esp_timer_get_time();
-    mouth_raster_.rendered_emotion = emotion;
 
-    constexpr int kRasterScreenX = (240 - MouthRaster::kWidth) / 2;
-    constexpr int kRasterScreenY = (240 - MouthRaster::kHeight) / 2 + 25;
-    constexpr std::array<float, 2> kSamples = {0.25f, 0.75f};
-    const int local_x = geometry->x - kRasterScreenX;
-    const int local_y = geometry->y - kRasterScreenY;
+    sleepy_zz_raster_.descriptor.header.magic = LV_IMAGE_HEADER_MAGIC;
+    sleepy_zz_raster_.descriptor.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    sleepy_zz_raster_.descriptor.header.w = SleepyZzRaster::kWidth;
+    sleepy_zz_raster_.descriptor.header.h = SleepyZzRaster::kHeight;
+    sleepy_zz_raster_.descriptor.header.stride =
+        SleepyZzRaster::kWidth * sizeof(uint32_t);
+    sleepy_zz_raster_.descriptor.data_size = bytes;
+    sleepy_zz_raster_.descriptor.data =
+        reinterpret_cast<const uint8_t*>(sleepy_zz_raster_.pixels);
 
-    std::fill_n(mouth_raster_.pixels, MouthRaster::kWidth * MouthRaster::kHeight, 0);
-    for (int y = std::max(0, local_y - 10); y < std::min(MouthRaster::kHeight, local_y + 72); ++y) {
-        for (int x = std::max(0, local_x - 2); x < std::min(MouthRaster::kWidth, local_x + 96);
-             ++x) {
-            int dark_samples = 0;
-            int bright_samples = 0;
-            for (float sample_y : kSamples) {
-                for (float sample_x : kSamples) {
-                    const float shape_x = x + sample_x - local_x;
-                    const float shape_y = y + sample_y - local_y;
-                    if (!PointInMouth(shape_x, shape_y, *geometry)) {
-                        continue;
-                    }
-                    ++dark_samples;
-                    // The approved mock clips a brighter copy of the same solid shape,
-                    // shifted four pixels right and up, matching the eye's layered brass.
-                    if (PointInMouth(shape_x - 4, shape_y + 4, *geometry)) {
-                        ++bright_samples;
-                    }
-                }
-            }
-            if (dark_samples == 0) {
+    // Preserve the original glyph coordinates relative to the right eye while
+    // storing them in an independent 40x40 overlay centered at (+24, -32).
+    for (int x = 0; x < SleepyZzRaster::kWidth; ++x) {
+        const float px = x + 0.5f - SleepyZzRaster::kWidth * 0.5f + 24.0f;
+        for (int y = 0; y < SleepyZzRaster::kHeight; ++y) {
+            const float py = y + 0.5f - SleepyZzRaster::kHeight * 0.5f - 32.0f;
+            if (px < 10.0f || px > 38.0f || py < -46.0f || py > -18.0f) {
                 continue;
             }
-            const uint32_t color = bright_samples * 2 >= dark_samples ? 0xc6a15b : 0x896a36;
-            const uint32_t alpha = static_cast<uint32_t>(dark_samples * 255 / 4);
-            mouth_raster_.pixels[y * MouthRaster::kWidth + x] = (alpha << 24) | color;
+
+            const float d_big = DistToZ(px, py, 26.0f, -34.0f, 13.0f, 15.0f) - 2.1f;
+            const float d_small_raw = DistToZ(px, py, 19.5f, -26.0f, 9.0f, 10.0f);
+            const float d_small = d_small_raw - 1.6f;
+            const float d_small_outline = d_small_raw - 3.2f;
+            const float big_coverage = std::clamp(0.5f - d_big, 0.0f, 1.0f);
+            uint32_t color = 0;
+            float alpha = 0.0f;
+
+            if (big_coverage > 0.0f) {
+                const float inner_distance =
+                    DistToZ(px - 1.0f, py + 1.2f, 26.0f, -34.0f, 13.0f, 15.0f) -
+                    2.1f;
+                const float blend =
+                    std::clamp((0.5f - inner_distance) / 1.5f, 0.0f, 1.0f);
+                color = BlendRgb(0x896a36, 0xc6a15b, SmoothStep(blend));
+                alpha = big_coverage;
+            }
+
+            const float outline_coverage =
+                std::clamp(0.5f - d_small_outline, 0.0f, 1.0f);
+            if (outline_coverage > 0.0f) {
+                color = BlendRgb(color, 0x000000, outline_coverage);
+                alpha = std::max(alpha, outline_coverage);
+            }
+
+            const float small_coverage = std::clamp(0.5f - d_small, 0.0f, 1.0f);
+            if (small_coverage > 0.0f) {
+                const float inner_distance =
+                    DistToZ(px - 0.8f, py + 1.0f, 19.5f, -26.0f, 9.0f, 10.0f) -
+                    1.6f;
+                const float blend =
+                    std::clamp((0.5f - inner_distance) / 1.2f, 0.0f, 1.0f);
+                const uint32_t small_color =
+                    BlendRgb(0x896a36, 0xc6a15b, SmoothStep(blend));
+                color = BlendRgb(color, small_color, small_coverage);
+                alpha = std::max(alpha, small_coverage);
+            }
+
+            if (alpha > 0.0f) {
+                sleepy_zz_raster_.pixels[y * SleepyZzRaster::kWidth + x] =
+                    (static_cast<uint32_t>(alpha * 255.0f) << 24) | color;
+            }
         }
     }
-    lv_image_cache_drop(&mouth_raster_.descriptor);
-    ESP_LOGD(kTag, "Mouth raster %s: %lld us", emotion.c_str(),
-             static_cast<long long>(esp_timer_get_time() - render_started_us));
     return true;
+}
+
+void MochanDisplay::AdvanceSleepyZzAnimation(bool visual_eligible) {
+    if (sleepy_zz_ == nullptr || sleepy_zz_raster_.pixels == nullptr) {
+        return;
+    }
+
+    const bool sleepy_active = face_state_ == FaceState::kSleepy;
+    const bool sleepy_settled =
+        std::abs(right_eye_geometry_.width - 72) <= 3 &&
+        right_eye_geometry_.height <= 32 && right_eye_geometry_.bottom_curve > 0 &&
+        right_eye_geometry_.slope == 0 && right_eye_geometry_.water == 0;
+
+    if (!visual_eligible) {
+        sleepy_zz_raster_.hold_ticks = 0;
+        sleepy_zz_raster_.alpha = 0.0f;
+    } else if (sleepy_active && sleepy_settled) {
+        if (sleepy_zz_raster_.hold_ticks < 15) {
+            ++sleepy_zz_raster_.hold_ticks;
+        } else {
+            sleepy_zz_raster_.alpha =
+                std::min(1.0f, sleepy_zz_raster_.alpha + 0.018f);
+        }
+    } else {
+        sleepy_zz_raster_.hold_ticks = 0;
+        sleepy_zz_raster_.alpha =
+            std::max(0.0f, sleepy_zz_raster_.alpha - 0.08f);
+    }
+
+    const uint8_t opacity = static_cast<uint8_t>(
+        std::round(sleepy_zz_raster_.alpha * static_cast<float>(LV_OPA_COVER)));
+    if (sleepy_zz_raster_.previous_opacity != opacity) {
+        sleepy_zz_raster_.previous_opacity = opacity;
+        lv_obj_set_style_opa(sleepy_zz_, opacity, 0);
+    }
+    if (opacity == 0) {
+        if (!lv_obj_has_flag(sleepy_zz_, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(sleepy_zz_, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    const int display_x = right_eye_geometry_.x + 24;
+    const int display_y = right_eye_geometry_.y + face_layout_offset_y_ - 32;
+    if (!sleepy_zz_raster_.positioned || sleepy_zz_raster_.displayed_x != display_x ||
+        sleepy_zz_raster_.displayed_y != display_y) {
+        sleepy_zz_raster_.positioned = true;
+        sleepy_zz_raster_.displayed_x = display_x;
+        sleepy_zz_raster_.displayed_y = display_y;
+        lv_obj_align(sleepy_zz_, LV_ALIGN_CENTER, display_x, display_y);
+    }
+    if (lv_obj_has_flag(sleepy_zz_, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_remove_flag(sleepy_zz_, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current_emotion) {
@@ -239,44 +369,88 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
     if (face_layout_target_ == 0 && !exiting_mouth_emotion_.empty()) {
         emotion = exiting_mouth_emotion_;
     }
-    if (FindMouthGeometry(emotion) == nullptr || face_layout_progress_ == 0) {
+
+    const auto* geometry = FindMouthGeometry(emotion);
+    auto& state = mouth_morph_state_;
+    if (geometry == nullptr || face_layout_progress_ == 0) {
         if (!lv_obj_has_flag(mouth_, LV_OBJ_FLAG_HIDDEN)) {
             lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         }
         if (face_layout_progress_ == 0) {
             exiting_mouth_emotion_.clear();
             mouth_shape_opacity_ = 0;
+            state.initialized = false;
         }
         return;
     }
 
-    const auto* geometry = FindMouthGeometry(emotion);
-    // Fade out the old silhouette before swapping it. Eyes retain their
-    // approved interpolation, and the mouth never snaps between expressions.
-    if (mouth_raster_.rendered_emotion != emotion && mouth_shape_opacity_ > 0) {
-        mouth_shape_opacity_ = std::max(0, mouth_shape_opacity_ - 48);
-        geometry = FindMouthGeometry(mouth_raster_.rendered_emotion);
-        if (geometry != nullptr && mouth_shape_opacity_ > 0) {
-            emotion = geometry->emotion;
-        } else {
-            geometry = FindMouthGeometry(emotion);
-        }
-    } else {
-        mouth_shape_opacity_ = std::min(256, mouth_shape_opacity_ + 48);
-    }
-    if (RenderMouthTarget(emotion)) {
+    mouth_shape_opacity_ = std::min(256, mouth_shape_opacity_ + 48);
+
+    if (!state.initialized) {
+        state.width = geometry->width;
+        state.height = geometry->height;
+        state.top_curve = geometry->top_curve;
+        state.bottom_curve = geometry->bottom_curve;
+        state.slope = geometry->slope;
+        state.gap = geometry->gap;
+        state.initialized = true;
+        RenderMouthSdf(mouth_raster_.pixels, &mouth_raster_.descriptor,
+                       MouthRaster::kWidth, MouthRaster::kHeight,
+                       state.width, state.height, state.top_curve,
+                       state.bottom_curve, state.slope);
+        state.rendered_width = state.width;
+        state.rendered_height = state.height;
+        state.rendered_top_curve = state.top_curve;
+        state.rendered_bottom_curve = state.bottom_curve;
+        state.rendered_slope = state.slope;
         lv_obj_invalidate(mouth_);
+    } else {
+        const auto approach_val = [](float current, float target) {
+            const float delta = target - current;
+            if (std::fabs(delta) <= 0.25f) {
+                return target;
+            }
+            const float step = delta / 3.0f;
+            return current + (std::fabs(step) >= 0.25f ? step : (delta > 0.0f ? 0.25f : -0.25f));
+        };
+        state.width = approach_val(state.width, geometry->width);
+        state.height = approach_val(state.height, geometry->height);
+        state.top_curve = approach_val(state.top_curve, geometry->top_curve);
+        state.bottom_curve = approach_val(state.bottom_curve, geometry->bottom_curve);
+        state.slope = approach_val(state.slope, geometry->slope);
+        state.gap = approach_val(state.gap, geometry->gap);
+
+        const bool shape_changed =
+            (std::fabs(state.rendered_width - state.width) > 0.1f ||
+             std::fabs(state.rendered_height - state.height) > 0.1f ||
+             std::fabs(state.rendered_top_curve - state.top_curve) > 0.1f ||
+             std::fabs(state.rendered_bottom_curve - state.bottom_curve) > 0.1f ||
+             std::fabs(state.rendered_slope - state.slope) > 0.1f);
+
+        if (shape_changed) {
+            RenderMouthSdf(mouth_raster_.pixels, &mouth_raster_.descriptor,
+                           MouthRaster::kWidth, MouthRaster::kHeight,
+                           state.width, state.height,
+                           state.top_curve, state.bottom_curve, state.slope);
+            state.rendered_width = state.width;
+            state.rendered_height = state.height;
+            state.rendered_top_curve = state.top_curve;
+            state.rendered_bottom_curve = state.bottom_curve;
+            state.rendered_slope = state.slope;
+            lv_obj_invalidate(mouth_);
+        }
     }
-    constexpr int kRasterScreenY = (240 - MouthRaster::kHeight) / 2 + 25;
-    const int pivot_y = geometry->y - kRasterScreenY + geometry->height / 2;
+
+    // Set pivot at ~40% of height so mouth deformation naturally extends downward
+    const int pivot_y = MouthRaster::kHeight * 2 / 5;
     if (mouth_raster_.previous_pivot_y != pivot_y) {
         mouth_raster_.previous_pivot_y = pivot_y;
         lv_obj_set_style_transform_pivot_y(mouth_, pivot_y, 0);
     }
-    // Fade layout transitions without shrinking the mouth relative to eyes.
+
     int expression_scale_x = 256;
     int expression_deformation_y = 0;
-    if (emotion == "surprised") {
+    if (emotion == "surprised" || emotion == "shocked") {
         const int pulse = TriangleWave(animation_phase_, 30, 2);
         expression_scale_x += pulse * 2;
         expression_deformation_y += pulse * 5;
@@ -291,9 +465,8 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
                               yawn_amount_ * (emotion == "sleepy" ? 112 : 160) / 256 +
                               mouth_motion_amount_ * geometry->idle_open_scale_y / 256 +
                               blink_amount * geometry->blink_scale_y / 100;
-    // Blinks and the closed phase may soften the expression, never collapse
-    // a filled mouth into a thin stroke. Preserve at least 94% of its height.
-    const int scale_y = std::max(240, deformation_y);
+
+    const int scale_y = std::max(150, deformation_y);
     if (mouth_raster_.previous_scale_x != scale_x) {
         mouth_raster_.previous_scale_x = scale_x;
         lv_image_set_scale_x(mouth_, scale_x);
@@ -307,14 +480,12 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
         mouth_raster_.previous_opacity = opacity;
         lv_obj_set_style_opa(mouth_, opacity, 0);
     }
-    // Follow the actual smoothed eye center, including its gentle vertical
-    // motion. Deformation stays around the mouth's center without extra bobbing.
+
+    // Follow the natural eye center including gaze micro-movements
     const int mouth_x = (left_eye_geometry_.x + right_eye_geometry_.x) / 2;
     const int eye_center_y = (left_eye_geometry_.y + right_eye_geometry_.y) / 2;
-    const int mouth_gap = kMouthEyeCenterGap +
-                          (emotion == "surprised" ? kSurprisedMouthExtraGap : 0);
-    const int mouth_y = 25 + 120 + eye_center_y + face_layout_offset_y_ +
-                        mouth_gap - (geometry->y + geometry->height / 2);
+    const int mouth_gap = std::round(state.gap);
+    const int mouth_y = eye_center_y + face_layout_offset_y_ + mouth_gap;
     if (mouth_raster_.previous_x != mouth_x || mouth_raster_.previous_y != mouth_y) {
         mouth_raster_.previous_x = mouth_x;
         mouth_raster_.previous_y = mouth_y;
@@ -335,29 +506,15 @@ bool MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
         previous.water == geometry.water) {
         return false;
     }
+
     raster.previous = geometry;
     raster.previous_blink = blink_amount;
     raster.rendered = true;
+
     const float openness = 1.0f - blink_amount / 100.0f;
     const float height = std::max(7.0f, geometry.height * openness);
     const float half_width = geometry.width * 0.5f;
-    const auto rounded_distance = [](float x, float y, float half_w, float half_h, float radius) {
-        const float qx = std::fabs(x) - half_w + radius;
-        const float qy = std::fabs(y) - half_h + radius;
-        const float dx = std::max(qx, 0.0f);
-        const float dy = std::max(qy, 0.0f);
-        return (dx > 0.0f && dy > 0.0f ? std::sqrt(dx * dx + dy * dy) : dx + dy) +
-               std::min(std::max(qx, qy), 0.0f) - radius;
-    };
-    const auto blend = [](uint32_t a, uint32_t b, float amount) {
-        uint32_t result = 0;
-        for (int shift : {0, 8, 16}) {
-            const float first = (a >> shift) & 0xff;
-            const float second = (b >> shift) & 0xff;
-            result |= static_cast<uint32_t>(first + (second - first) * amount) << shift;
-        }
-        return result;
-    };
+
     lv_image_cache_drop(&raster.descriptor);
     for (int x = 0; x < EyeRaster::kWidth; ++x) {
         const float px = x + 0.5f - EyeRaster::kWidth * 0.5f;
@@ -369,8 +526,7 @@ bool MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
         const float half_height = std::max(3.5f, (bottom - top) * 0.5f);
         const float center = (top + bottom) * 0.5f;
         const float radius = std::min(18.0f, std::min(half_width, half_height));
-        // A second, offset copy of the same filled shape exposes a soft left/
-        // lower layer. Scale the offset down when squinting or blinking.
+
         const float layer_scale = std::clamp(height / 54.0f, 0.0f, 1.0f);
         const float inner_x = px - 5.0f * layer_scale;
         const float inner_u = std::clamp(inner_x / half_width, -1.0f, 1.0f);
@@ -382,28 +538,29 @@ bool MochanDisplay::RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geomet
         const float inner_half_height = std::max(3.5f, (inner_bottom - inner_top) * 0.5f);
         const float inner_center = (inner_top + inner_bottom) * 0.5f - 6.0f * layer_scale;
         const float inner_radius = std::min(18.0f, std::min(half_width, inner_half_height));
+
         for (int y = 0; y < EyeRaster::kHeight; ++y) {
             const float py = y + 0.5f - EyeRaster::kHeight * 0.5f;
             const float distance =
-                rounded_distance(px, py - center, half_width, half_height, radius);
+                RoundedDistance(px, py - center, half_width, half_height, radius);
             const float coverage = std::clamp(0.5f - distance, 0.0f, 1.0f);
-            if (coverage == 0.0f) {
-                // Transparent pixels need no inner-layer shading or color
-                // blending. Keep the exact visible geometry and antialiasing.
+            if (coverage <= 0.0f) {
                 raster.pixels[y * EyeRaster::kWidth + x] = 0;
                 continue;
             }
-            const float inner_distance = rounded_distance(inner_x, py - inner_center, half_width,
-                                                          inner_half_height, inner_radius);
+            const float inner_distance =
+                RoundedDistance(inner_x, py - inner_center, half_width,
+                                inner_half_height, inner_radius);
             const float t = std::clamp((1.0f - inner_distance) / 2.0f, 0.0f, 1.0f);
-            uint32_t color = blend(0x896a36, 0xc6a15b, t * t * (3.0f - 2.0f * t));
+            uint32_t color = BlendRgb(0x896a36, 0xc6a15b, SmoothStep(t));
             if (geometry.water > 0) {
                 const float outer = geometry.x < 0 ? -u : u;
                 const float spread = std::clamp((outer + 0.35f) / 1.35f, 0.0f, 1.0f);
                 const float waterline =
-                    bottom - geometry.water * openness * spread * spread * (3.0f - 2.0f * spread);
-                const float water_mix = std::clamp((py - waterline + 1.0f) / 2.0f, 0.0f, 1.0f);
-                color = blend(color, 0x80643b, water_mix);
+                    bottom - geometry.water * openness * SmoothStep(spread);
+                const float water_mix =
+                    std::clamp((py - waterline + 1.0f) / 2.0f, 0.0f, 1.0f);
+                color = BlendRgb(color, 0x80643b, water_mix);
             }
             raster.pixels[y * EyeRaster::kWidth + x] =
                 (static_cast<uint32_t>(coverage * 255.0f) << 24) | color;
@@ -529,8 +686,8 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
     struct EyeTarget {
         EyeGeometry geometry;
     };
-    EyeTarget left{{74, 54, -48, -59, 0}};
-    EyeTarget right{{74, 54, 48, -59, 0}};
+    EyeTarget left{{74, 54, -48, -59, 0, 3, 0, 0}};
+    EyeTarget right{{74, 54, 48, -59, 0, 3, 0, 0}};
 
     const int gentle = TriangleWave(animation_phase_, 32, 2);
 
@@ -550,8 +707,8 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
             right.geometry = {68, 34, 45, -53, 0, 8, 0, 3};
             break;
         case FaceState::kHappy:
-            left.geometry = {74, 43, -47, -56 + gentle, 0, -5, -17};
-            right.geometry = {74, 43, 47, -56 + gentle, 0, -5, -17};
+            left.geometry = {76, 50, -47, -56 + gentle, 0, 3, -6, 0};
+            right.geometry = {76, 50, 47, -56 + gentle, 0, 3, -6, 0};
             break;
         case FaceState::kLaughing: {
             const int bounce = TriangleWave(animation_phase_, 16, 4);
@@ -629,8 +786,8 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
             right.geometry = {73, 34, 46, -53, 0, 4, -2, -4};
             break;
         case FaceState::kSleepy:
-            left.geometry = {71, 28, -46, -48 + gentle, 0, 7, 0};
-            right.geometry = {71, 28, 46, -48 + gentle, 0, 7, 0};
+            left.geometry = {72, 26, -46, -48 + gentle, 0, 7, 1, 0};
+            right.geometry = {72, 26, 46, -48 + gentle, 0, 7, 1, 0};
             break;
         case FaceState::kSilly: {
             const int sway = TriangleWave(animation_phase_, 24, 4);
@@ -698,8 +855,6 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
 
     const bool gaze_eligible = ambient_visual_eligible && AllowsAmbientGaze(face_state_);
     if (!gaze_eligible) {
-        // Explicit expression geometry wins immediately; never render a residual ambient offset
-        // while an incompatible face is taking ownership of the eyes.
         ambient_gaze_x_ = 0;
         ambient_gaze_y_ = 0;
     } else {
@@ -716,7 +871,7 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
     if (mouth_motion_amount_ != 0) {
         const int positive_mouth_motion = std::max<int>(0, mouth_motion_amount_);
         const int mouth_reaction = positive_mouth_motion * 2 / 256;
-        if (face_state_ == FaceState::kSurprised) {
+        if (face_state_ == FaceState::kSurprised || face_state_ == FaceState::kShocked) {
             left.geometry.height += mouth_reaction;
             right.geometry.height += mouth_reaction;
         } else {
@@ -730,9 +885,6 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
     left.geometry.y += kEyeLayoutOffsetY;
     right.geometry.y += kEyeLayoutOffsetY;
 
-    // Keep the existing smoothing for intrinsic eye/emotion geometry. The
-    // layout offset is applied after this block so it follows elapsed time
-    // directly and does not acquire a second transition tail.
     const auto smooth = [](int current, int target) {
         const int delta = target - current;
         if (delta >= -1 && delta <= 1) {

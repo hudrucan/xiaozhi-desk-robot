@@ -102,6 +102,10 @@ MochanDisplay::~MochanDisplay() {
         lv_image_cache_drop(&mouth_raster_.descriptor);
         heap_caps_free(mouth_raster_.pixels);
     }
+    if (sleepy_zz_raster_.pixels != nullptr) {
+        lv_image_cache_drop(&sleepy_zz_raster_.descriptor);
+        heap_caps_free(sleepy_zz_raster_.pixels);
+    }
 }
 
 MochanDisplay::AmbientActivity MochanDisplay::GetAmbientActivity() const {
@@ -224,6 +228,13 @@ void MochanDisplay::SetupUI() {
         lv_obj_set_style_radius(eyelid, 22, 0);
         lv_obj_set_style_shadow_width(eyelid, 0, 0);
         lv_obj_move_to_index(eyelid, 0);
+    }
+
+    if (InitializeSleepyZzRaster()) {
+        sleepy_zz_ = lv_image_create(face_);
+        lv_image_set_src(sleepy_zz_, &sleepy_zz_raster_.descriptor);
+        lv_obj_set_style_opa(sleepy_zz_, LV_OPA_TRANSP, 0);
+        lv_obj_add_flag(sleepy_zz_, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (InitializeMouthRaster()) {
@@ -719,6 +730,7 @@ void MochanDisplay::AdvanceEyeAnimation() {
                                          (notification_ == nullptr ||
                                           lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN));
     UpdateEyes(blink_amount, ambient_visual_eligible);
+    AdvanceSleepyZzAnimation(ambient_visual_eligible);
     UpdateMouth(blink_amount, emotion);
     max_face_work_us_ = std::max(max_face_work_us_, esp_timer_get_time() - face_work_started_us);
     // Keep typewriter work on the face frame clock. Time-based glyph credit

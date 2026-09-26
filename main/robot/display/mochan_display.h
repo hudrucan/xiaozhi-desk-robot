@@ -120,7 +120,6 @@ private:
         static constexpr int kHeight = 80;
         uint32_t* pixels = nullptr;
         lv_image_dsc_t descriptor{};
-        std::string rendered_emotion;
         uint16_t previous_scale_x = 0;
         uint16_t previous_scale_y = 0;
         uint8_t previous_opacity = 0;
@@ -129,14 +128,45 @@ private:
         int previous_pivot_y = -1;
     };
 
+    struct MouthMorphState {
+        float width = 72.0f;
+        float height = 24.0f;
+        float top_curve = 2.0f;
+        float bottom_curve = 2.0f;
+        float slope = 0.0f;
+        float gap = 74.0f;
+        bool initialized = false;
+        float rendered_width = 0.0f;
+        float rendered_height = 0.0f;
+        float rendered_top_curve = 0.0f;
+        float rendered_bottom_curve = 0.0f;
+        float rendered_slope = 0.0f;
+    };
+
+    struct SleepyZzRaster {
+        static constexpr int kWidth = 40;
+        static constexpr int kHeight = 40;
+        uint32_t* pixels = nullptr;
+        lv_image_dsc_t descriptor{};
+        float alpha = 0.0f;
+        int hold_ticks = 0;
+        uint8_t previous_opacity = 0;
+        bool positioned = false;
+        int displayed_x = 0;
+        int displayed_y = 0;
+    };
+
     EyeRaster left_raster_;
     EyeRaster right_raster_;
     MouthRaster mouth_raster_;
+    MouthMorphState mouth_morph_state_;
+    SleepyZzRaster sleepy_zz_raster_;
     int mouth_shape_opacity_ = 0;
     bool InitializeEyeRasters();
     bool InitializeMouthRaster();
+    bool InitializeSleepyZzRaster();
     bool RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
-    bool RenderMouthTarget(const std::string& emotion);
+    void AdvanceSleepyZzAnimation(bool visual_eligible);
     void UpdateMouth(uint8_t blink_amount, const std::string& emotion);
     static bool HasMouthGeometry(const std::string& emotion);
     static bool GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y);
@@ -178,6 +208,7 @@ private:
     lv_obj_t* left_eyelid_ = nullptr;
     lv_obj_t* right_eyelid_ = nullptr;
     lv_obj_t* mouth_ = nullptr;
+    lv_obj_t* sleepy_zz_ = nullptr;
     lv_obj_t* response_box_ = nullptr;
     lv_obj_t* subtitle_ = nullptr;
     lv_obj_t* notification_ = nullptr;
