@@ -90,7 +90,9 @@ function domainsForAction(name) {
   if (name.startsWith("oled_") || name.startsWith("auto_brightness") ||
     ["display_flip", "screen_brightness",
     "status_light_brightness", "lights_toggle"].includes(name)) return ["display"];
-  if (["speaker_volume", "microphone_gain", "microphone_mute", "audio_test"].includes(name)) {
+  if (["speaker_volume", "microphone_profile", "microphone_capture_trim",
+    "microphone_voice_gain", "microphone_ns", "microphone_agc",
+    "microphone_mute", "audio_test"].includes(name)) {
     return ["audio"];
   }
   if (name === "camera_flip" || name === "live_camera") return ["camera"];

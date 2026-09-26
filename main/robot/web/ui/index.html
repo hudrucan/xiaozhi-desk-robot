@@ -619,7 +619,7 @@
             data-order-device="10"
           >
             <div class="section-title">
-              <strong data-caption="Input, output, and illumination">Audio &amp; lighting</strong>
+              <strong data-caption="Speaker, displays, and illumination">Output &amp; lighting</strong>
             </div>
             <div class="audio-row">
               <span class="audio-name"
@@ -632,25 +632,6 @@
                 step="5"
                 value="70"
               /><span class="audio-value" id="speakerValue">70%</span>
-            </div>
-            <div class="audio-row microphone-row">
-              <span class="audio-name"
-                ><b>Microphone</b><small>Input gain</small></span
-              ><input
-                id="microphoneGain"
-                type="range"
-                min="1"
-                max="3"
-                step="1"
-                value="1"
-              /><span class="audio-value" id="microphoneValue">1×</span>
-              <label class="toggle microphone-mute" title="Disable microphone input"
-                ><input id="microphoneMute" type="checkbox" />Mute</label
-              >
-              <div class="vu-wrap">
-                <div class="vu"><i id="micLevel"></i></div>
-                <span class="clip" id="micClip">LIVE</span>
-              </div>
             </div>
             <div class="audio-row screen-brightness-row">
               <span class="audio-name"
@@ -705,6 +686,90 @@
                 value="100"
               /><span class="audio-value" id="statusLightValue">100%</span>
             </div>
+          </section>
+          <section
+            class="card microphone-card"
+            data-tabs="device"
+            data-lane-device="0"
+            data-order-device="15"
+          >
+            <div class="section-title">
+              <strong data-caption="Voice input · INMP441">Microphone</strong
+              ><span id="microphoneProfileState">Legacy</span>
+            </div>
+            <div class="audio-row microphone-select-row">
+              <span class="audio-name"><b>Profile</b><small>Voice conditioning preset</small></span>
+              <div class="microphone-profile-select">
+                <button
+                  id="microphoneProfile"
+                  class="microphone-profile-trigger"
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                  aria-controls="microphoneProfileMenu"
+                >
+                  <span id="microphoneProfileLabel">Legacy</span>
+                  <span class="microphone-profile-chevron" aria-hidden="true"></span>
+                </button>
+                <div
+                  id="microphoneProfileMenu"
+                  class="microphone-profile-menu"
+                  role="listbox"
+                  aria-label="Microphone profile"
+                  hidden
+                >
+                  <div class="microphone-profile-option" role="option" data-value="legacy"
+                    aria-selected="true" tabindex="-1">Legacy</div>
+                  <div class="microphone-profile-option" role="option" data-value="near"
+                    aria-selected="false" tabindex="-1">Near</div>
+                  <div class="microphone-profile-option" role="option" data-value="balanced"
+                    aria-selected="false" tabindex="-1">Balanced</div>
+                  <div class="microphone-profile-option" role="option" data-value="far"
+                    aria-selected="false" tabindex="-1">Far</div>
+                  <div class="microphone-profile-option" role="option" data-value="noisy"
+                    aria-selected="false" tabindex="-1">Noisy</div>
+                  <div class="microphone-profile-option" role="option" data-value="custom"
+                    aria-selected="false" tabindex="-1">Custom</div>
+                </div>
+              </div>
+            </div>
+            <div class="audio-row">
+              <span class="audio-name"><b>Voice gain</b><small>WakeNet and ASR only</small></span
+              ><input id="microphoneVoiceGain" type="range" min="-12" max="12" step="1" value="0"
+              /><span class="audio-value" id="microphoneVoiceGainValue">0 dB</span>
+            </div>
+            <div class="audio-row microphone-toggle-row">
+              <span class="audio-name"><b>Noise suppression</b><small id="microphoneNsState">Off</small></span
+              ><label class="toggle"><input id="microphoneNs" type="checkbox" />Enable</label>
+            </div>
+            <div class="audio-row microphone-toggle-row">
+              <span class="audio-name"><b>AGC</b><small id="microphoneAgcState">Off</small></span
+              ><label class="toggle"><input id="microphoneAgc" type="checkbox" />Enable</label>
+            </div>
+            <div class="audio-row microphone-advanced-row">
+              <span class="audio-name"><b>Capture trim</b><small>Advanced · raw input scale</small></span
+              ><input id="microphoneCaptureTrim" type="range" min="-24" max="0" step="1" value="0"
+              /><span class="audio-value" id="microphoneCaptureTrimValue">0 dB</span>
+            </div>
+            <div class="audio-row microphone-toggle-row">
+              <span class="audio-name"><b>Mute</b><small>Disable microphone input</small></span
+              ><label class="toggle"><input id="microphoneMute" type="checkbox" />Muted</label>
+            </div>
+            <div class="audio-row microphone-level-row">
+              <span class="audio-name"><b>Input level</b><small>Raw capture VU</small></span>
+              <div class="vu-wrap">
+                <div class="vu"><i id="micLevel"></i></div>
+                <span class="clip" id="micClip">LIVE</span>
+              </div>
+            </div>
+            <div class="microphone-diagnostics">
+              <div><span>Raw input</span><b id="microphoneRawLevel">Unavailable</b></div>
+              <div><span>Voice pre-AFE</span><b id="microphoneVoiceLevel">Unavailable</b></div>
+              <div><span>AFE output</span><b id="microphoneAfeLevel">Unavailable</b></div>
+            </div>
+            <p class="hint microphone-restart" id="microphoneRestart" hidden>
+              Restart required to apply voice processing changes.
+            </p>
           </section>
           <section
             class="card"

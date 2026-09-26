@@ -110,8 +110,8 @@ config USE_AUDIO_PROCESSOR
     default y
     depends on IDF_TARGET_ESP32S3 && SPIRAM
     help
-        Enable the shared AFE uplink path with AEC and VAD. Noise suppression
-        is not enabled because this project does not provide an NSNet model.
+        Enable the shared AFE uplink path with AEC, VAD, configurable NSNet2
+        noise suppression, and automatic gain control.
         Requires ESP32-S3 with PSRAM.
 
 config USE_SERVER_AEC

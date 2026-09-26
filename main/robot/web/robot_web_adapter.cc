@@ -201,10 +201,32 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = "Speaker volume " + std::to_string(safe_volume) + "%";
         return true;
     }
-    if (action == "microphone_gain") {
-        const int safe_gain = std::clamp(value, 1, 3);
-        controller_.SetMicrophoneGain(safe_gain);
-        message = "Microphone gain " + std::to_string(safe_gain) + "x";
+    if (action == "microphone_profile") {
+        const bool accepted = controller_.SetMicrophoneProfile(text);
+        message = accepted ? "Microphone profile " + text : "Unsupported microphone profile";
+        return accepted;
+    }
+    if (action == "microphone_capture_trim") {
+        const int safe_trim = std::clamp(value, -24, 0);
+        controller_.SetMicrophoneCaptureTrim(safe_trim);
+        message = "Microphone capture trim " + std::to_string(safe_trim) + " dB";
+        return true;
+    }
+    if (action == "microphone_voice_gain") {
+        const int safe_gain = std::clamp(value, -12, 12);
+        controller_.SetMicrophoneVoiceGain(safe_gain);
+        message = "Microphone voice gain " + std::to_string(safe_gain) + " dB";
+        return true;
+    }
+    if (action == "microphone_ns") {
+        controller_.SetMicrophoneNoiseSuppression(value != 0);
+        message = value != 0 ? "Noise suppression requested" : "Noise suppression disabled";
+        return true;
+    }
+    if (action == "microphone_agc") {
+        controller_.SetMicrophoneAutomaticGainControl(value != 0);
+        message = value != 0 ? "Automatic gain control requested"
+                             : "Automatic gain control disabled";
         return true;
     }
     if (action == "microphone_mute") {

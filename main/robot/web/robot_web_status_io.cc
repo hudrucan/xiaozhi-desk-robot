@@ -92,9 +92,35 @@ cJSON* RobotWebStatus::CreateAudio() {
         return nullptr;
     }
     cJSON_AddNumberToObject(root, "speaker_volume", status.speaker_volume);
-    cJSON_AddNumberToObject(root, "microphone_gain", status.microphone_gain);
     cJSON_AddBoolToObject(root, "microphone_muted", status.microphone_muted);
     cJSON_AddNumberToObject(root, "microphone_level", status.microphone_level);
     cJSON_AddBoolToObject(root, "microphone_clipping", status.microphone_clipping);
+    const VoiceInputStatus& voice = status.voice_input;
+    cJSON_AddStringToObject(root, "voice_profile", VoiceInputProfileName(voice.config.profile));
+    cJSON_AddNumberToObject(root, "capture_trim_db", voice.config.capture_trim_db);
+    cJSON_AddNumberToObject(root, "voice_gain_db", voice.config.voice_gain_db);
+    cJSON_AddBoolToObject(root, "ns_available", voice.ns_available);
+    cJSON_AddBoolToObject(root, "ns_requested", voice.config.ns_requested);
+    cJSON_AddBoolToObject(root, "ns_active", voice.ns_active);
+    cJSON_AddBoolToObject(root, "agc_available", voice.agc_available);
+    cJSON_AddBoolToObject(root, "agc_requested", voice.config.agc_requested);
+    cJSON_AddBoolToObject(root, "agc_active", voice.agc_active);
+    if (voice.voice_level.valid) {
+        cJSON_AddNumberToObject(root, "voice_rms_dbfs", voice.voice_level.rms_dbfs);
+        cJSON_AddNumberToObject(root, "voice_peak_dbfs", voice.voice_level.peak_dbfs);
+    } else {
+        cJSON_AddNullToObject(root, "voice_rms_dbfs");
+        cJSON_AddNullToObject(root, "voice_peak_dbfs");
+    }
+    if (voice.afe_output_level.valid) {
+        cJSON_AddNumberToObject(root, "afe_output_rms_dbfs",
+                                voice.afe_output_level.rms_dbfs);
+        cJSON_AddNumberToObject(root, "afe_output_peak_dbfs",
+                                voice.afe_output_level.peak_dbfs);
+    } else {
+        cJSON_AddNullToObject(root, "afe_output_rms_dbfs");
+        cJSON_AddNullToObject(root, "afe_output_peak_dbfs");
+    }
+    cJSON_AddBoolToObject(root, "voice_processing_restart_required", voice.restart_required);
     return root;
 }

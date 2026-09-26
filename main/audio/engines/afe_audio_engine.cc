@@ -7,6 +7,7 @@
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_nsn_models.h>
 #include <esp_timer.h>
 #include <esp_vadn_models.h>
 
@@ -140,6 +141,8 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
 
     char* vad_model_name =
         models_ == nullptr ? nullptr : esp_srmodel_filter(models_, ESP_VADN_PREFIX, nullptr);
+    char* ns_model_name =
+        models_ == nullptr ? nullptr : esp_srmodel_filter(models_, ESP_NSNET_PREFIX, nullptr);
     afe_config_t* afe_config =
         afe_config_init(input_format.c_str(), models_, AFE_TYPE_FD, AFE_MODE_LOW_COST);
     if (afe_config == nullptr) {
@@ -150,7 +153,9 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_FD_LOW_COST;
     afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
-    afe_config->ns_init = false;
+    afe_config->ns_init = ns_model_name != nullptr;
+    afe_config->ns_model_name = ns_model_name;
+    afe_config->afe_ns_mode = AFE_NS_MODE_NET;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
@@ -175,7 +180,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
             afe_config->wakenet_model_name_2 = wakenet_models[1];
         }
     }
-    afe_config->agc_init = false;
+    afe_config->agc_init = true;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
     ESP_LOGI(TAG, "Before AFE create: free=%u min=%u largest=%u",
@@ -201,6 +206,16 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     if (codec_->input_reference()) {
         afe_iface_->disable_aec(afe_data_);
     }
+    const bool ns_available = ns_model_name != nullptr && afe_iface_->enable_ns != nullptr &&
+                              afe_iface_->disable_ns != nullptr;
+    ns_available_.store(ns_available);
+    ns_active_.store(ns_available);
+    ApplyNoiseSuppressionControl();
+    const bool agc_available =
+        afe_iface_->enable_agc != nullptr && afe_iface_->disable_agc != nullptr;
+    agc_available_.store(agc_available);
+    agc_active_.store(agc_available);
+    ApplyAutomaticGainControlControl();
     afe_iface_->print_pipeline(afe_data_);
 
     if (processing_task_stack_ == nullptr) {
@@ -216,6 +231,10 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
         afe_iface_->destroy(afe_data_);
         afe_data_ = nullptr;
         afe_iface_ = nullptr;
+        ns_available_.store(false);
+        ns_active_.store(false);
+        agc_available_.store(false);
+        agc_active_.store(false);
         return false;
     }
 
@@ -234,13 +253,19 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
         afe_iface_->destroy(afe_data_);
         afe_data_ = nullptr;
         afe_iface_ = nullptr;
+        ns_available_.store(false);
+        ns_active_.store(false);
+        agc_available_.store(false);
+        agc_active_.store(false);
         return false;
     }
 
     const char* detector = wake_detector_ == WakeDetector::kWakeNet
                                ? "WakeNet"
                                : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
-    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: off, feed: %d, fetch: %d", detector,
+    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: %s, AGC: %s, feed: %d, fetch: %d",
+             detector, ns_active_.load() ? "on" : (ns_available ? "off" : "unavailable"),
+             agc_active_.load() ? "on" : (agc_available ? "off" : "unavailable"),
              afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(TAG, "After AFE create: free=%u min=%u largest=%u",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -307,6 +332,16 @@ void AfeAudioEngine::EnableDeviceAec(bool enable) {
         ESP_LOGW(TAG, "Device AEC requires a playback reference channel");
     }
     UpdateAecState();
+}
+
+void AfeAudioEngine::EnableNoiseSuppression(bool enable) {
+    ns_requested_.store(enable);
+    afe_control_dirty_.store(true);
+}
+
+void AfeAudioEngine::EnableAutomaticGainControl(bool enable) {
+    agc_requested_.store(enable);
+    afe_control_dirty_.store(true);
 }
 
 bool AfeAudioEngine::HasWakeWord() const { return wake_detector_ != WakeDetector::kNone; }
@@ -390,6 +425,42 @@ void AfeAudioEngine::ApplyAfeControls() {
             afe_iface_->disable_aec(afe_data_);
         }
     }
+    ApplyNoiseSuppressionControl();
+    ApplyAutomaticGainControlControl();
+}
+
+void AfeAudioEngine::ApplyNoiseSuppressionControl() {
+    if (!ns_available_.load()) {
+        return;
+    }
+    const bool requested = ns_requested_.load();
+    if (requested == ns_active_.load()) {
+        return;
+    }
+    const int result = requested ? afe_iface_->enable_ns(afe_data_)
+                                 : afe_iface_->disable_ns(afe_data_);
+    if (result == -1) {
+        ESP_LOGW(TAG, "Failed to %s noise suppression", requested ? "enable" : "disable");
+        return;
+    }
+    ns_active_.store(result == 1);
+}
+
+void AfeAudioEngine::ApplyAutomaticGainControlControl() {
+    if (!agc_available_.load()) {
+        return;
+    }
+    const bool requested = agc_requested_.load();
+    if (requested == agc_active_.load()) {
+        return;
+    }
+    const int result = requested ? afe_iface_->enable_agc(afe_data_)
+                                 : afe_iface_->disable_agc(afe_data_);
+    if (result == -1) {
+        ESP_LOGW(TAG, "Failed to %s automatic gain control", requested ? "enable" : "disable");
+        return;
+    }
+    agc_active_.store(result == 1);
 }
 
 void AfeAudioEngine::ApplyPendingReset() {

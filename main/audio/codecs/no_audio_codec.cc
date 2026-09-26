@@ -118,8 +118,10 @@ int NoAudioCodec::Read(int16_t* dest, int samples) {
     }
 
     samples = bytes_read / sizeof(int32_t);
+    const float capture_scale = input_capture_scale_.load(std::memory_order_relaxed);
     for (int i = 0; i < samples; i++) {
-        int32_t value = bit32_buffer[i] >> 12;
+        const int32_t raw_value = bit32_buffer[i] >> 12;
+        const int32_t value = static_cast<int32_t>(std::lround(raw_value * capture_scale));
         dest[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
     }
     return samples;

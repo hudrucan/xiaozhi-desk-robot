@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/acoustic_environment_status.h"
+#include "audio/voice_input_config.h"
 #include "display/secondary_oled.h"
 #include "motion/gyro_turn_controller.h"
 #include "motion/motor_controller.h"
@@ -23,10 +24,10 @@ struct RobotStatus {
     bool display_flipped = false;
     std::string emotion;
     int speaker_volume = 0;
-    int microphone_gain = 1;
     bool microphone_muted = false;
     int microphone_level = 0;
     bool microphone_clipping = false;
+    VoiceInputStatus voice_input;
     int screen_brightness = 0;
     bool auto_brightness_enabled = false;
     int auto_brightness_minimum = 15;

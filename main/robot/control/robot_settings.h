@@ -1,12 +1,14 @@
 #pragma once
 
+#include "audio/voice_input_config.h"
+
 class RobotSettings {
 public:
     int GetSpeakerVolume() const;
-    int GetMicrophoneGain() const;
-    void SetMicrophoneGain(int gain) const;
     bool GetMicrophoneMuted() const;
     void SetMicrophoneMuted(bool muted) const;
+    VoiceInputConfig GetVoiceInputConfig() const;
+    void SetVoiceInputConfig(const VoiceInputConfig& config) const;
 
     bool GetCameraFlipped() const;
     void SetCameraFlipped(bool flipped) const;

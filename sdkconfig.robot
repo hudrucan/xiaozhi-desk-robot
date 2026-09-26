@@ -35,6 +35,8 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
 CONFIG_SR_WN_WN9_HIWALLE_TTS2=y
+CONFIG_SR_NSN_NSNET2=y
+# CONFIG_SR_NSN_WEBRTC is not set
 
 # Keep the camera DMA bounce buffer out of internal SRAM so AFE/WakeNet10
 # still has a usable internal heap after boot.

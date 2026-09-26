@@ -25,6 +25,7 @@
 #include "fixed_queue.h"
 #include "ogg_demuxer.h"
 #include "protocol.h"
+#include "voice_input_config.h"
 
 class GeminiTranscribeClient;
 
@@ -130,6 +131,8 @@ public:
     uint8_t GetInputLevel() const;
     bool IsInputClipping() const;
     AcousticEnvironmentStatus GetAcousticEnvironmentStatus() const;
+    void ConfigureVoiceInput(const VoiceInputConfig& config);
+    VoiceInputStatus GetVoiceInputStatus() const;
     void SetAcousticMotionActive(bool active) {
         acoustic_motion_active_.store(active, std::memory_order_relaxed);
     }
@@ -250,6 +253,7 @@ private:
     std::atomic<bool> acoustic_playback_active_{false};
     std::atomic<int64_t> acoustic_last_playback_us_{0};
     std::atomic<bool> acoustic_reset_accumulator_{false};
+    std::atomic<bool> acoustic_reset_floor_{false};
     uint64_t acoustic_sum_squares_ = 0;
     int64_t acoustic_sum_ = 0;
     size_t acoustic_sample_count_ = 0;
@@ -261,6 +265,28 @@ private:
     uint8_t acoustic_floor_initial_samples_ = 0;
     uint8_t acoustic_elevated_samples_ = 0;
     float acoustic_elevated_min_dbfs_ = 0.0f;
+
+    struct PcmLevelMeter {
+        uint64_t sum_squares = 0;
+        int64_t sum = 0;
+        size_t sample_count = 0;
+        uint32_t peak = 0;
+        std::atomic<uint32_t> sequence{0};
+        std::atomic<float> rms_dbfs{-90.0f};
+        std::atomic<float> peak_dbfs{-90.0f};
+        std::atomic<int64_t> last_update_us{0};
+    };
+    std::atomic<VoiceInputProfile> voice_profile_{VoiceInputProfile::kLegacy};
+    std::atomic<int> capture_trim_db_{0};
+    std::atomic<int> voice_gain_db_{0};
+    std::atomic<float> voice_gain_scale_{1.0f};
+    std::atomic<bool> voice_ns_requested_{false};
+    std::atomic<bool> voice_agc_requested_{false};
+    std::atomic<int64_t> voice_diagnostics_valid_after_us_{0};
+    std::atomic<bool> voice_level_reset_pending_{false};
+    std::atomic<bool> afe_output_level_reset_pending_{false};
+    PcmLevelMeter voice_level_meter_;
+    PcmLevelMeter afe_output_level_meter_;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
@@ -278,6 +304,13 @@ private:
     void UpdateAcousticTelemetry(const std::vector<int16_t>& data, int sample_rate,
                                  uint32_t frame_peak, int64_t now_us, bool input_available);
     void ResetAcousticAccumulator();
+    void ResetAcousticFloor();
+    void ApplyVoiceGainAndMeasure(std::vector<int16_t>& data, int sample_rate);
+    void ResetPcmLevelAccumulator(PcmLevelMeter& meter);
+    void UpdatePcmLevel(PcmLevelMeter& meter, const int16_t* data, size_t sample_count,
+                        int sample_rate);
+    void PublishPcmLevelIfReady(PcmLevelMeter& meter, size_t added_samples, int sample_rate);
+    PcmLevelStatus GetPcmLevelStatus(const PcmLevelMeter& meter) const;
 };
 
 #endif

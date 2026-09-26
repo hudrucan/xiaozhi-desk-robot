@@ -207,10 +207,11 @@ def copy_wakenet_model(src, dst, idf_target=None):
     return True
 
 
-def process_sr_models(wakenet_model_dirs, multinet_model_dirs, build_dir, assets_dir,
+def process_sr_models(wakenet_model_dirs, multinet_model_dirs, nsnet_model_dirs,
+                      build_dir, assets_dir,
                       idf_target=None):
-    """Process SR models (wakenet and multinet) and generate srmodels.bin"""
-    if not wakenet_model_dirs and not multinet_model_dirs:
+    """Process selected SR models and generate srmodels.bin."""
+    if not wakenet_model_dirs and not multinet_model_dirs and not nsnet_model_dirs:
         return None
     
     # Create SR models build directory
@@ -238,6 +239,14 @@ def process_sr_models(wakenet_model_dirs, multinet_model_dirs, build_dir, assets
             if copy_directory(multinet_model_dir, multinet_dst):
                 models_processed += 1
                 print(f"Added multinet model: {multinet_name}")
+
+    if nsnet_model_dirs:
+        for nsnet_model_dir in nsnet_model_dirs:
+            nsnet_name = os.path.basename(nsnet_model_dir)
+            nsnet_dst = os.path.join(sr_models_build_dir, nsnet_name)
+            if copy_directory(nsnet_model_dir, nsnet_dst):
+                models_processed += 1
+                print(f"Added noise suppression model: {nsnet_name}")
     
     if models_processed == 0:
         print("Warning: No SR models were successfully processed")
@@ -519,6 +528,15 @@ def read_multinet_from_sdkconfig(sdkconfig_path):
     return models
 
 
+def read_nsnet_from_sdkconfig(sdkconfig_path):
+    """Read the selected neural noise-suppression model from sdkconfig."""
+    if not os.path.exists(sdkconfig_path):
+        return []
+    with io.open(sdkconfig_path, "r", encoding="utf-8") as f:
+        config = "".join(line for line in f if line.startswith("CONFIG_SR_NSN_"))
+    return ["nsnet2"] if "CONFIG_SR_NSN_NSNET2=y" in config else []
+
+
 def read_wake_word_type_from_sdkconfig(sdkconfig_path):
     """
     Read wake word type configuration from sdkconfig
@@ -670,6 +688,18 @@ def get_multinet_model_paths(model_names, esp_sr_model_path):
     return valid_paths
 
 
+def get_nsnet_model_paths(model_names, esp_sr_model_path):
+    """Resolve selected NSNet model directories."""
+    valid_paths = []
+    for model_name in model_names:
+        model_path = os.path.join(esp_sr_model_path, "nsnet_model", model_name)
+        if os.path.exists(model_path):
+            valid_paths.append(model_path)
+        else:
+            print(f"Warning: NSNet model directory not found: {model_path}")
+    return valid_paths
+
+
 def get_text_font_path(builtin_text_font, noto_fonts_path):
     """
     Get the text font path if needed
@@ -689,7 +719,8 @@ def get_text_font_path(builtin_text_font, noto_fonts_path):
         return None
 
 
-def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font_path,
+def build_assets_integrated(wakenet_model_paths, multinet_model_paths, nsnet_model_paths,
+                            text_font_path,
                             extra_files_path, output_path,
                             multinet_model_info=None, font_bundle_id=None, max_size=None,
                             idf_target=None):
@@ -711,9 +742,10 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
         
         # Process each component
         srmodels = process_sr_models(
-            wakenet_model_paths, multinet_model_paths, temp_build_dir, assets_dir,
+            wakenet_model_paths, multinet_model_paths, nsnet_model_paths,
+            temp_build_dir, assets_dir,
             idf_target=idf_target,
-        ) if (wakenet_model_paths or multinet_model_paths) else None
+        ) if (wakenet_model_paths or multinet_model_paths or nsnet_model_paths) else None
         text_font = process_text_font(text_font_path, assets_dir) if text_font_path else None
         extra_files = process_extra_files(extra_files_path, assets_dir) if extra_files_path else None
         
@@ -802,10 +834,12 @@ def main():
     # Read SR models from sdkconfig
     wakenet_model_names = read_wakenet_from_sdkconfig(args.sdkconfig)
     multinet_model_names = read_multinet_from_sdkconfig(args.sdkconfig)
+    nsnet_model_names = read_nsnet_from_sdkconfig(args.sdkconfig)
     
     # Apply wake word logic to decide which models to package
     wakenet_model_paths = []
     multinet_model_paths = []
+    nsnet_model_paths = get_nsnet_model_paths(nsnet_model_names, args.esp_sr_model_path)
     
     # 1. Only package wakenet models if USE_AFE_WAKE_WORD=y
     if wake_word_config['use_afe_wake_word']:
@@ -830,6 +864,8 @@ def main():
         print(f"  wakenet models: {', '.join(wakenet_model_names)} (will be packaged)")
     if multinet_model_paths:
         print(f"  multinet models: {', '.join(multinet_model_names)} (will be packaged)")
+    if nsnet_model_paths:
+        print(f"  noise suppression models: {', '.join(nsnet_model_names)} (will be packaged)")
     
     # Get text font path if needed
     text_font_path = get_text_font_path(args.builtin_text_font, args.noto_fonts_path)
@@ -870,7 +906,7 @@ def main():
         print(f"  wake word threshold: {custom_wake_word_config['threshold']}")
     
     # Check if we have anything to build
-    if not wakenet_model_paths and not multinet_model_paths and not text_font_path and not extra_files_path and not multinet_model_info:
+    if not wakenet_model_paths and not multinet_model_paths and not nsnet_model_paths and not text_font_path and not extra_files_path and not multinet_model_info:
         print("Warning: No assets to build (no SR models, text font, extra files, or custom wake word)")
         # Create an empty assets.bin file
         os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -881,7 +917,8 @@ def main():
     
     # Build the assets
     success = build_assets_integrated(
-        wakenet_model_paths, multinet_model_paths, text_font_path, extra_files_path,
+        wakenet_model_paths, multinet_model_paths, nsnet_model_paths,
+        text_font_path, extra_files_path,
         args.output, multinet_model_info, font_bundle_id, args.max_size,
         idf_target=idf_target)
     

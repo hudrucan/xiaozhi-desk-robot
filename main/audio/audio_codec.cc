@@ -3,6 +3,8 @@
 #include "settings.h"
 
 #include <esp_log.h>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <driver/i2s_common.h>
 
@@ -48,6 +50,14 @@ void AudioCodec::SetOutputVolume(int volume) {
 void AudioCodec::SetInputGain(float gain) {
     input_gain_ = gain;
     ESP_LOGI(TAG, "Set input gain to %.1f", input_gain_);
+}
+
+void AudioCodec::SetInputCaptureTrimDb(float trim_db) {
+    const float safe_trim_db = std::clamp(trim_db, -24.0f, 0.0f);
+    input_capture_trim_db_.store(safe_trim_db, std::memory_order_relaxed);
+    input_capture_scale_.store(std::pow(10.0f, safe_trim_db / 20.0f),
+                               std::memory_order_relaxed);
+    ESP_LOGI(TAG, "Set input capture trim to %.1f dB", safe_trim_db);
 }
 
 void AudioCodec::EnableInput(bool enable) {

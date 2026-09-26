@@ -358,15 +358,42 @@ function renderCameraStatus(status) {
 
 function renderAudioStatus(status) {
   setRange($("#speakerVolume"), status.speaker_volume, $("#speakerValue"), "%");
-  setRange($("#microphoneGain"), status.microphone_gain, $("#microphoneValue"), "×");
+  setRange($("#microphoneVoiceGain"), status.voice_gain_db,
+    $("#microphoneVoiceGainValue"), " dB");
+  setRange($("#microphoneCaptureTrim"), status.capture_trim_db,
+    $("#microphoneCaptureTrimValue"), " dB");
+  const profile = status.voice_profile || "legacy";
+  setMicrophoneProfile(profile);
   if (document.activeElement !== $("#microphoneMute")) {
     $("#microphoneMute").checked = !!status.microphone_muted;
   }
+  if (document.activeElement !== $("#microphoneNs")) {
+    $("#microphoneNs").checked = !!status.ns_requested;
+  }
+  if (document.activeElement !== $("#microphoneAgc")) {
+    $("#microphoneAgc").checked = !!status.agc_requested;
+  }
+  $("#microphoneNs").disabled = !status.ns_available;
+  $("#microphoneAgc").disabled = !status.agc_available;
+  $("#microphoneNsState").textContent = !status.ns_available
+    ? "Unavailable" : !!status.ns_active !== !!status.ns_requested
+      ? "Pending" : status.ns_active ? "Active" : "Off";
+  $("#microphoneAgcState").textContent = !status.agc_available
+    ? "Unavailable" : !!status.agc_active !== !!status.agc_requested
+      ? "Pending" : status.agc_active ? "Active" : "Off";
   $("#micLevel").style.width = Math.max(0, Math.min(100, status.microphone_level || 0)) + "%";
   $("#micClip").textContent = status.microphone_muted
     ? "MUTED"
     : status.microphone_clipping ? "CLIP" : "LIVE";
   $("#micClip").classList.toggle("on", !!status.microphone_muted || !!status.microphone_clipping);
+  const formatLevels = (rms, peak) => Number.isFinite(rms) && Number.isFinite(peak)
+    ? "RMS " + Number(rms).toFixed(1) + " · Peak " + Number(peak).toFixed(1) + " dBFS"
+    : "Unavailable";
+  $("#microphoneVoiceLevel").textContent =
+    formatLevels(status.voice_rms_dbfs, status.voice_peak_dbfs);
+  $("#microphoneAfeLevel").textContent =
+    formatLevels(status.afe_output_rms_dbfs, status.afe_output_peak_dbfs);
+  $("#microphoneRestart").hidden = !status.voice_processing_restart_required;
 }
 
 function memoryResource(freeBytes, totalBytes) {
@@ -472,6 +499,10 @@ function renderEnvironmentStatus(status) {
   $("#bh1750Status").textContent = [environmentStateLabel(bh1750.state), illuminance]
     .filter(Boolean).join(" · ");
   const acousticFloor = $("#acousticFloorStatus");
+  $("#microphoneRawLevel").textContent = acoustic.valid
+    ? "RMS " + Number(acoustic.rms_dbfs).toFixed(1) + " · Peak " +
+      Number(acoustic.peak_dbfs).toFixed(1) + " dBFS"
+    : "Unavailable";
   if (!acoustic.valid) {
     $("#acousticStatus").textContent = "Unavailable";
     acousticFloor.hidden = true;

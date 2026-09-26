@@ -49,6 +49,7 @@ AudioService::~AudioService() {
 
 void AudioService::Initialize(AudioCodec* codec) {
     codec_ = codec;
+    codec_->SetInputCaptureTrimDb(static_cast<float>(capture_trim_db_.load()));
     codec_->Start();
 
     esp_opus_dec_cfg_t opus_dec_cfg =
@@ -82,10 +83,16 @@ void AudioService::Initialize(AudioCodec* codec) {
     }
 
     audio_engine_ = std::make_unique<AfeAudioEngine>();
+    audio_engine_->EnableNoiseSuppression(voice_ns_requested_.load());
+    audio_engine_->EnableAutomaticGainControl(voice_agc_requested_.load());
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+        if (afe_output_level_reset_pending_.exchange(false, std::memory_order_acq_rel)) {
+            ResetPcmLevelAccumulator(afe_output_level_meter_);
+        }
         if (microphone_muted_.load()) {
             return;
         }
+        UpdatePcmLevel(afe_output_level_meter_, data.data(), data.size(), 16000);
         if (asr_provider_.load(std::memory_order_acquire) == AsrProvider::kGemini) {
             auto* client = gemini_client_.load(std::memory_order_acquire);
             if (client != nullptr) {
@@ -251,6 +258,9 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     if (acoustic_reset_accumulator_.exchange(false, std::memory_order_acq_rel)) {
         ResetAcousticAccumulator();
     }
+    if (acoustic_reset_floor_.exchange(false, std::memory_order_acq_rel)) {
+        ResetAcousticFloor();
+    }
     const bool acoustic_input_available =
         !microphone_muted_.load(std::memory_order_relaxed);
     uint32_t peak = 0;
@@ -287,6 +297,16 @@ void AudioService::ResetAcousticAccumulator() {
     acoustic_sample_count_ = 0;
     acoustic_peak_ = 0;
     acoustic_window_self_noise_ = false;
+}
+
+void AudioService::ResetAcousticFloor() {
+    ResetAcousticAccumulator();
+    acoustic_noise_floor_initialized_ = false;
+    acoustic_noise_floor_estimate_dbfs_ = -90.0f;
+    acoustic_floor_initial_min_dbfs_ = 0.0f;
+    acoustic_floor_initial_samples_ = 0;
+    acoustic_elevated_samples_ = 0;
+    acoustic_elevated_min_dbfs_ = 0.0f;
 }
 
 void AudioService::UpdateAcousticTelemetry(const std::vector<int16_t>& data, int sample_rate,
@@ -415,6 +435,151 @@ AcousticEnvironmentStatus AudioService::GetAcousticEnvironmentStatus() const {
     return status;
 }
 
+void AudioService::ConfigureVoiceInput(const VoiceInputConfig& requested) {
+    VoiceInputConfig config = requested;
+    config.capture_trim_db = std::clamp(config.capture_trim_db, -24, 0);
+    config.voice_gain_db = std::clamp(config.voice_gain_db, -12, 12);
+    voice_profile_.store(config.profile, std::memory_order_relaxed);
+    const int old_voice_gain =
+        voice_gain_db_.exchange(config.voice_gain_db, std::memory_order_acq_rel);
+    voice_gain_scale_.store(std::pow(10.0f, config.voice_gain_db / 20.0f),
+                            std::memory_order_relaxed);
+    const bool old_ns_requested =
+        voice_ns_requested_.exchange(config.ns_requested, std::memory_order_acq_rel);
+    const bool old_agc_requested =
+        voice_agc_requested_.exchange(config.agc_requested, std::memory_order_acq_rel);
+
+    const int old_capture_trim =
+        capture_trim_db_.exchange(config.capture_trim_db, std::memory_order_acq_rel);
+    if (codec_ != nullptr) {
+        codec_->SetInputCaptureTrimDb(static_cast<float>(config.capture_trim_db));
+    }
+    if (old_capture_trim != config.capture_trim_db) {
+        acoustic_valid_after_us_.store(esp_timer_get_time(), std::memory_order_release);
+        acoustic_reset_floor_.store(true, std::memory_order_release);
+    }
+    if (old_capture_trim != config.capture_trim_db || old_voice_gain != config.voice_gain_db) {
+        voice_diagnostics_valid_after_us_.store(esp_timer_get_time(),
+                                                std::memory_order_release);
+        voice_level_reset_pending_.store(true, std::memory_order_release);
+        afe_output_level_reset_pending_.store(true, std::memory_order_release);
+    }
+    if (old_ns_requested != config.ns_requested || old_agc_requested != config.agc_requested) {
+        afe_output_level_reset_pending_.store(true, std::memory_order_release);
+    }
+    if (audio_engine_ != nullptr) {
+        audio_engine_->EnableNoiseSuppression(config.ns_requested);
+        audio_engine_->EnableAutomaticGainControl(config.agc_requested);
+    }
+}
+
+VoiceInputStatus AudioService::GetVoiceInputStatus() const {
+    VoiceInputStatus status;
+    status.config.profile = voice_profile_.load(std::memory_order_relaxed);
+    status.config.capture_trim_db = capture_trim_db_.load(std::memory_order_relaxed);
+    status.config.voice_gain_db = voice_gain_db_.load(std::memory_order_relaxed);
+    status.config.ns_requested = voice_ns_requested_.load(std::memory_order_relaxed);
+    status.config.agc_requested = voice_agc_requested_.load(std::memory_order_relaxed);
+    if (audio_engine_ != nullptr) {
+        status.ns_available = audio_engine_->IsNoiseSuppressionAvailable();
+        status.ns_active = audio_engine_->IsNoiseSuppressionActive();
+        status.agc_available = audio_engine_->IsAutomaticGainControlAvailable();
+        status.agc_active = audio_engine_->IsAutomaticGainControlActive();
+    }
+    // ESP-SR 2.4.7 exposes safe runtime NS/AGC toggles. Requests are applied
+    // by AfeAudioEngine's existing processing-task control path.
+    status.restart_required = false;
+    status.voice_level = GetPcmLevelStatus(voice_level_meter_);
+    status.afe_output_level = GetPcmLevelStatus(afe_output_level_meter_);
+    return status;
+}
+
+void AudioService::ApplyVoiceGainAndMeasure(std::vector<int16_t>& data, int sample_rate) {
+    if (voice_level_reset_pending_.exchange(false, std::memory_order_acq_rel)) {
+        ResetPcmLevelAccumulator(voice_level_meter_);
+    }
+    const float scale = voice_gain_scale_.load(std::memory_order_relaxed);
+    for (int16_t& sample : data) {
+        const int32_t amplified = static_cast<int32_t>(std::lround(sample * scale));
+        sample = static_cast<int16_t>(std::clamp<int32_t>(amplified, INT16_MIN, INT16_MAX));
+        const int32_t value = sample;
+        voice_level_meter_.sum += value;
+        voice_level_meter_.sum_squares +=
+            static_cast<uint64_t>(static_cast<int64_t>(value) * value);
+        voice_level_meter_.peak = std::max<uint32_t>(
+            voice_level_meter_.peak, static_cast<uint32_t>(value < 0 ? -value : value));
+    }
+    PublishPcmLevelIfReady(voice_level_meter_, data.size(), sample_rate);
+}
+
+void AudioService::ResetPcmLevelAccumulator(PcmLevelMeter& meter) {
+    meter.sum = 0;
+    meter.sum_squares = 0;
+    meter.sample_count = 0;
+    meter.peak = 0;
+}
+
+void AudioService::UpdatePcmLevel(PcmLevelMeter& meter, const int16_t* data, size_t sample_count,
+                                  int sample_rate) {
+    for (size_t i = 0; i < sample_count; ++i) {
+        const int32_t value = data[i];
+        meter.sum += value;
+        meter.sum_squares += static_cast<uint64_t>(static_cast<int64_t>(value) * value);
+        meter.peak = std::max<uint32_t>(
+            meter.peak, static_cast<uint32_t>(value < 0 ? -value : value));
+    }
+    PublishPcmLevelIfReady(meter, sample_count, sample_rate);
+}
+
+void AudioService::PublishPcmLevelIfReady(PcmLevelMeter& meter, size_t added_samples,
+                                          int sample_rate) {
+    meter.sample_count += added_samples;
+    if (meter.sample_count < static_cast<size_t>(std::max(sample_rate, 1)) / 5) {
+        return;
+    }
+    const double count = static_cast<double>(meter.sample_count);
+    const double mean = static_cast<double>(meter.sum) / count;
+    const double mean_square = static_cast<double>(meter.sum_squares) / count;
+    const float rms = static_cast<float>(std::sqrt(std::max(0.0, mean_square - mean * mean)));
+    const float peak = static_cast<float>(std::min<uint32_t>(meter.peak, 32767));
+    constexpr float kFloorDbfs = -90.0f;
+    const float rms_dbfs = rms > 0.0f
+                               ? std::max(kFloorDbfs, 20.0f * std::log10(rms / 32767.0f))
+                               : kFloorDbfs;
+    const float peak_dbfs = peak > 0.0f
+                                ? std::max(kFloorDbfs, 20.0f * std::log10(peak / 32767.0f))
+                                : kFloorDbfs;
+    meter.sequence.fetch_add(1, std::memory_order_acq_rel);
+    meter.rms_dbfs.store(rms_dbfs, std::memory_order_relaxed);
+    meter.peak_dbfs.store(peak_dbfs, std::memory_order_relaxed);
+    meter.last_update_us.store(esp_timer_get_time(), std::memory_order_relaxed);
+    meter.sequence.fetch_add(1, std::memory_order_release);
+    meter.sum = 0;
+    meter.sum_squares = 0;
+    meter.sample_count = 0;
+    meter.peak = 0;
+}
+
+PcmLevelStatus AudioService::GetPcmLevelStatus(const PcmLevelMeter& meter) const {
+    PcmLevelStatus status;
+    uint32_t before = 0;
+    uint32_t after = 0;
+    do {
+        before = meter.sequence.load(std::memory_order_acquire);
+        if (before & 1U) continue;
+        status.rms_dbfs = meter.rms_dbfs.load(std::memory_order_relaxed);
+        status.peak_dbfs = meter.peak_dbfs.load(std::memory_order_relaxed);
+        status.last_update_us = meter.last_update_us.load(std::memory_order_relaxed);
+        after = meter.sequence.load(std::memory_order_acquire);
+    } while (before != after || (after & 1U));
+    status.valid = !microphone_muted_.load(std::memory_order_relaxed) &&
+                   status.last_update_us > 0 &&
+                   status.last_update_us >=
+                       voice_diagnostics_valid_after_us_.load(std::memory_order_acquire) &&
+                   esp_timer_get_time() - status.last_update_us <= kAcousticFreshnessUs;
+    return status;
+}
+
 uint8_t AudioService::GetInputLevel() const {
     if (esp_timer_get_time() - last_input_level_us_.load(std::memory_order_relaxed) > 750000) {
         return 0;
@@ -498,6 +663,7 @@ void AudioService::AudioInputTask() {
             int samples = 160;  // 10ms
             std::vector<int16_t> data;
             if (ReadAudioData(data, 16000, samples)) {
+                ApplyVoiceGainAndMeasure(data, 16000);
                 audio_engine_->Feed(std::move(data));
                 continue;
             }
@@ -914,7 +1080,10 @@ void AudioService::EnableVoiceProcessing(bool enable) {
 void AudioService::SetMicrophoneMuted(bool muted) {
     microphone_muted_.store(muted);
     acoustic_valid_after_us_.store(esp_timer_get_time(), std::memory_order_release);
+    voice_diagnostics_valid_after_us_.store(esp_timer_get_time(), std::memory_order_release);
     acoustic_reset_accumulator_.store(true, std::memory_order_release);
+    voice_level_reset_pending_.store(true, std::memory_order_release);
+    afe_output_level_reset_pending_.store(true, std::memory_order_release);
     if (muted) {
         EnableVoiceProcessing(false);
         EnableWakeWordDetection(false);
@@ -1088,5 +1257,7 @@ bool AudioService::InitializeAudioEngine() {
     }
     audio_engine_initialized_ = true;
     audio_engine_->EnableDeviceAec(device_aec_enabled_);
+    audio_engine_->EnableNoiseSuppression(voice_ns_requested_.load());
+    audio_engine_->EnableAutomaticGainControl(voice_agc_requested_.load());
     return true;
 }

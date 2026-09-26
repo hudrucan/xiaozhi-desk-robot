@@ -16,16 +16,6 @@ int RobotSettings::GetSpeakerVolume() const {
     return std::clamp(static_cast<int>(settings.GetInt("output_volume", 70)), 0, 100);
 }
 
-int RobotSettings::GetMicrophoneGain() const {
-    Settings settings("audio", false);
-    return std::clamp(static_cast<int>(settings.GetInt("input_gain", 1)), 1, 3);
-}
-
-void RobotSettings::SetMicrophoneGain(int gain) const {
-    Settings settings("audio", true);
-    settings.SetInt("input_gain", std::clamp(gain, 1, 3));
-}
-
 bool RobotSettings::GetMicrophoneMuted() const {
     Settings settings("audio", false);
     return settings.GetBool("input_muted", false);
@@ -34,6 +24,29 @@ bool RobotSettings::GetMicrophoneMuted() const {
 void RobotSettings::SetMicrophoneMuted(bool muted) const {
     Settings settings("audio", true);
     settings.SetBool("input_muted", muted);
+}
+
+VoiceInputConfig RobotSettings::GetVoiceInputConfig() const {
+    Settings settings("audio", false);
+    VoiceInputConfig config;
+    config.profile =
+        ParseVoiceInputProfile(settings.GetString("voice_profile", "legacy"));
+    config.capture_trim_db =
+        std::clamp(static_cast<int>(settings.GetInt("capture_trim_db", 0)), -24, 0);
+    config.voice_gain_db =
+        std::clamp(static_cast<int>(settings.GetInt("voice_gain_db", 0)), -12, 12);
+    config.ns_requested = settings.GetBool("ns_enabled", false);
+    config.agc_requested = settings.GetBool("agc_enabled", false);
+    return config;
+}
+
+void RobotSettings::SetVoiceInputConfig(const VoiceInputConfig& requested) const {
+    Settings settings("audio", true);
+    settings.SetString("voice_profile", VoiceInputProfileName(requested.profile));
+    settings.SetInt("capture_trim_db", std::clamp(requested.capture_trim_db, -24, 0));
+    settings.SetInt("voice_gain_db", std::clamp(requested.voice_gain_db, -12, 12));
+    settings.SetBool("ns_enabled", requested.ns_requested);
+    settings.SetBool("agc_enabled", requested.agc_requested);
 }
 
 bool RobotSettings::GetCameraFlipped() const {

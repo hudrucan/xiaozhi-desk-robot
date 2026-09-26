@@ -48,7 +48,9 @@ function bindRangeControls() {
 
   [
     ["speakerVolume", "speakerValue", "speaker_volume", "%"],
-    ["microphoneGain", "microphoneValue", "microphone_gain", "×"],
+    ["microphoneVoiceGain", "microphoneVoiceGainValue", "microphone_voice_gain", " dB"],
+    ["microphoneCaptureTrim", "microphoneCaptureTrimValue",
+      "microphone_capture_trim", " dB"],
     ["screenBrightness", "screenValue", "screen_brightness", "%"],
     ["autoBrightnessMinimum", "autoBrightnessMinimumValue", "auto_brightness_minimum", "%"],
     ["autoBrightnessMaximum", "autoBrightnessMaximumValue", "auto_brightness_maximum", "%"],
@@ -74,6 +76,100 @@ function emergencyStop() {
   queueDomains(["motors"], 120);
 }
 
+const microphoneProfileValues = ["legacy", "near", "balanced", "far", "noisy", "custom"];
+let microphoneProfileActiveIndex = 0;
+
+function microphoneProfileLabel(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function setMicrophoneProfile(value) {
+  const normalized = microphoneProfileValues.includes(value) ? value : "legacy";
+  const trigger = $("#microphoneProfile");
+  trigger.value = normalized;
+  trigger.dataset.value = normalized;
+  $("#microphoneProfileLabel").textContent = microphoneProfileLabel(normalized);
+  $("#microphoneProfileState").textContent = microphoneProfileLabel(normalized);
+  $all(".microphone-profile-option").forEach((option, index) => {
+    option.setAttribute("aria-selected", option.dataset.value === normalized ? "true" : "false");
+    if (option.dataset.value === normalized && $("#microphoneProfileMenu").hidden) {
+      microphoneProfileActiveIndex = index;
+    }
+  });
+}
+
+function closeMicrophoneProfileMenu(restoreFocus = false) {
+  const trigger = $("#microphoneProfile");
+  $("#microphoneProfileMenu").hidden = true;
+  trigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) trigger.focus();
+}
+
+function focusMicrophoneProfileOption(index) {
+  const options = [...$all(".microphone-profile-option")];
+  microphoneProfileActiveIndex = (index + options.length) % options.length;
+  options[microphoneProfileActiveIndex].focus();
+}
+
+function openMicrophoneProfileMenu() {
+  const menu = $("#microphoneProfileMenu");
+  const selected = microphoneProfileValues.indexOf($("#microphoneProfile").dataset.value);
+  microphoneProfileActiveIndex = selected >= 0 ? selected : 0;
+  menu.hidden = false;
+  $("#microphoneProfile").setAttribute("aria-expanded", "true");
+  focusMicrophoneProfileOption(microphoneProfileActiveIndex);
+}
+
+function chooseMicrophoneProfile(value) {
+  const changed = value !== $("#microphoneProfile").dataset.value;
+  setMicrophoneProfile(value);
+  closeMicrophoneProfileMenu(true);
+  if (changed) action("microphone_profile", { text: value });
+}
+
+function bindMicrophoneProfileSelect() {
+  const root = $(".microphone-profile-select");
+  const trigger = $("#microphoneProfile");
+  const menu = $("#microphoneProfileMenu");
+  const options = [...$all(".microphone-profile-option")];
+
+  setMicrophoneProfile("legacy");
+  trigger.onclick = () => {
+    if (menu.hidden) openMicrophoneProfileMenu();
+    else closeMicrophoneProfileMenu(true);
+  };
+  trigger.onkeydown = (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    openMicrophoneProfileMenu();
+    focusMicrophoneProfileOption(
+      microphoneProfileActiveIndex + (event.key === "ArrowDown" ? 1 : -1),
+    );
+  };
+  options.forEach((option) => {
+    option.onclick = () => chooseMicrophoneProfile(option.dataset.value);
+  });
+  menu.onkeydown = (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusMicrophoneProfileOption(
+        microphoneProfileActiveIndex + (event.key === "ArrowDown" ? 1 : -1),
+      );
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      chooseMicrophoneProfile(options[microphoneProfileActiveIndex].dataset.value);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeMicrophoneProfileMenu(true);
+    } else if (event.key === "Tab") {
+      closeMicrophoneProfileMenu();
+    }
+  };
+  document.addEventListener("click", (event) => {
+    if (!menu.hidden && !root.contains(event.target)) closeMicrophoneProfileMenu();
+  });
+}
+
 function bindRobotControls() {
   bindLiveDriveControls();
   const duration = $("#duration");
@@ -85,6 +181,11 @@ function bindRobotControls() {
     action("auto_brightness", { value: event.target.checked ? 1 : 0 });
   $("#microphoneMute").onchange = (event) =>
     action("microphone_mute", { value: event.target.checked ? 1 : 0 });
+  bindMicrophoneProfileSelect();
+  $("#microphoneNs").onchange = (event) =>
+    action("microphone_ns", { value: event.target.checked ? 1 : 0 });
+  $("#microphoneAgc").onchange = (event) =>
+    action("microphone_agc", { value: event.target.checked ? 1 : 0 });
   $("#oledAutoContrast").onchange = (event) =>
     action("oled_auto_contrast", { value: event.target.checked ? 1 : 0 });
   $("#capacityStart").onclick = () => action("battery_capacity_start");

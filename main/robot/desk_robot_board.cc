@@ -118,7 +118,6 @@ private:
     std::atomic_bool camera_flipped_{false};
     std::atomic_bool display_flipped_{false};
     std::atomic_int speaker_volume_{70};
-    std::atomic_int microphone_gain_{1};
     std::atomic_int status_light_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_bool motor_activity_active_{false};
@@ -1729,10 +1728,9 @@ private:
 
     void InitializeAudioSettings() {
         const int speaker_volume = robot_settings_.GetSpeakerVolume();
-        const int microphone_gain = robot_settings_.GetMicrophoneGain();
         speaker_volume_.store(speaker_volume);
-        microphone_gain_.store(microphone_gain);
-        GetAudioCodec()->SetInputGain(static_cast<float>(microphone_gain));
+        Application::GetInstance().GetAudioService().ConfigureVoiceInput(
+            robot_settings_.GetVoiceInputConfig());
         if (robot_settings_.GetMicrophoneMuted()) {
             Application::GetInstance().SetMicrophoneMuted(true);
         }
@@ -1882,12 +1880,14 @@ private:
             [this, safe_volume]() { GetAudioCodec()->SetOutputVolume(safe_volume); });
     }
 
-    void QueueMicrophoneGain(int gain) {
-        const int safe_gain = std::clamp(gain, 1, 3);
-        microphone_gain_.store(safe_gain);
-        Application::GetInstance().Schedule([this, safe_gain]() {
-            GetAudioCodec()->SetInputGain(static_cast<float>(safe_gain));
-            robot_settings_.SetMicrophoneGain(safe_gain);
+    template <typename Update>
+    void QueueVoiceInputUpdate(Update update) {
+        Application::GetInstance().Schedule([this, update]() {
+            VoiceInputConfig config =
+                Application::GetInstance().GetAudioService().GetVoiceInputStatus().config;
+            update(config);
+            Application::GetInstance().GetAudioService().ConfigureVoiceInput(config);
+            robot_settings_.SetVoiceInputConfig(config);
         });
     }
 
@@ -2252,7 +2252,44 @@ private:
     }
 
     void SetSpeakerVolume(int volume) override { QueueSpeakerVolume(volume); }
-    void SetMicrophoneGain(int gain) override { QueueMicrophoneGain(gain); }
+    bool SetMicrophoneProfile(const std::string& profile_name) override {
+        const VoiceInputProfile profile = ParseVoiceInputProfile(profile_name);
+        if (profile_name != VoiceInputProfileName(profile)) {
+            return false;
+        }
+        QueueVoiceInputUpdate([profile](VoiceInputConfig& config) {
+            if (profile != VoiceInputProfile::kCustom) {
+                const int capture_trim_db = config.capture_trim_db;
+                config = VoiceInputProfileDefaults(profile);
+                config.capture_trim_db = capture_trim_db;
+            }
+            config.profile = profile;
+        });
+        return true;
+    }
+    void SetMicrophoneCaptureTrim(int trim_db) override {
+        QueueVoiceInputUpdate([trim_db](VoiceInputConfig& config) {
+            config.capture_trim_db = std::clamp(trim_db, -24, 0);
+        });
+    }
+    void SetMicrophoneVoiceGain(int gain_db) override {
+        QueueVoiceInputUpdate([gain_db](VoiceInputConfig& config) {
+            config.profile = VoiceInputProfile::kCustom;
+            config.voice_gain_db = std::clamp(gain_db, -12, 12);
+        });
+    }
+    void SetMicrophoneNoiseSuppression(bool enabled) override {
+        QueueVoiceInputUpdate([enabled](VoiceInputConfig& config) {
+            config.profile = VoiceInputProfile::kCustom;
+            config.ns_requested = enabled;
+        });
+    }
+    void SetMicrophoneAutomaticGainControl(bool enabled) override {
+        QueueVoiceInputUpdate([enabled](VoiceInputConfig& config) {
+            config.profile = VoiceInputProfile::kCustom;
+            config.agc_requested = enabled;
+        });
+    }
     void SetMicrophoneMuted(bool muted) override {
         Application::GetInstance().SetMicrophoneMuted(muted);
         Application::GetInstance().Schedule(
@@ -2339,11 +2376,11 @@ private:
         status.display_flipped = display_flipped_.load();
         status.emotion = display_->GetCurrentEmotion();
         status.speaker_volume = speaker_volume_.load();
-        status.microphone_gain = microphone_gain_.load();
         status.microphone_muted = app.IsMicrophoneMuted();
         auto& audio_service = app.GetAudioService();
         status.microphone_level = status.microphone_muted ? 0 : audio_service.GetInputLevel();
         status.microphone_clipping = !status.microphone_muted && audio_service.IsInputClipping();
+        status.voice_input = audio_service.GetVoiceInputStatus();
         status.screen_brightness = GetBacklight() != nullptr ? GetBacklight()->brightness() : 0;
         const AutoBrightnessPolicy::Config auto_brightness =
             auto_brightness_policy_.GetConfig();

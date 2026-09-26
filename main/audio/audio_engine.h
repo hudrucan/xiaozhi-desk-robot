@@ -21,11 +21,17 @@ public:
     virtual void EnableWakeWordDetection(bool enable) = 0;
     virtual void EnableVoiceProcessing(bool enable) = 0;
     virtual void EnableDeviceAec(bool enable) = 0;
+    virtual void EnableNoiseSuppression(bool enable) = 0;
+    virtual void EnableAutomaticGainControl(bool enable) = 0;
 
     virtual bool HasWakeWord() const = 0;
     virtual bool IsWakeWordDetectionEnabled() const = 0;
     virtual bool IsVoiceProcessingEnabled() const = 0;
     virtual bool IsAfeWakeWord() const = 0;
+    virtual bool IsNoiseSuppressionAvailable() const = 0;
+    virtual bool IsNoiseSuppressionActive() const = 0;
+    virtual bool IsAutomaticGainControlAvailable() const = 0;
+    virtual bool IsAutomaticGainControlActive() const = 0;
     virtual size_t GetFeedSize() const = 0;
 
     virtual void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) = 0;

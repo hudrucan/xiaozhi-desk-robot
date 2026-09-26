@@ -946,6 +946,126 @@
       .microphone-row {
         grid-template-columns: 102px minmax(70px, 1fr) 40px auto;
       }
+      .microphone-select-row,
+      .microphone-toggle-row {
+        grid-template-columns: minmax(120px, 1fr) minmax(110px, auto);
+      }
+      .microphone-profile-select {
+        position: relative;
+        justify-self: end;
+        width: 128px;
+        max-width: 100%;
+      }
+      .microphone-profile-trigger {
+        width: 100%;
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 7px 10px 7px 11px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #100d08;
+        color: var(--text);
+        font-size: 11px;
+        cursor: pointer;
+        outline: 0;
+      }
+      .microphone-profile-trigger:hover,
+      .microphone-profile-trigger:focus-visible,
+      .microphone-profile-trigger[aria-expanded="true"] {
+        border-color: var(--brass);
+        background: #181209;
+      }
+      .microphone-profile-chevron {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-right: 1px solid var(--muted);
+        border-bottom: 1px solid var(--muted);
+        transform: translateY(-2px) rotate(45deg);
+        transition: transform 0.15s ease;
+      }
+      .microphone-profile-trigger[aria-expanded="true"] .microphone-profile-chevron {
+        transform: translateY(2px) rotate(225deg);
+      }
+      .microphone-profile-menu {
+        position: absolute;
+        z-index: 6;
+        top: calc(100% + 5px);
+        right: 0;
+        width: 100%;
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #100d08;
+        box-shadow: 0 12px 26px var(--shadow);
+      }
+      .microphone-profile-option {
+        position: relative;
+        padding: 7px 9px 7px 25px;
+        border-radius: 7px;
+        color: var(--muted);
+        font-size: 11px;
+        cursor: pointer;
+        outline: 0;
+      }
+      .microphone-profile-option:before {
+        content: "\2713";
+        position: absolute;
+        left: 9px;
+        color: var(--brass);
+        opacity: 0;
+      }
+      .microphone-profile-option:hover,
+      .microphone-profile-option:focus-visible {
+        background: #20180e;
+        color: var(--text);
+      }
+      .microphone-profile-option[aria-selected="true"] {
+        background: #2a2012;
+        color: var(--hi);
+      }
+      .microphone-profile-option[aria-selected="true"]:before {
+        opacity: 1;
+      }
+      .microphone-toggle-row .toggle {
+        justify-self: end;
+      }
+      .microphone-advanced-row {
+        opacity: 0.82;
+      }
+      .microphone-level-row {
+        grid-template-columns: 102px 1fr;
+      }
+      .microphone-level-row .vu-wrap {
+        grid-column: 2;
+        grid-row: 1;
+        margin-top: 0;
+      }
+      .microphone-diagnostics {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 7px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line2);
+      }
+      .microphone-diagnostics div {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .microphone-diagnostics b {
+        color: var(--hi);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .microphone-restart {
+        color: var(--yellow);
+      }
       .oled-auto-contrast-row {
         grid-template-columns: minmax(130px, 1fr) auto auto;
       }
@@ -2426,6 +2546,13 @@
         }
         .audio-row {
           grid-template-columns: 82px 1fr 34px;
+        }
+        .microphone-select-row,
+        .microphone-toggle-row {
+          grid-template-columns: minmax(110px, 1fr) auto;
+        }
+        .microphone-level-row {
+          grid-template-columns: 82px 1fr;
         }
         .oled-auto-contrast-row {
           grid-template-columns: minmax(0, 1fr) auto auto;

@@ -31,11 +31,17 @@ public:
     void EnableWakeWordDetection(bool enable) override;
     void EnableVoiceProcessing(bool enable) override;
     void EnableDeviceAec(bool enable) override;
+    void EnableNoiseSuppression(bool enable) override;
+    void EnableAutomaticGainControl(bool enable) override;
 
     bool HasWakeWord() const override;
     bool IsWakeWordDetectionEnabled() const override;
     bool IsVoiceProcessingEnabled() const override;
     bool IsAfeWakeWord() const override { return HasWakeWord(); }
+    bool IsNoiseSuppressionAvailable() const override { return ns_available_.load(); }
+    bool IsNoiseSuppressionActive() const override { return ns_active_.load(); }
+    bool IsAutomaticGainControlAvailable() const override { return agc_available_.load(); }
+    bool IsAutomaticGainControlActive() const override { return agc_active_.load(); }
     size_t GetFeedSize() const override;
 
     void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) override;
@@ -70,9 +76,15 @@ private:
     int frame_samples_ = 0;
     bool is_speaking_ = false;
     std::atomic<bool> device_aec_enabled_{false};
+    std::atomic<bool> ns_requested_{false};
+    std::atomic<bool> ns_available_{false};
+    std::atomic<bool> ns_active_{false};
+    std::atomic<bool> agc_requested_{false};
+    std::atomic<bool> agc_available_{false};
+    std::atomic<bool> agc_active_{false};
     // Deferred AFE buffer reset, performed by ProcessingTask (see UpdateActiveState)
     std::atomic<bool> reset_pending_{false};
-    // Deferred WakeNet/AEC toggles, applied by ProcessingTask (see ApplyAfeControls)
+    // Deferred WakeNet/AEC/NS/AGC toggles, applied by ProcessingTask.
     std::atomic<bool> afe_control_dirty_{false};
     // Deferred output_buffer_ clear, performed by the output-producing task
     std::atomic<bool> output_reset_pending_{false};
@@ -104,6 +116,8 @@ private:
     void UpdateActiveState();
     void UpdateAecState();
     void ApplyAfeControls();
+    void ApplyNoiseSuppressionControl();
+    void ApplyAutomaticGainControlControl();
     void ApplyPendingReset();
     void OutputRawAudio(const std::vector<int16_t>& data);
     void HandleWakeWordResult(const afe_fetch_result_t* result);

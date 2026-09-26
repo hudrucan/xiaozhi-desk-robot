@@ -48,7 +48,11 @@ public:
     virtual void SetSecondaryDisplayConfig(const SecondaryOled::Config& config) = 0;
 
     virtual void SetSpeakerVolume(int volume) = 0;
-    virtual void SetMicrophoneGain(int gain) = 0;
+    virtual bool SetMicrophoneProfile(const std::string& profile) = 0;
+    virtual void SetMicrophoneCaptureTrim(int trim_db) = 0;
+    virtual void SetMicrophoneVoiceGain(int gain_db) = 0;
+    virtual void SetMicrophoneNoiseSuppression(bool enabled) = 0;
+    virtual void SetMicrophoneAutomaticGainControl(bool enabled) = 0;
     virtual void SetMicrophoneMuted(bool muted) = 0;
     virtual void SetScreenBrightness(int brightness) = 0;
     virtual void SetAutoBrightnessEnabled(bool enabled) = 0;

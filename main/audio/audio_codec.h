@@ -6,6 +6,7 @@
 #include <driver/i2s_std.h>
 #include <esp_idf_version.h>
 
+#include <atomic>
 #include <vector>
 #include <string>
 #include <functional>
@@ -31,6 +32,7 @@ public:
     
     virtual void SetOutputVolume(int volume);
     virtual void SetInputGain(float gain);
+    virtual void SetInputCaptureTrimDb(float trim_db);
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
 
@@ -46,6 +48,9 @@ public:
     inline int output_channels() const { return output_channels_; }
     inline int output_volume() const { return output_volume_; }
     inline float input_gain() const { return input_gain_; }
+    inline float input_capture_trim_db() const {
+        return input_capture_trim_db_.load(std::memory_order_relaxed);
+    }
     inline bool input_enabled() const { return input_enabled_; }
     inline bool output_enabled() const { return output_enabled_; }
 
@@ -63,6 +68,8 @@ protected:
     int output_channels_ = 1;
     int output_volume_ = 70;
     float input_gain_ = 0.0;
+    std::atomic<float> input_capture_trim_db_{0.0f};
+    std::atomic<float> input_capture_scale_{1.0f};
 
     virtual int Read(int16_t* dest, int samples) = 0;
     virtual int Write(const int16_t* data, int samples) = 0;
