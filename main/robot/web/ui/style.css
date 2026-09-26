@@ -1385,17 +1385,139 @@
       }
       .camera-check {
         display: flex;
+        min-width: 0;
         align-items: center;
+        align-self: stretch;
         gap: 8px;
-        min-height: 36px;
+        min-height: 70px;
         color: var(--muted);
-        font-size: 10px;
+        font-size: 11px;
+      }
+      .camera-check input[type="checkbox"] {
+        flex: 0 0 auto;
+        margin: 0;
+      }
+      .camera-check span {
+        min-width: 0;
+        line-height: 1.35;
+      }
+      .camera-control-card {
+        justify-content: center;
+      }
+      .camera-field-heading {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        padding: 2px 4px 5px;
+      }
+      .camera-field-title {
+        color: var(--muted);
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .camera-field-options,
+      .camera-inline-check {
+        display: inline-flex;
+        align-items: center;
+      }
+      .camera-field-options {
+        flex-wrap: wrap;
+        gap: 6px 12px;
+      }
+      .camera-inline-check {
+        gap: 6px;
+        color: var(--muted);
+        font-size: 9px;
+        white-space: nowrap;
+      }
+      .camera-inline-check input[type="checkbox"] {
+        flex: 0 0 auto;
+        margin: 0;
+      }
+      .camera-check input[type="checkbox"],
+      .camera-inline-check input[type="checkbox"] {
+        appearance: none;
+        -webkit-appearance: none;
+        position: relative;
+        width: 32px;
+        height: 18px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #0d0a06;
+        cursor: pointer;
+        outline: none;
+        transition: border-color 140ms ease, background 140ms ease,
+          box-shadow 140ms ease;
+      }
+      .camera-check input[type="checkbox"]::after,
+      .camera-inline-check input[type="checkbox"]::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--muted);
+        transition: transform 140ms ease, background 140ms ease,
+          box-shadow 140ms ease;
+      }
+      .camera-check input[type="checkbox"]:hover:not(:disabled),
+      .camera-inline-check input[type="checkbox"]:hover:not(:disabled) {
+        border-color: var(--brass);
+      }
+      .camera-check input[type="checkbox"]:checked,
+      .camera-inline-check input[type="checkbox"]:checked {
+        border-color: var(--brass);
+        background: rgba(198, 161, 91, 0.22);
+        box-shadow: inset 0 0 8px rgba(198, 161, 91, 0.12);
+      }
+      .camera-check input[type="checkbox"]:checked::after,
+      .camera-inline-check input[type="checkbox"]:checked::after {
+        transform: translateX(14px);
+        background: var(--hi);
+        box-shadow: 0 0 7px rgba(227, 194, 123, 0.42);
+      }
+      .camera-check input[type="checkbox"]:focus-visible,
+      .camera-inline-check input[type="checkbox"]:focus-visible {
+        box-shadow: 0 0 0 2px rgba(198, 161, 91, 0.25);
+      }
+      .camera-check input[type="checkbox"]:disabled,
+      .camera-inline-check input[type="checkbox"]:disabled {
+        cursor: not-allowed;
+        opacity: 0.42;
       }
       .camera-advanced {
         margin-top: 14px;
         border: 1px solid var(--line2);
         border-radius: 12px;
         padding: 10px;
+      }
+      .camera-advanced-groups {
+        display: grid;
+        gap: 16px;
+        margin-top: 12px;
+      }
+      .camera-control-group {
+        min-width: 0;
+      }
+      .camera-control-group > h4 {
+        margin: 0;
+        color: var(--brass);
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .camera-control-group > .camera-settings-grid {
+        margin-top: 8px;
+      }
+      .camera-settings-grid-single {
+        grid-template-columns: 1fr;
       }
       .camera-settings-actions {
         display: grid;
@@ -1798,15 +1920,21 @@
         grid-template-columns: 1fr 1fr;
         gap: 9px;
       }
-      .field {
-        display: flex;
+      .field,
+      .camera-check {
         min-width: 0;
-        flex-direction: column;
-        gap: 6px;
         padding: 11px;
         border: 1px solid var(--line2);
         border-radius: 9px;
         background: rgba(7, 6, 4, 0.3);
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .camera-settings-grid > .camera-check {
+        padding: 14px 15px;
       }
       .field.wide {
         grid-column: 1/-1;
