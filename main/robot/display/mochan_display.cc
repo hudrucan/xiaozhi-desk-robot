@@ -170,6 +170,31 @@ void MochanDisplay::TriggerAmbientYawn(uint32_t generation) {
     }
 }
 
+void MochanDisplay::SetAmbientBaseFace(uint32_t generation, const std::string& emotion) {
+    const std::string requested = IsSupportedEmotion(emotion) ? emotion : "neutral";
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation < ambient_base_face_generation_) {
+        return;
+    }
+    ambient_base_face_generation_ = generation;
+    ambient_base_face_request_generation_ = generation;
+    requested_ambient_base_face_ = requested;
+    ambient_base_face_requested_ = true;
+    ambient_base_face_request_pending_ = true;
+}
+
+void MochanDisplay::ClearAmbientBaseFace(uint32_t generation) {
+    std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+    if (generation < ambient_base_face_generation_) {
+        return;
+    }
+    ambient_base_face_generation_ = generation;
+    ambient_base_face_request_generation_ = generation;
+    requested_ambient_base_face_.clear();
+    ambient_base_face_requested_ = false;
+    ambient_base_face_request_pending_ = true;
+}
+
 void MochanDisplay::SetupUI() {
     if (setup_ui_called_) {
         return;
@@ -607,6 +632,29 @@ void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
     }
 }
 
+void MochanDisplay::ConsumeAmbientBaseFaceRequest() {
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
+        if (!ambient_base_face_request_pending_ ||
+            ambient_base_face_request_generation_ != ambient_base_face_generation_) {
+            return;
+        }
+        ambient_base_face_request_pending_ = false;
+        const std::string next_face = ambient_base_face_requested_
+                                          ? requested_ambient_base_face_
+                                          : std::string{};
+        changed = applied_ambient_base_face_generation_ != ambient_base_face_generation_ ||
+                  ambient_base_face_ != next_face;
+        if (!changed) {
+            return;
+        }
+        applied_ambient_base_face_generation_ = ambient_base_face_generation_;
+        ambient_base_face_ = next_face;
+    }
+    ApplyRestingFaceLocked();
+}
+
 void MochanDisplay::AdvanceMouthAnimation(bool idle_eligible) {
     const int64_t now_ms = esp_timer_get_time() / 1000;
     if (!idle_eligible || yawn_active_) {
@@ -688,6 +736,7 @@ void MochanDisplay::AdvanceEyeAnimation() {
         RecordAnimationTiming(callback_started_us, frame_interval_us);
         return;
     }
+    ConsumeAmbientBaseFaceRequest();
     std::string emotion;
     {
         std::lock_guard<std::mutex> state_lock(emotion_mutex_);

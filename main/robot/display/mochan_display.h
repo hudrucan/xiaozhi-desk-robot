@@ -47,6 +47,8 @@ public:
     void ClearAmbientGaze(uint32_t generation);
     void TriggerAmbientMouth(uint32_t generation);
     void TriggerAmbientYawn(uint32_t generation);
+    void SetAmbientBaseFace(uint32_t generation, const std::string& emotion);
+    void ClearAmbientBaseFace(uint32_t generation);
     static bool IsSupportedEmotion(const std::string& emotion);
 
     void ShowBootSplash();
@@ -172,9 +174,12 @@ private:
     static bool GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y);
 
     void SetFaceState(FaceState state);
+    void ApplyRestingFaceLocked();
+    static bool ResolveEmotionFaceState(const std::string& emotion, FaceState& state);
     void AdvanceEyeAnimation();
     void AdvanceFaceLayout(int64_t now_us);
     void ConsumeAmbientPrimitiveRequests(const std::string& emotion, bool idle_eligible);
+    void ConsumeAmbientBaseFaceRequest();
     void AdvanceYawnAnimation(const std::string& emotion);
     void AdvanceMouthAnimation(bool idle_eligible);
     void CancelAmbientAnimations();
@@ -287,9 +292,16 @@ private:
     uint32_t ambient_gaze_request_generation_ = 0;
     uint32_t ambient_mouth_request_generation_ = 0;
     uint32_t ambient_yawn_request_generation_ = 0;
+    uint32_t ambient_base_face_generation_ = 0;
+    uint32_t ambient_base_face_request_generation_ = 0;
+    uint32_t applied_ambient_base_face_generation_ = 0;
+    std::string requested_ambient_base_face_;
+    std::string ambient_base_face_;
     bool ambient_gaze_requested_ = false;
     bool ambient_mouth_requested_ = false;
     bool ambient_yawn_requested_ = false;
+    bool ambient_base_face_requested_ = false;
+    bool ambient_base_face_request_pending_ = false;
     bool response_box_requested_ = false;
     bool preview_show_pending_ = false;
     std::string exiting_mouth_emotion_;

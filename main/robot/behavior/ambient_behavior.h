@@ -25,7 +25,7 @@ public:
         bool tool_active = false;
         bool manual_control_active = false;
         bool motor_busy = false;
-        bool floor_safe = true;
+        bool reaction_motion_active = false;
         bool gyro_busy = false;
         bool battery_valid = false;
         int battery_percent = -1;
@@ -40,6 +40,8 @@ public:
         std::function<void(uint32_t)> clear_gaze;
         std::function<void(uint32_t)> trigger_mouth;
         std::function<void(uint32_t)> trigger_yawn;
+        std::function<void(uint32_t, const std::string&)> set_base_face;
+        std::function<void(uint32_t)> clear_base_face;
     };
 
     bool Initialize(ReactionEngine& reaction_engine, Callbacks callbacks);
@@ -47,8 +49,9 @@ public:
     void NotifyInteraction(int64_t now_us);
 
 private:
-    enum class IdleStage : uint8_t { kAwake, kRelaxed, kCurious, kSleepy };
+    enum class IdleStage : uint8_t { kAwake, kRelaxed, kCurious, kPlayful, kSleepy };
     enum class GazeAction : uint8_t { kNone, kSet, kClear };
+    enum class BaseFaceAction : uint8_t { kNone, kSet, kClear };
     enum class GazeProfile : uint8_t {
         kSuppressed,
         kListening,
@@ -63,6 +66,7 @@ private:
         kIdleAwake,
         kIdleRelaxed,
         kIdleCurious,
+        kIdlePlayful,
         kIdleSleepy,
     };
 
@@ -74,6 +78,9 @@ private:
         int8_t gaze_y = 0;
         bool trigger_mouth = false;
         bool trigger_yawn = false;
+        BaseFaceAction base_face_action = BaseFaceAction::kNone;
+        uint32_t base_face_generation = 0;
+        std::string base_face;
         uint32_t cancel_reaction_generation = 0;
         bool start_reaction = false;
         std::string reaction_name;
@@ -87,13 +94,19 @@ private:
     static bool IsBatteryLow(const Context& context);
     static bool IsBatteryCritical(const Context& context);
     static bool IsDim(const Context& context);
-    static bool IsDark(const Context& context);
 
     void ExecuteActions(PendingActions actions);
     void BumpPrimitiveGenerationLocked(PendingActions& actions);
+    void BumpBaseFaceGenerationLocked(PendingActions& actions, bool set_face,
+                                      const std::string& face = {});
     void DetachOwnedReactionLocked(PendingActions& actions);
     bool RefreshOwnedReactionLocked(const ReactionEngine::Status& status);
-    void ResetIdleSessionLocked(int64_t now_us, bool start_idle);
+    void ResetIdleSessionLocked(int64_t now_us, bool start_idle, PendingActions& actions);
+    void SetBaseFaceLocked(const std::string& face, int64_t now_us, PendingActions& actions);
+    void ScheduleNextBaseFaceLocked(IdleStage stage, int64_t now_us);
+    void AdvanceBaseFaceLocked(IdleStage stage, bool reaction_overlay, int64_t now_us,
+                               PendingActions& actions);
+    std::string SelectBaseFaceLocked(IdleStage stage) const;
     static GazeProfile ResolveGazeProfile(const Context& context, IdleStage stage);
     void UpdateGazeProfileLocked(GazeProfile profile, int64_t now_us,
                                  PendingActions& actions);
@@ -102,7 +115,7 @@ private:
                            PendingActions& actions);
     void AdvanceIdleActionsLocked(const Context& context, IdleStage stage, int64_t now_us,
                                   PendingActions& actions);
-    IdleStage ResolveIdleStageLocked(const Context& context, int64_t now_us) const;
+    IdleStage ResolveIdleStageLocked(int64_t now_us) const;
     bool PrepareSemanticReactionLocked(const char* name, int duration_ms, int64_t now_us,
                                        PendingActions& actions);
 
@@ -114,16 +127,23 @@ private:
     Activity activity_ = Activity::kSuppressed;
     bool hard_suppressed_ = true;
     bool idle_session_active_ = false;
+    bool reaction_overlay_active_ = false;
+    bool foreign_reaction_active_ = false;
     bool gaze_holding_ = false;
     GazeProfile gaze_profile_ = GazeProfile::kSuppressed;
+    IdleStage idle_stage_ = IdleStage::kAwake;
     uint32_t primitive_generation_ = 0;
+    uint32_t base_face_generation_ = 0;
     uint32_t owned_reaction_generation_ = 0;
+    std::string base_face_;
+    std::string previous_base_face_;
     std::string owned_reaction_name_;
     bool reaction_start_pending_ = false;
     uint32_t next_start_token_ = 0;
     int64_t idle_started_us_ = 0;
     int64_t next_gaze_us_ = 0;
     int64_t next_mouth_us_ = 0;
+    int64_t next_base_face_us_ = 0;
     int64_t next_semantic_us_ = 0;
     int64_t yawn_due_us_ = 0;
     int64_t last_yawn_us_ = 0;

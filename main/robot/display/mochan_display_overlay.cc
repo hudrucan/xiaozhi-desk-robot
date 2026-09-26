@@ -101,6 +101,110 @@ bool EndsWithSentencePunctuation(const std::string& text) {
 
 }  // namespace
 
+bool MochanDisplay::ResolveEmotionFaceState(const std::string& emotion, FaceState& state) {
+    if (emotion == "neutral" || emotion == "robot_2") {
+        state = FaceState::kIdle;
+    } else if (emotion == "happy") {
+        state = FaceState::kHappy;
+    } else if (emotion == "laughing") {
+        state = FaceState::kLaughing;
+    } else if (emotion == "funny") {
+        state = FaceState::kFunny;
+    } else if (emotion == "angry") {
+        state = FaceState::kAngry;
+    } else if (emotion == "sad") {
+        state = FaceState::kSad;
+    } else if (emotion == "crying") {
+        state = FaceState::kCrying;
+    } else if (emotion == "loving") {
+        state = FaceState::kLoving;
+    } else if (emotion == "embarrassed") {
+        state = FaceState::kEmbarrassed;
+    } else if (emotion == "surprised") {
+        state = FaceState::kSurprised;
+    } else if (emotion == "shocked") {
+        state = FaceState::kShocked;
+    } else if (emotion == "winking") {
+        state = FaceState::kWinking;
+    } else if (emotion == "cool" || emotion == "bored") {
+        state = FaceState::kCool;
+    } else if (emotion == "relaxed") {
+        state = FaceState::kRelaxed;
+    } else if (emotion == "delicious") {
+        state = FaceState::kDelicious;
+    } else if (emotion == "kissy") {
+        state = FaceState::kKissy;
+    } else if (emotion == "confident") {
+        state = FaceState::kConfident;
+    } else if (emotion == "sleepy") {
+        state = FaceState::kSleepy;
+    } else if (emotion == "silly") {
+        state = FaceState::kSilly;
+    } else if (emotion == "confused") {
+        state = FaceState::kConfused;
+    } else if (emotion == "suspicious") {
+        state = FaceState::kSuspicious;
+    } else if (emotion == "shake") {
+        state = FaceState::kShake;
+    } else if (emotion == "left") {
+        state = FaceState::kLookLeft;
+    } else if (emotion == "right") {
+        state = FaceState::kLookRight;
+    } else if (emotion == "up") {
+        state = FaceState::kLookUp;
+    } else if (emotion == "down") {
+        state = FaceState::kLookDown;
+    } else if (emotion == "up_left") {
+        state = FaceState::kLookUpLeft;
+    } else if (emotion == "up_right") {
+        state = FaceState::kLookUpRight;
+    } else if (emotion == "down_left") {
+        state = FaceState::kLookDownLeft;
+    } else if (emotion == "down_right") {
+        state = FaceState::kLookDownRight;
+    } else if (emotion == "thinking") {
+        state = FaceState::kThinking;
+    } else if (emotion == "speaking") {
+        state = FaceState::kSpeaking;
+    } else if (emotion == "listening") {
+        state = FaceState::kListening;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+void MochanDisplay::ApplyRestingFaceLocked() {
+    if (face_override_active_.load(std::memory_order_acquire) || emotion_active_) {
+        return;
+    }
+
+    std::string emotion = "neutral";
+    FaceState state = FaceState::kIdle;
+    if (activity_state_ == FaceState::kListening) {
+        emotion = "listening";
+        state = FaceState::kListening;
+    } else if (activity_state_ == FaceState::kThinking) {
+        emotion = "thinking";
+        state = FaceState::kThinking;
+    } else if (activity_state_ == FaceState::kSpeaking) {
+        emotion = "speaking";
+        state = FaceState::kSpeaking;
+    } else if (!ambient_base_face_.empty() &&
+               !ResolveEmotionFaceState(ambient_base_face_, state)) {
+        ambient_base_face_.clear();
+    } else if (!ambient_base_face_.empty()) {
+        emotion = ambient_base_face_;
+    }
+
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        current_emotion_ = emotion;
+    }
+    SetFaceState(state);
+    UpdateFaceLayoutTarget(emotion, esp_timer_get_time());
+}
+
 void MochanDisplay::SetStatus(const char* status) {
     if (status == nullptr) {
         return;
@@ -151,19 +255,8 @@ void MochanDisplay::SetStatus(const char* status) {
     }
     CancelAmbientAnimations();
     if (!emotion_active_) {
-        const char* activity_emotion = "neutral";
-        if (activity_state_ == FaceState::kListening) {
-            activity_emotion = "listening";
-        } else if (activity_state_ == FaceState::kSpeaking) {
-            activity_emotion = "speaking";
-        } else if (activity_state_ == FaceState::kThinking) {
-            activity_emotion = "thinking";
-        }
-        {
-            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-            current_emotion_ = activity_emotion;
-        }
-        SetFaceState(activity_state_);
+        ApplyRestingFaceLocked();
+        return;
     }
     std::string emotion;
     {
@@ -182,20 +275,7 @@ void MochanDisplay::RestoreActivityFace() {
     FreezeMouthForExit();
     emotion_active_ = false;
     CancelAmbientAnimations();
-    const char* activity_emotion = "neutral";
-    if (activity_state_ == FaceState::kListening) {
-        activity_emotion = "listening";
-    } else if (activity_state_ == FaceState::kSpeaking) {
-        activity_emotion = "speaking";
-    } else if (activity_state_ == FaceState::kThinking) {
-        activity_emotion = "thinking";
-    }
-    {
-        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-        current_emotion_ = activity_emotion;
-    }
-    SetFaceState(activity_state_);
-    UpdateFaceLayoutTarget(activity_emotion, esp_timer_get_time());
+    ApplyRestingFaceLocked();
 }
 
 void MochanDisplay::RenderTypingText() {
@@ -535,128 +615,26 @@ void MochanDisplay::SetEmotion(const char* emotion) {
     const std::string requested(emotion);
     DisplayLockGuard lock(this);
     CancelAmbientAnimations();
+    FaceState state = FaceState::kIdle;
+    if (!ResolveEmotionFaceState(requested, state)) {
+        ESP_LOGW(kTag, "Unsupported emotion: %s", emotion);
+        emotion_active_ = false;
+        ApplyRestingFaceLocked();
+        return;
+    }
+    if (requested == "neutral" || requested == "robot_2") {
+        emotion_active_ = false;
+        ApplyRestingFaceLocked();
+        return;
+    }
+
+    emotion_active_ = true;
     {
         std::lock_guard<std::mutex> state_lock(emotion_mutex_);
         current_emotion_ = requested;
     }
-    if (requested == "happy") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kHappy);
-    } else if (requested == "laughing") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLaughing);
-    } else if (requested == "funny") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kFunny);
-    } else if (requested == "angry") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kAngry);
-    } else if (requested == "sad") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kSad);
-    } else if (requested == "crying") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kCrying);
-    } else if (requested == "loving") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLoving);
-    } else if (requested == "embarrassed") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kEmbarrassed);
-    } else if (requested == "surprised") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kSurprised);
-    } else if (requested == "shocked") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kShocked);
-    } else if (requested == "winking") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kWinking);
-    } else if (requested == "cool" || requested == "bored") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kCool);
-    } else if (requested == "relaxed") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kRelaxed);
-    } else if (requested == "delicious") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kDelicious);
-    } else if (requested == "kissy") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kKissy);
-    } else if (requested == "confident") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kConfident);
-    } else if (requested == "sleepy") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kSleepy);
-    } else if (requested == "silly") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kSilly);
-    } else if (requested == "confused") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kConfused);
-    } else if (requested == "suspicious") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kSuspicious);
-    } else if (requested == "shake") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kShake);
-    } else if (requested == "left") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookLeft);
-    } else if (requested == "right") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookRight);
-    } else if (requested == "up") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookUp);
-    } else if (requested == "down") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookDown);
-    } else if (requested == "up_left") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookUpLeft);
-    } else if (requested == "up_right") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookUpRight);
-    } else if (requested == "down_left") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookDownLeft);
-    } else if (requested == "down_right") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kLookDownRight);
-    } else if (requested == "thinking") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kThinking);
-    } else if (requested == "speaking") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kSpeaking);
-    } else if (requested == "listening") {
-        emotion_active_ = true;
-        SetFaceState(FaceState::kListening);
-    } else if (requested == "neutral" || requested == "robot_2") {
-        {
-            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-            current_emotion_ = "neutral";
-        }
-        emotion_active_ = false;
-        SetFaceState(activity_state_);
-    } else {
-        ESP_LOGW(kTag, "Unsupported emotion: %s", emotion);
-        {
-            std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-            current_emotion_ = "neutral";
-        }
-        emotion_active_ = false;
-        SetFaceState(activity_state_);
-    }
-    std::string current_emotion;
-    {
-        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
-        current_emotion = current_emotion_;
-    }
-    UpdateFaceLayoutTarget(current_emotion, esp_timer_get_time());
+    SetFaceState(state);
+    UpdateFaceLayoutTarget(requested, esp_timer_get_time());
 }
 
 std::string MochanDisplay::GetCurrentEmotion() const {

@@ -291,10 +291,8 @@ private:
             now_us < ambient_manual_control_until_us_.load(std::memory_order_acquire);
         context.motor_busy = motors_.IsActive() ||
                              motor_activity_active_.load(std::memory_order_relaxed);
-#ifdef DISTANCE_SENSOR_I2C_ADDRESS
-        const auto cliff = cliff_sensor_.GetStatus();
-        context.floor_safe = !cliff.valid || !cliff.cliff_detected;
-#endif
+        context.reaction_motion_active =
+            reaction_motion_generation_.load(std::memory_order_acquire) != 0;
 #ifdef MPU6050_I2C_ADDRESS
         const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
         context.gyro_busy = gyro.pending || gyro.active;
@@ -1358,6 +1356,14 @@ private:
                 .trigger_yawn =
                     [this](uint32_t generation) {
                         display_->TriggerAmbientYawn(generation);
+                    },
+                .set_base_face =
+                    [this](uint32_t generation, const std::string& emotion) {
+                        display_->SetAmbientBaseFace(generation, emotion);
+                    },
+                .clear_base_face =
+                    [this](uint32_t generation) {
+                        display_->ClearAmbientBaseFace(generation);
                     },
             });
         if (!initialized) {

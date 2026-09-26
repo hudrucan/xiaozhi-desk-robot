@@ -635,19 +635,17 @@ void MochanDisplay::ApplyRoundedEye(lv_obj_t* eye, lv_obj_t* shadow, const EyeGe
 
 bool MochanDisplay::AllowsAmbientGaze(FaceState state) {
     switch (state) {
-        case FaceState::kIdle:
-        case FaceState::kListening:
-        case FaceState::kThinking:
-        case FaceState::kSpeaking:
-        case FaceState::kHappy:
-        case FaceState::kCool:
-        case FaceState::kRelaxed:
-        case FaceState::kSleepy:
-        case FaceState::kConfused:
-        case FaceState::kSuspicious:
-            return true;
-        default:
+        case FaceState::kLookLeft:
+        case FaceState::kLookRight:
+        case FaceState::kLookUp:
+        case FaceState::kLookDown:
+        case FaceState::kLookUpLeft:
+        case FaceState::kLookUpRight:
+        case FaceState::kLookDownLeft:
+        case FaceState::kLookDownRight:
             return false;
+        default:
+            return true;
     }
 }
 
@@ -662,10 +660,17 @@ AmbientGazePersonality MochanDisplay::ResolveAmbientGazePersonality(FaceState st
         case FaceState::kSpeaking:
             return AmbientGazePersonality::kSpeaking;
         case FaceState::kHappy:
+        case FaceState::kLaughing:
+        case FaceState::kFunny:
+        case FaceState::kLoving:
+        case FaceState::kWinking:
+        case FaceState::kSilly:
             return AmbientGazePersonality::kHappy;
         case FaceState::kCool:
+        case FaceState::kConfident:
             return AmbientGazePersonality::kCool;
         case FaceState::kRelaxed:
+        case FaceState::kDelicious:
             return AmbientGazePersonality::kRelaxed;
         case FaceState::kSleepy:
             return AmbientGazePersonality::kSleepy;
@@ -673,8 +678,17 @@ AmbientGazePersonality MochanDisplay::ResolveAmbientGazePersonality(FaceState st
             return AmbientGazePersonality::kConfused;
         case FaceState::kSuspicious:
             return AmbientGazePersonality::kSuspicious;
-        default:
+        case FaceState::kLookLeft:
+        case FaceState::kLookRight:
+        case FaceState::kLookUp:
+        case FaceState::kLookDown:
+        case FaceState::kLookUpLeft:
+        case FaceState::kLookUpRight:
+        case FaceState::kLookDownLeft:
+        case FaceState::kLookDownRight:
             return AmbientGazePersonality::kSuppressed;
+        default:
+            return AmbientGazePersonality::kNeutral;
     }
 }
 
