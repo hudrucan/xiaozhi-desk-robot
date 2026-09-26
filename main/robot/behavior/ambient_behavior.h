@@ -26,7 +26,10 @@ public:
         bool manual_control_active = false;
         bool motor_busy = false;
         bool reaction_motion_active = false;
+        bool ambient_motion_active = false;
         bool gyro_busy = false;
+        bool floor_safe = true;
+        bool emotion_movement_enabled = false;
         bool battery_valid = false;
         int battery_percent = -1;
         bool charging = false;
@@ -42,6 +45,9 @@ public:
         std::function<void(uint32_t)> trigger_yawn;
         std::function<void(uint32_t, const std::string&)> set_base_face;
         std::function<void(uint32_t)> clear_base_face;
+        std::function<void(uint32_t)> reset_accents;
+        std::function<void(uint32_t, const std::string&, const std::string&, int, bool)>
+            apply_accent;
     };
 
     bool Initialize(ReactionEngine& reaction_engine, Callbacks callbacks);
@@ -81,6 +87,13 @@ private:
         BaseFaceAction base_face_action = BaseFaceAction::kNone;
         uint32_t base_face_generation = 0;
         std::string base_face;
+        bool reset_accents = false;
+        bool apply_accent = false;
+        uint32_t accent_generation = 0;
+        std::string accent_face;
+        std::string light_effect;
+        int light_duration_ms = 0;
+        bool motion_accent = false;
         uint32_t cancel_reaction_generation = 0;
         bool start_reaction = false;
         std::string reaction_name;
@@ -99,14 +112,21 @@ private:
     void BumpPrimitiveGenerationLocked(PendingActions& actions);
     void BumpBaseFaceGenerationLocked(PendingActions& actions, bool set_face,
                                       const std::string& face = {});
+    void BumpAccentGenerationLocked(PendingActions& actions);
     void DetachOwnedReactionLocked(PendingActions& actions);
     bool RefreshOwnedReactionLocked(const ReactionEngine::Status& status);
     void ResetIdleSessionLocked(int64_t now_us, bool start_idle, PendingActions& actions);
-    void SetBaseFaceLocked(const std::string& face, int64_t now_us, PendingActions& actions);
+    void SetBaseFaceLocked(const std::string& face, IdleStage stage, const Context& context,
+                           bool allow_accents, int64_t now_us, PendingActions& actions);
     void ScheduleNextBaseFaceLocked(IdleStage stage, int64_t now_us);
-    void AdvanceBaseFaceLocked(IdleStage stage, bool reaction_overlay, int64_t now_us,
+    void AdvanceBaseFaceLocked(IdleStage stage, const Context& context,
+                               bool reaction_overlay, int64_t now_us,
                                PendingActions& actions);
     std::string SelectBaseFaceLocked(IdleStage stage) const;
+    void PrepareFaceChangeAccentsLocked(const Context& context, IdleStage stage,
+                                        int64_t now_us, PendingActions& actions);
+    static void GetMouthInterval(IdleStage stage, int& minimum_ms, int& maximum_ms);
+    void ScheduleNextMouthLocked(const Context& context, IdleStage stage, int64_t now_us);
     static GazeProfile ResolveGazeProfile(const Context& context, IdleStage stage);
     void UpdateGazeProfileLocked(GazeProfile profile, int64_t now_us,
                                  PendingActions& actions);
@@ -134,6 +154,7 @@ private:
     IdleStage idle_stage_ = IdleStage::kAwake;
     uint32_t primitive_generation_ = 0;
     uint32_t base_face_generation_ = 0;
+    uint32_t accent_generation_ = 0;
     uint32_t owned_reaction_generation_ = 0;
     std::string base_face_;
     std::string previous_base_face_;
@@ -144,6 +165,8 @@ private:
     int64_t next_gaze_us_ = 0;
     int64_t next_mouth_us_ = 0;
     int64_t next_base_face_us_ = 0;
+    int64_t next_led_accent_us_ = 0;
+    int64_t next_motion_accent_us_ = 0;
     int64_t next_semantic_us_ = 0;
     int64_t yawn_due_us_ = 0;
     int64_t last_yawn_us_ = 0;

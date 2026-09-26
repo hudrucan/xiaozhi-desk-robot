@@ -59,11 +59,13 @@ bool AmbientBehavior::Initialize(ReactionEngine& reaction_engine, Callbacks call
         initialized_ = callbacks_.reset_primitives && callbacks_.set_gaze &&
                        callbacks_.clear_gaze && callbacks_.trigger_mouth &&
                        callbacks_.trigger_yawn && callbacks_.set_base_face &&
-                       callbacks_.clear_base_face;
+                       callbacks_.clear_base_face && callbacks_.reset_accents &&
+                       callbacks_.apply_accent;
         initialized = initialized_;
         if (initialized_) {
             BumpPrimitiveGenerationLocked(actions);
             BumpBaseFaceGenerationLocked(actions, false);
+            BumpAccentGenerationLocked(actions);
         }
     }
     ExecuteActions(std::move(actions));
@@ -109,6 +111,14 @@ void AmbientBehavior::ExecuteActions(PendingActions actions) {
         callbacks_.set_base_face(actions.base_face_generation, actions.base_face);
     } else if (actions.base_face_action == BaseFaceAction::kClear) {
         callbacks_.clear_base_face(actions.base_face_generation);
+    }
+    if (actions.reset_accents) {
+        callbacks_.reset_accents(actions.accent_generation);
+    }
+    if (actions.apply_accent) {
+        callbacks_.apply_accent(actions.accent_generation, actions.accent_face,
+                                actions.light_effect, actions.light_duration_ms,
+                                actions.motion_accent);
     }
     if (actions.cancel_reaction_generation != 0 && reaction_engine_ != nullptr) {
         reaction_engine_->CancelIfGeneration(actions.cancel_reaction_generation);
@@ -189,6 +199,20 @@ void AmbientBehavior::BumpBaseFaceGenerationLocked(PendingActions& actions, bool
     actions.base_face = set_face ? face : std::string{};
 }
 
+void AmbientBehavior::BumpAccentGenerationLocked(PendingActions& actions) {
+    ++accent_generation_;
+    if (accent_generation_ == 0) {
+        ++accent_generation_;
+    }
+    actions.reset_accents = true;
+    actions.apply_accent = false;
+    actions.accent_generation = accent_generation_;
+    actions.accent_face.clear();
+    actions.light_effect.clear();
+    actions.light_duration_ms = 0;
+    actions.motion_accent = false;
+}
+
 void AmbientBehavior::DetachOwnedReactionLocked(PendingActions& actions) {
     if (owned_reaction_generation_ == 0) {
         return;
@@ -218,27 +242,29 @@ void AmbientBehavior::ResetIdleSessionLocked(int64_t now_us, bool start_idle,
     base_face_ = start_idle ? "neutral" : "";
     previous_base_face_.clear();
     next_base_face_us_ = 0;
-    next_mouth_us_ = start_idle
-                         ? now_us + AMBIENT_IDLE_MOUTH_START_MS * kUsPerMs +
-                               RandomDelayUs(AMBIENT_MOUTH_INTERVAL_MIN_MS,
-                                             AMBIENT_MOUTH_INTERVAL_MAX_MS)
-                         : 0;
+    next_mouth_us_ = 0;
+    next_led_accent_us_ = 0;
+    next_motion_accent_us_ = 0;
     next_semantic_us_ = start_idle
                             ? now_us + AMBIENT_CURIOUS_START_MS * kUsPerMs +
                                   RandomDelayUs(AMBIENT_SEMANTIC_JITTER_MIN_MS,
                                                 AMBIENT_SEMANTIC_JITTER_MAX_MS)
                             : 0;
     yawn_due_us_ = 0;
+    BumpAccentGenerationLocked(actions);
     if (start_idle) {
         BumpBaseFaceGenerationLocked(actions, true, base_face_);
         ScheduleNextBaseFaceLocked(idle_stage_, now_us);
+        ScheduleNextMouthLocked(Context{}, idle_stage_,
+                                now_us + AMBIENT_IDLE_MOUTH_START_MS * kUsPerMs);
     } else {
         BumpBaseFaceGenerationLocked(actions, false);
     }
 }
 
-void AmbientBehavior::SetBaseFaceLocked(const std::string& face, int64_t now_us,
-                                        PendingActions& actions) {
+void AmbientBehavior::SetBaseFaceLocked(const std::string& face, IdleStage stage,
+                                        const Context& context, bool allow_accents,
+                                        int64_t now_us, PendingActions& actions) {
     if (face.empty() || face == base_face_) {
         ScheduleNextBaseFaceLocked(idle_stage_, now_us);
         return;
@@ -249,6 +275,141 @@ void AmbientBehavior::SetBaseFaceLocked(const std::string& face, int64_t now_us,
     actions.base_face_generation = base_face_generation_;
     actions.base_face = base_face_;
     ScheduleNextBaseFaceLocked(idle_stage_, now_us);
+    if (allow_accents) {
+        PrepareFaceChangeAccentsLocked(context, stage, now_us, actions);
+    }
+}
+
+void AmbientBehavior::GetMouthInterval(IdleStage stage, int& minimum_ms, int& maximum_ms) {
+    switch (stage) {
+        case IdleStage::kAwake:
+            minimum_ms = AMBIENT_AWAKE_MOUTH_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_AWAKE_MOUTH_INTERVAL_MAX_MS;
+            return;
+        case IdleStage::kRelaxed:
+            minimum_ms = AMBIENT_RELAXED_MOUTH_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_RELAXED_MOUTH_INTERVAL_MAX_MS;
+            return;
+        case IdleStage::kCurious:
+            minimum_ms = AMBIENT_CURIOUS_MOUTH_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_CURIOUS_MOUTH_INTERVAL_MAX_MS;
+            return;
+        case IdleStage::kPlayful:
+            minimum_ms = AMBIENT_PLAYFUL_MOUTH_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_PLAYFUL_MOUTH_INTERVAL_MAX_MS;
+            return;
+        case IdleStage::kSleepy:
+            minimum_ms = AMBIENT_SLEEPY_MOUTH_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_SLEEPY_MOUTH_INTERVAL_MAX_MS;
+            return;
+    }
+}
+
+void AmbientBehavior::ScheduleNextMouthLocked(const Context& context, IdleStage stage,
+                                              int64_t now_us) {
+    int minimum_ms = 0;
+    int maximum_ms = 0;
+    GetMouthInterval(stage, minimum_ms, maximum_ms);
+    if (IsDim(context)) {
+        minimum_ms += minimum_ms / 2;
+        maximum_ms += maximum_ms / 2;
+    }
+    next_mouth_us_ = now_us + RandomDelayUs(minimum_ms, maximum_ms);
+}
+
+void AmbientBehavior::PrepareFaceChangeAccentsLocked(const Context& context, IdleStage stage,
+                                                     int64_t now_us,
+                                                     PendingActions& actions) {
+    ++accent_generation_;
+    if (accent_generation_ == 0) {
+        ++accent_generation_;
+    }
+    actions.apply_accent = true;
+    actions.accent_generation = accent_generation_;
+    actions.accent_face = base_face_;
+
+    int mouth_percent = 0;
+    int led_percent = 0;
+    int motion_percent = 0;
+    switch (stage) {
+        case IdleStage::kAwake:
+            mouth_percent = AMBIENT_AWAKE_FACE_MOUTH_PERCENT;
+            led_percent = AMBIENT_AWAKE_LED_ACCENT_PERCENT;
+            motion_percent = AMBIENT_AWAKE_MOTION_ACCENT_PERCENT;
+            break;
+        case IdleStage::kRelaxed:
+            mouth_percent = AMBIENT_RELAXED_FACE_MOUTH_PERCENT;
+            led_percent = AMBIENT_RELAXED_LED_ACCENT_PERCENT;
+            motion_percent = AMBIENT_RELAXED_MOTION_ACCENT_PERCENT;
+            break;
+        case IdleStage::kCurious:
+            mouth_percent = AMBIENT_CURIOUS_FACE_MOUTH_PERCENT;
+            led_percent = AMBIENT_CURIOUS_LED_ACCENT_PERCENT;
+            motion_percent = AMBIENT_CURIOUS_MOTION_ACCENT_PERCENT;
+            break;
+        case IdleStage::kPlayful:
+            mouth_percent = AMBIENT_PLAYFUL_FACE_MOUTH_PERCENT;
+            led_percent = AMBIENT_PLAYFUL_LED_ACCENT_PERCENT;
+            motion_percent = AMBIENT_PLAYFUL_MOTION_ACCENT_PERCENT;
+            break;
+        case IdleStage::kSleepy:
+            mouth_percent = AMBIENT_SLEEPY_FACE_MOUTH_PERCENT;
+            led_percent = AMBIENT_SLEEPY_LED_ACCENT_PERCENT;
+            motion_percent = AMBIENT_SLEEPY_MOTION_ACCENT_PERCENT;
+            break;
+    }
+
+    if (!IsBatteryLow(context) && esp_random() % 100 < mouth_percent) {
+        const int64_t due_us = now_us + RandomDelayUs(AMBIENT_FACE_MOUTH_DELAY_MIN_MS,
+                                                       AMBIENT_FACE_MOUTH_DELAY_MAX_MS);
+        next_mouth_us_ = next_mouth_us_ == 0 ? due_us : std::min(next_mouth_us_, due_us);
+    }
+
+    if (now_us >= next_led_accent_us_ && esp_random() % 100 < led_percent) {
+        if (base_face_ == "happy" || base_face_ == "laughing" || base_face_ == "funny" ||
+            base_face_ == "silly" || base_face_ == "winking") {
+            actions.light_effect = (esp_random() & 1U) == 0 ? "steady" : "blink";
+        } else if (base_face_ == "thinking" || base_face_ == "confused" ||
+                   base_face_ == "suspicious" || base_face_ == "relaxed" ||
+                   base_face_ == "loving" || base_face_ == "delicious" ||
+                   base_face_ == "sleepy") {
+            actions.light_effect = "breathe";
+        } else if (base_face_ == "cool" || base_face_ == "confident") {
+            actions.light_effect = "steady";
+        } else if (base_face_ == "surprised" || base_face_ == "shake") {
+            actions.light_effect = "blink";
+        }
+        if (!actions.light_effect.empty()) {
+            actions.light_duration_ms = static_cast<int>(
+                RandomDelayUs(AMBIENT_LED_ACCENT_DURATION_MIN_MS,
+                              AMBIENT_LED_ACCENT_DURATION_MAX_MS) /
+                kUsPerMs);
+            next_led_accent_us_ = now_us +
+                                  RandomDelayUs(AMBIENT_LED_ACCENT_COOLDOWN_MIN_MS,
+                                                AMBIENT_LED_ACCENT_COOLDOWN_MAX_MS);
+        }
+    }
+
+    const bool motion_face =
+        base_face_ == "happy" || base_face_ == "laughing" || base_face_ == "funny" ||
+        base_face_ == "silly" || base_face_ == "winking" || base_face_ == "loving" ||
+        base_face_ == "delicious" || base_face_ == "thinking" ||
+        base_face_ == "confused" || base_face_ == "suspicious" ||
+        base_face_ == "cool" || base_face_ == "confident" ||
+        base_face_ == "surprised" || base_face_ == "shake";
+    const bool motion_safe = context.activity == Activity::kIdle &&
+                             !context.camera_active && !context.tool_active &&
+                             !context.manual_control_active && !context.motor_busy &&
+                             !context.gyro_busy && context.emotion_movement_enabled &&
+                             context.floor_safe && !IsBatteryLow(context) &&
+                             !context.charging;
+    if (motion_face && motion_safe && now_us >= next_motion_accent_us_ &&
+        esp_random() % 100 < motion_percent) {
+        actions.motion_accent = true;
+        next_motion_accent_us_ =
+            now_us + RandomDelayUs(AMBIENT_MOTION_ACCENT_COOLDOWN_MIN_MS,
+                                   AMBIENT_MOTION_ACCENT_COOLDOWN_MAX_MS);
+    }
 }
 
 void AmbientBehavior::ScheduleNextBaseFaceLocked(IdleStage stage, int64_t now_us) {
@@ -331,15 +492,17 @@ std::string AmbientBehavior::SelectBaseFaceLocked(IdleStage stage) const {
     return base_face_;
 }
 
-void AmbientBehavior::AdvanceBaseFaceLocked(IdleStage stage, bool reaction_overlay,
-                                            int64_t now_us, PendingActions& actions) {
+void AmbientBehavior::AdvanceBaseFaceLocked(IdleStage stage, const Context& context,
+                                            bool reaction_overlay, int64_t now_us,
+                                            PendingActions& actions) {
     const bool stage_changed = stage != idle_stage_;
     if (stage_changed) {
         idle_stage_ = stage;
+        ScheduleNextMouthLocked(context, stage, now_us);
         const std::string next_face = stage == IdleStage::kSleepy
                                           ? std::string("sleepy")
                                           : SelectBaseFaceLocked(stage);
-        SetBaseFaceLocked(next_face, now_us, actions);
+        SetBaseFaceLocked(next_face, stage, context, !reaction_overlay, now_us, actions);
         if (stage == IdleStage::kSleepy) {
             next_semantic_us_ = now_us +
                                 RandomDelayUs(AMBIENT_SEMANTIC_JITTER_MIN_MS,
@@ -350,7 +513,7 @@ void AmbientBehavior::AdvanceBaseFaceLocked(IdleStage stage, bool reaction_overl
     if (reaction_overlay || next_base_face_us_ == 0 || now_us < next_base_face_us_) {
         return;
     }
-    SetBaseFaceLocked(SelectBaseFaceLocked(stage), now_us, actions);
+    SetBaseFaceLocked(SelectBaseFaceLocked(stage), stage, context, true, now_us, actions);
 }
 
 AmbientBehavior::GazeProfile AmbientBehavior::ResolveGazeProfile(
@@ -638,17 +801,10 @@ void AmbientBehavior::AdvanceIdleActionsLocked(const Context& context, IdleStage
     }
 
     const bool low_battery = IsBatteryLow(context);
-    if (!low_battery && stage != IdleStage::kAwake && next_mouth_us_ != 0 &&
-        now_us >= next_mouth_us_) {
+    if (!low_battery && next_mouth_us_ != 0 && now_us >= next_mouth_us_) {
         actions.trigger_mouth = true;
         actions.primitive_generation = primitive_generation_;
-        int minimum_ms = AMBIENT_MOUTH_INTERVAL_MIN_MS;
-        int maximum_ms = AMBIENT_MOUTH_INTERVAL_MAX_MS;
-        if (IsDim(context)) {
-            minimum_ms += AMBIENT_MOUTH_INTERVAL_MIN_MS / 2;
-            maximum_ms += AMBIENT_MOUTH_INTERVAL_MAX_MS / 2;
-        }
-        next_mouth_us_ = now_us + RandomDelayUs(minimum_ms, maximum_ms);
+        ScheduleNextMouthLocked(context, stage, now_us);
     }
 
     if (next_semantic_us_ == 0 || now_us < next_semantic_us_) {
@@ -685,7 +841,8 @@ void AmbientBehavior::Tick(const Context& context, int64_t now_us) {
         const bool hard_suppressed = context.camera_active || context.tool_active ||
                                      context.manual_control_active ||
                                      (context.motor_busy &&
-                                      !context.reaction_motion_active) ||
+                                      !context.reaction_motion_active &&
+                                      !context.ambient_motion_active) ||
                                      context.gyro_busy ||
                                      IsBatteryCritical(context);
         const bool activity_changed = context.activity != activity_;
@@ -727,7 +884,7 @@ void AmbientBehavior::Tick(const Context& context, int64_t now_us) {
                     ResetIdleSessionLocked(now_us, true, actions);
                 }
                 stage = ResolveIdleStageLocked(now_us);
-                AdvanceBaseFaceLocked(stage, reaction.active, now_us, actions);
+                AdvanceBaseFaceLocked(stage, context, reaction.active, now_us, actions);
             }
             if (!foreign_reaction) {
                 if (!reaction.active) {

@@ -133,12 +133,17 @@ private:
     std::atomic_uint32_t reaction_oled_generation_{0};
     std::atomic_uint32_t reaction_oled_text_generation_{0};
     std::atomic_uint32_t reaction_motion_generation_{0};
+    std::atomic_uint32_t ambient_accent_generation_{0};
+    std::atomic_uint32_t ambient_light_generation_{0};
+    std::atomic_int64_t ambient_light_expires_at_us_{0};
+    std::atomic_uint32_t ambient_motion_generation_{0};
     std::atomic_int64_t ambient_manual_control_until_us_{0};
     std::atomic_int64_t ambient_tool_active_until_us_{0};
     int64_t last_emotion_movement_us_ = 0;
     TaskHandle_t live_camera_task_ = nullptr;
     esp_timer_handle_t face_reset_timer_ = nullptr;
     esp_timer_handle_t light_effect_reset_timer_ = nullptr;
+    esp_timer_handle_t ambient_light_reset_timer_ = nullptr;
     esp_timer_handle_t web_control_retry_timer_ = nullptr;
     std::atomic_uint32_t temporary_emotion_generation_{0};
     std::atomic_int64_t temporary_emotion_expires_at_us_{0};
@@ -293,10 +298,17 @@ private:
                              motor_activity_active_.load(std::memory_order_relaxed);
         context.reaction_motion_active =
             reaction_motion_generation_.load(std::memory_order_acquire) != 0;
+        context.ambient_motion_active =
+            ambient_motion_generation_.load(std::memory_order_acquire) != 0;
 #ifdef MPU6050_I2C_ADDRESS
         const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
         context.gyro_busy = gyro.pending || gyro.active;
 #endif
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+        context.floor_safe = cliff_sensor_.IsFloorSafe();
+#endif
+        context.emotion_movement_enabled =
+            emotion_movement_enabled_.load(std::memory_order_relaxed);
 #ifdef INA219_I2C_ADDRESS
         const auto battery = battery_controller_.GetStatus();
         context.battery_valid = battery.valid;
@@ -731,6 +743,7 @@ private:
             was_moving_forward || self->motors_.IsMoving(MotorController::Direction::kLeft) ||
             self->motors_.IsMoving(MotorController::Direction::kRight);
         if (was_moving_unsafe) {
+            self->ambient_motion_generation_.store(0, std::memory_order_release);
             self->motors_.EmergencyStop();
             if (was_moving_forward) {
                 self->QueueCliffRetreat();
@@ -912,7 +925,11 @@ private:
     void MaybeStartEmotionMovement(const std::string& emotion, EmotionSource source) {
         if (!emotion_movement_enabled_.load(std::memory_order_relaxed) ||
             source == EmotionSource::kMpuReaction || source == EmotionSource::kSystem ||
-            reaction_engine_.IsActive() || motors_.IsActive()) {
+            reaction_engine_.IsActive()) {
+            return;
+        }
+        RelinquishAmbientMotion();
+        if (motors_.IsActive()) {
             return;
         }
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -1138,6 +1155,176 @@ private:
         return true;
     }
 
+    bool HasHigherPriorityLightOwner(int64_t now_us) const {
+        return reaction_engine_.IsActive() ||
+               reaction_light_generation_.load(std::memory_order_acquire) != 0 ||
+               light_effect_expires_at_us_.load(std::memory_order_acquire) > now_us;
+    }
+
+    void RelinquishAmbientLight(bool clear_effect) {
+        const uint32_t generation =
+            ambient_light_generation_.exchange(0, std::memory_order_acq_rel);
+        ambient_light_expires_at_us_.store(0, std::memory_order_release);
+        if (ambient_light_reset_timer_ != nullptr) {
+            esp_timer_stop(ambient_light_reset_timer_);
+        }
+        if (generation != 0 && clear_effect &&
+            !HasHigherPriorityLightOwner(esp_timer_get_time())) {
+            static_cast<GpioLed*>(GetLed())
+                ->SetEffectOverride(GpioLed::EffectOverride::kNone);
+        }
+    }
+
+    void RelinquishAmbientMotion() {
+        if (ambient_motion_generation_.exchange(0, std::memory_order_acq_rel) != 0) {
+            motors_.Stop();
+        }
+    }
+
+    bool AcceptAmbientAccentGeneration(uint32_t generation) {
+        if (generation == 0) {
+            return false;
+        }
+        uint32_t current = ambient_accent_generation_.load(std::memory_order_acquire);
+        while (current != generation) {
+            if (current != 0 && static_cast<int32_t>(generation - current) < 0) {
+                return false;
+            }
+            if (ambient_accent_generation_.compare_exchange_weak(
+                    current, generation, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                return true;
+            }
+        }
+        return true;
+    }
+
+    void RelinquishAmbientAccentsForHigherPriority() {
+        const bool had_light =
+            ambient_light_generation_.load(std::memory_order_acquire) != 0;
+        RelinquishAmbientLight(false);
+        if (had_light) {
+            static_cast<GpioLed*>(GetLed())
+                ->SetEffectOverride(GpioLed::EffectOverride::kNone);
+        }
+        RelinquishAmbientMotion();
+    }
+
+    void ResetAmbientAccents(uint32_t generation) {
+        if (!AcceptAmbientAccentGeneration(generation)) {
+            return;
+        }
+        Application::GetInstance().Schedule([this, generation]() {
+            if (ambient_accent_generation_.load(std::memory_order_acquire) != generation) {
+                return;
+            }
+            RelinquishAmbientLight(true);
+            RelinquishAmbientMotion();
+        });
+    }
+
+    void QueueAmbientAccent(uint32_t generation, const std::string& face,
+                            const std::string& light_effect, int light_duration_ms,
+                            bool motion_accent) {
+        if (!AcceptAmbientAccentGeneration(generation)) {
+            return;
+        }
+        Application::GetInstance().Schedule(
+            [this, generation, face, light_effect, light_duration_ms, motion_accent]() {
+                if (ambient_accent_generation_.load(std::memory_order_acquire) != generation) {
+                    return;
+                }
+
+                RelinquishAmbientLight(true);
+                RelinquishAmbientMotion();
+                if (ambient_accent_generation_.load(std::memory_order_acquire) != generation) {
+                    return;
+                }
+
+                const int64_t now_us = esp_timer_get_time();
+                const bool ambient_idle_current =
+                    Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
+                    display_->GetAmbientActivity() == MochanDisplay::AmbientActivity::kIdle &&
+                    !reaction_engine_.IsActive() &&
+                    now_us >=
+                        ambient_manual_control_until_us_.load(std::memory_order_acquire) &&
+                    now_us >= ambient_tool_active_until_us_.load(std::memory_order_acquire) &&
+                    (camera_ == nullptr ||
+                     (!camera_->IsMcpOperationActive() &&
+                      camera_->preview_mode() == DeskRobotCamera::PreviewMode::kOff));
+                if (!ambient_idle_current) {
+                    return;
+                }
+                GpioLed::EffectOverride light = GpioLed::EffectOverride::kNone;
+                if (!light_effect.empty() && ParseStatusLightEffect(light_effect, light) &&
+                    !HasHigherPriorityLightOwner(now_us)) {
+                    if (light_effect_reset_timer_ != nullptr) {
+                        esp_timer_stop(light_effect_reset_timer_);
+                    }
+                    light_effect_generation_.fetch_add(1, std::memory_order_acq_rel);
+                    light_effect_expires_at_us_.store(0, std::memory_order_release);
+                    const int safe_duration = std::clamp(light_duration_ms, 250, 3000);
+                    ambient_light_generation_.store(generation, std::memory_order_release);
+                    ambient_light_expires_at_us_.store(
+                        now_us + static_cast<int64_t>(safe_duration) * 1000,
+                        std::memory_order_release);
+                    esp_err_t timer_result = ESP_ERR_INVALID_STATE;
+                    if (ambient_light_reset_timer_ != nullptr) {
+                        esp_timer_stop(ambient_light_reset_timer_);
+                        timer_result = esp_timer_start_once(ambient_light_reset_timer_,
+                                                            safe_duration * 1000ULL);
+                    }
+                    if (timer_result == ESP_OK &&
+                        ambient_accent_generation_.load(std::memory_order_acquire) == generation &&
+                        !HasHigherPriorityLightOwner(esp_timer_get_time())) {
+                        static_cast<GpioLed*>(GetLed())->SetEffectOverride(light);
+                    } else {
+                        uint32_t expected = generation;
+                        ambient_light_generation_.compare_exchange_strong(expected, 0);
+                        ambient_light_expires_at_us_.store(0, std::memory_order_release);
+                        if (ambient_light_reset_timer_ != nullptr) {
+                            esp_timer_stop(ambient_light_reset_timer_);
+                        }
+                    }
+                }
+
+                if (!motion_accent ||
+                    ambient_accent_generation_.load(std::memory_order_acquire) != generation ||
+                    reaction_engine_.IsActive() || motors_.IsActive() ||
+                    !emotion_movement_enabled_.load(std::memory_order_relaxed)) {
+                    return;
+                }
+#ifdef MPU6050_I2C_ADDRESS
+                const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
+                if (gyro.pending || gyro.active) {
+                    return;
+                }
+#endif
+#ifdef DISTANCE_SENSOR_I2C_ADDRESS
+                if (!cliff_sensor_.IsFloorSafe()) {
+                    return;
+                }
+#endif
+#ifdef INA219_I2C_ADDRESS
+                const auto battery = battery_controller_.GetStatus();
+                if (battery.charging ||
+                    (battery.valid && battery.percent <= PROACTIVE_BATTERY_LOW_PERCENT)) {
+                    return;
+                }
+#endif
+                auto movements =
+                    expressive_motion_planner_.BuildAmbientEmotionMovement(face);
+                if (movements.empty()) {
+                    return;
+                }
+                ambient_motion_generation_.store(generation, std::memory_order_release);
+                if (!motors_.PlaySequence(movements)) {
+                    uint32_t expected = generation;
+                    ambient_motion_generation_.compare_exchange_strong(expected, 0);
+                }
+            });
+    }
+
     bool QueueStatusLightEffect(const std::string& effect, int duration_ms,
                                 bool explicit_override = false) {
         GpioLed::EffectOverride override = GpioLed::EffectOverride::kNone;
@@ -1160,6 +1347,7 @@ private:
                 if (reaction_engine_.IsActive()) {
                     return;
                 }
+                RelinquishAmbientLight(true);
                 const uint32_t generation = light_effect_generation_.fetch_add(1) + 1;
                 light_effect_expires_at_us_.store(
                     esp_timer_get_time() + safe_duration * 1000LL);
@@ -1232,6 +1420,7 @@ private:
                 if (!reaction_engine_.IsActiveGeneration(generation)) {
                     return;
                 }
+                RelinquishAmbientAccentsForHigherPriority();
                 if (face_reset_timer_ != nullptr) {
                     esp_timer_stop(face_reset_timer_);
                 }
@@ -1365,6 +1554,17 @@ private:
                     [this](uint32_t generation) {
                         display_->ClearAmbientBaseFace(generation);
                     },
+                .reset_accents =
+                    [this](uint32_t generation) {
+                        ResetAmbientAccents(generation);
+                    },
+                .apply_accent =
+                    [this](uint32_t generation, const std::string& face,
+                           const std::string& light_effect, int light_duration_ms,
+                           bool motion_accent) {
+                        QueueAmbientAccent(generation, face, light_effect,
+                                           light_duration_ms, motion_accent);
+                    },
             });
         if (!initialized) {
             ESP_LOGE(TAG, "Failed to initialize ambient behavior");
@@ -1423,6 +1623,44 @@ private:
             .skip_unhandled_events = true,
         };
         ESP_ERROR_CHECK(esp_timer_create(&light_args, &light_effect_reset_timer_));
+
+        esp_timer_create_args_t ambient_light_args = {
+            .callback =
+                [](void* arg) {
+                    auto* self = static_cast<DeskRobotBoard*>(arg);
+                    const uint32_t generation =
+                        self->ambient_light_generation_.load(std::memory_order_acquire);
+                    const int64_t expires_at =
+                        self->ambient_light_expires_at_us_.load(std::memory_order_acquire);
+                    if (generation == 0 || expires_at == 0 ||
+                        esp_timer_get_time() + 1000 < expires_at) {
+                        return;
+                    }
+                    Application::GetInstance().Schedule([self, generation, expires_at]() {
+                        if (self->ambient_light_generation_.load(std::memory_order_acquire) !=
+                                generation ||
+                            self->ambient_light_expires_at_us_.load(
+                                std::memory_order_acquire) != expires_at ||
+                            self->ambient_accent_generation_.load(
+                                std::memory_order_acquire) != generation ||
+                            self->HasHigherPriorityLightOwner(esp_timer_get_time())) {
+                            return;
+                        }
+                        self->ambient_light_generation_.store(0,
+                                                              std::memory_order_release);
+                        self->ambient_light_expires_at_us_.store(0,
+                                                                 std::memory_order_release);
+                        static_cast<GpioLed*>(self->GetLed())
+                            ->SetEffectOverride(GpioLed::EffectOverride::kNone);
+                    });
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "ambient_light",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(
+            esp_timer_create(&ambient_light_args, &ambient_light_reset_timer_));
     }
 
     void ReturnToIdle() {
@@ -1481,6 +1719,7 @@ private:
         auto movements = expressive_motion_planner_.BuildDance();
         Application::GetInstance().Schedule([this, movements = std::move(movements)]() {
             RelinquishReactionMotion();
+            RelinquishAmbientMotion();
             if (!motors_.PlaySequence(movements)) {
                 ESP_LOGW(TAG, "Random dance sequence was rejected");
             }
@@ -1575,6 +1814,7 @@ private:
         motors_.SetMovementStateCallback([this](bool moving) {
             motor_activity_active_.store(moving, std::memory_order_relaxed);
             if (!moving) {
+                ambient_motion_generation_.store(0, std::memory_order_release);
                 const uint32_t reaction_generation =
                     reaction_motion_generation_.exchange(0, std::memory_order_acq_rel);
                 if (reaction_generation != 0) {
@@ -1624,8 +1864,11 @@ private:
     void QueueEmotionMovementEnabled(bool enabled) {
         emotion_movement_enabled_.store(enabled, std::memory_order_relaxed);
         Application::GetInstance().Schedule([this, enabled]() {
-            if (!enabled && emotion_movement_active_.load(std::memory_order_relaxed)) {
-                motors_.Stop();
+            if (!enabled) {
+                RelinquishAmbientMotion();
+                if (emotion_movement_active_.load(std::memory_order_relaxed)) {
+                    motors_.Stop();
+                }
             }
             robot_settings_.SetEmotionMovementEnabled(enabled);
         });
@@ -1786,6 +2029,7 @@ private:
         RelinquishReactionMotion();
         Application::GetInstance().Schedule([this, direction, safe_duration, policy]() {
             RelinquishReactionMotion();
+            RelinquishAmbientMotion();
             if (policy == MovePolicy::kReplaceCurrent ||
                 emotion_movement_active_.load(std::memory_order_relaxed)) {
                 motors_.Stop();
@@ -1817,6 +2061,7 @@ private:
 
     void ApplyPendingLiveDrive() {
         RelinquishReactionMotion();
+        RelinquishAmbientMotion();
         const uint32_t generation = live_drive_generation_.load(std::memory_order_acquire);
         const uint32_t packed = live_drive_command_.load(std::memory_order_acquire);
         const int left = static_cast<int>(packed & 0xff) - 100;
@@ -1844,6 +2089,7 @@ private:
 
     bool Dance() override {
         NotifyAmbientInteraction(5000);
+        RelinquishAmbientMotion();
         if (motors_.IsActive()) {
             return false;
         }
@@ -1854,6 +2100,7 @@ private:
     bool TurnRelative(int degrees, std::string& message) override {
         NotifyAmbientInteraction(5000);
 #ifdef MPU6050_I2C_ADDRESS
+        RelinquishAmbientMotion();
         if (reaction_motion_generation_.load(std::memory_order_acquire) != 0) {
             message = "Gyro turn unavailable while reaction motion is active";
             return false;

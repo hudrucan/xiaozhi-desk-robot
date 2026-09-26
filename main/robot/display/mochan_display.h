@@ -55,6 +55,21 @@ public:
     void HideBootSplash();
 
 private:
+    enum class AmbientMouthProfile : uint8_t {
+        kNeutral,
+        kPlayful,
+        kCurious,
+        kRelaxed,
+        kSleepy,
+    };
+
+    enum class AmbientMouthVariant : uint8_t {
+        kMicroPulse,
+        kSoftOpenClose,
+        kDoubleTwitch,
+        kCount,
+    };
+
     enum class FaceState {
         kIdle,
         kListening,
@@ -181,6 +196,8 @@ private:
     void ConsumeAmbientPrimitiveRequests(const std::string& emotion, bool idle_eligible);
     void ConsumeAmbientBaseFaceRequest();
     void AdvanceYawnAnimation(const std::string& emotion);
+    static AmbientMouthProfile ResolveAmbientMouthProfile(const std::string& emotion);
+    void StartAmbientMouthAnimation(const std::string& emotion, int64_t now_ms);
     void AdvanceMouthAnimation(bool idle_eligible);
     void CancelAmbientAnimations();
     void UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligible);
@@ -276,6 +293,8 @@ private:
     int64_t max_callback_duration_us_ = 0;
     int64_t yawn_started_ms_ = 0;
     int64_t mouth_motion_started_ms_ = 0;
+    int mouth_motion_duration_ms_ = 0;
+    int16_t mouth_motion_peak_ = 0;
     uint16_t yawn_amount_ = 0;
     int16_t mouth_motion_amount_ = 0;
     int8_t ambient_gaze_x_ = 0;
@@ -284,6 +303,8 @@ private:
     int8_t ambient_gaze_target_y_ = 0;
     bool yawn_active_ = false;
     bool mouth_motion_active_ = false;
+    AmbientMouthVariant mouth_motion_variant_ = AmbientMouthVariant::kMicroPulse;
+    AmbientMouthVariant last_mouth_motion_variant_ = AmbientMouthVariant::kCount;
     std::mutex ambient_primitive_mutex_;
     uint32_t ambient_primitive_generation_ = 0;
     uint32_t applied_ambient_primitive_generation_ = 0;

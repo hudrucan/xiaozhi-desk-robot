@@ -42,6 +42,35 @@ std::vector<MotorController::Movement> ExpressiveMotionPlanner::BuildReactionMov
     return {};
 }
 
+std::vector<MotorController::Movement> ExpressiveMotionPlanner::BuildAmbientEmotionMovement(
+    const std::string& emotion) const {
+    using Direction = MotorController::Direction;
+    const bool mirror = (esp_random() & 1U) != 0;
+    const Direction left = mirror ? Direction::kRight : Direction::kLeft;
+    const Direction right = mirror ? Direction::kLeft : Direction::kRight;
+
+    if (emotion == "happy" || emotion == "laughing" || emotion == "funny" ||
+        emotion == "silly" || emotion == "winking") {
+        return {{left, 90, 58}, {right, 120, 58}};
+    }
+    if (emotion == "loving" || emotion == "delicious") {
+        return {{Direction::kForward, 80, 55}, {Direction::kBackward, 90, 55}};
+    }
+    if (emotion == "thinking" || emotion == "confused" || emotion == "suspicious") {
+        return {{left, 120, 55}};
+    }
+    if (emotion == "cool" || emotion == "confident") {
+        return {{left, 100, 58}};
+    }
+    if (emotion == "surprised") {
+        return {{Direction::kBackward, 90, 60}};
+    }
+    if (emotion == "shake") {
+        return {{left, 100, 60}, {right, 140, 60}, {left, 100, 58}};
+    }
+    return {};
+}
+
 std::vector<MotorController::Movement> ExpressiveMotionPlanner::BuildEmotionMovement(
     const std::string& emotion) {
     enum Group : size_t {

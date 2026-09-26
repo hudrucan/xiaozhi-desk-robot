@@ -32,13 +32,24 @@ constexpr int kYawnOpenMs = 500;
 constexpr int kYawnHoldMs = 350;
 constexpr int kYawnCloseMs = 500;
 constexpr int kYawnSettleMs = 250;
-constexpr int kMouthMotionOpenMs = 350;
-constexpr int kMouthMotionHoldMs = 400;
-constexpr int kMouthMotionCloseMs = 500;
-constexpr int kMouthMotionClosedHoldMs = 350;
-constexpr int kMouthMotionSettleMs = 300;
-constexpr int kMouthMotionClosedAmount = -144;
 constexpr char kTag[] = "MochanDisplay";
+
+int RandomRange(int minimum, int maximum) {
+    return minimum + static_cast<int>(esp_random() % (maximum - minimum + 1));
+}
+
+int16_t InterpolateMouthAmount(int64_t elapsed, int64_t from_ms, int64_t to_ms,
+                               int from, int to) {
+    if (elapsed <= from_ms) {
+        return static_cast<int16_t>(from);
+    }
+    if (elapsed >= to_ms) {
+        return static_cast<int16_t>(to);
+    }
+    return static_cast<int16_t>(from +
+                                (to - from) * (elapsed - from_ms) /
+                                    std::max<int64_t>(1, to_ms - from_ms));
+}
 
 uint16_t TimedProgress(uint16_t from, uint16_t target, int64_t started_us, int duration_ms,
                        int64_t now_us) {
@@ -581,6 +592,8 @@ void MochanDisplay::CancelAmbientAnimations() {
     mouth_motion_active_ = false;
     mouth_motion_amount_ = 0;
     mouth_motion_started_ms_ = 0;
+    mouth_motion_duration_ms_ = 0;
+    mouth_motion_peak_ = 0;
     ambient_gaze_target_x_ = 0;
     ambient_gaze_target_y_ = 0;
     std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
@@ -605,6 +618,8 @@ void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
         mouth_motion_active_ = false;
         mouth_motion_amount_ = 0;
         mouth_motion_started_ms_ = 0;
+        mouth_motion_duration_ms_ = 0;
+        mouth_motion_peak_ = 0;
     }
     const bool gaze_request_current =
         ambient_gaze_request_generation_ == ambient_primitive_generation_;
@@ -613,12 +628,15 @@ void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
     ambient_gaze_target_y_ =
         ambient_gaze_requested_ && gaze_request_current ? requested_ambient_gaze_y_ : 0;
     if (ambient_mouth_requested_ &&
-        ambient_mouth_request_generation_ == ambient_primitive_generation_ &&
-        idle_eligible && !yawn_active_) {
-        ambient_mouth_requested_ = false;
-        ambient_mouth_request_generation_ = 0;
-        mouth_motion_active_ = true;
-        mouth_motion_started_ms_ = esp_timer_get_time() / 1000;
+        ambient_mouth_request_generation_ == ambient_primitive_generation_) {
+        if (yawn_active_) {
+            ambient_mouth_requested_ = false;
+            ambient_mouth_request_generation_ = 0;
+        } else if (idle_eligible) {
+            ambient_mouth_requested_ = false;
+            ambient_mouth_request_generation_ = 0;
+            StartAmbientMouthAnimation(emotion, esp_timer_get_time() / 1000);
+        }
     }
     if (ambient_yawn_requested_ &&
         ambient_yawn_request_generation_ == ambient_primitive_generation_ &&
@@ -627,6 +645,8 @@ void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
         ambient_yawn_request_generation_ = 0;
         mouth_motion_active_ = false;
         mouth_motion_amount_ = 0;
+        mouth_motion_duration_ms_ = 0;
+        mouth_motion_peak_ = 0;
         yawn_active_ = true;
         yawn_started_ms_ = esp_timer_get_time() / 1000;
     }
@@ -655,12 +675,83 @@ void MochanDisplay::ConsumeAmbientBaseFaceRequest() {
     ApplyRestingFaceLocked();
 }
 
+MochanDisplay::AmbientMouthProfile MochanDisplay::ResolveAmbientMouthProfile(
+    const std::string& emotion) {
+    if (emotion == "happy" || emotion == "laughing" || emotion == "funny" ||
+        emotion == "winking" || emotion == "silly") {
+        return AmbientMouthProfile::kPlayful;
+    }
+    if (emotion == "thinking" || emotion == "confused" || emotion == "suspicious" ||
+        emotion == "surprised") {
+        return AmbientMouthProfile::kCurious;
+    }
+    if (emotion == "relaxed" || emotion == "loving" || emotion == "delicious" ||
+        emotion == "cool" || emotion == "confident") {
+        return AmbientMouthProfile::kRelaxed;
+    }
+    if (emotion == "sleepy") {
+        return AmbientMouthProfile::kSleepy;
+    }
+    return AmbientMouthProfile::kNeutral;
+}
+
+void MochanDisplay::StartAmbientMouthAnimation(const std::string& emotion, int64_t now_ms) {
+    int duration_min_ms = 450;
+    int duration_max_ms = 700;
+    int peak_min = 48;
+    int peak_max = 80;
+    switch (ResolveAmbientMouthProfile(emotion)) {
+        case AmbientMouthProfile::kNeutral:
+            break;
+        case AmbientMouthProfile::kPlayful:
+            duration_min_ms = 400;
+            duration_max_ms = 750;
+            peak_min = 90;
+            peak_max = 140;
+            break;
+        case AmbientMouthProfile::kCurious:
+            duration_min_ms = 450;
+            duration_max_ms = 800;
+            peak_min = 64;
+            peak_max = 100;
+            break;
+        case AmbientMouthProfile::kRelaxed:
+            duration_min_ms = 650;
+            duration_max_ms = 950;
+            peak_min = 48;
+            peak_max = 80;
+            break;
+        case AmbientMouthProfile::kSleepy:
+            duration_min_ms = 800;
+            duration_max_ms = 1200;
+            peak_min = 40;
+            peak_max = 72;
+            break;
+    }
+
+    uint8_t variant = static_cast<uint8_t>(esp_random() %
+                                           static_cast<uint8_t>(AmbientMouthVariant::kCount));
+    if (variant == static_cast<uint8_t>(last_mouth_motion_variant_)) {
+        variant = static_cast<uint8_t>((variant + 1 + esp_random() % 2) %
+                                       static_cast<uint8_t>(AmbientMouthVariant::kCount));
+    }
+    mouth_motion_variant_ = static_cast<AmbientMouthVariant>(variant);
+    last_mouth_motion_variant_ = mouth_motion_variant_;
+    mouth_motion_duration_ms_ = RandomRange(duration_min_ms, duration_max_ms);
+    mouth_motion_peak_ = static_cast<int16_t>(RandomRange(peak_min, peak_max));
+    mouth_motion_amount_ = 0;
+    mouth_motion_active_ = true;
+    mouth_motion_started_ms_ = now_ms;
+}
+
 void MochanDisplay::AdvanceMouthAnimation(bool idle_eligible) {
     const int64_t now_ms = esp_timer_get_time() / 1000;
     if (!idle_eligible || yawn_active_) {
         mouth_motion_active_ = false;
         mouth_motion_amount_ = 0;
         mouth_motion_started_ms_ = 0;
+        mouth_motion_duration_ms_ = 0;
+        mouth_motion_peak_ = 0;
         return;
     }
     if (!mouth_motion_active_) {
@@ -668,28 +759,65 @@ void MochanDisplay::AdvanceMouthAnimation(bool idle_eligible) {
     }
 
     const int64_t elapsed = now_ms - mouth_motion_started_ms_;
-    if (elapsed < kMouthMotionOpenMs) {
-        mouth_motion_amount_ = static_cast<int16_t>(elapsed * 256 / kMouthMotionOpenMs);
-    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs) {
-        mouth_motion_amount_ = 256;
-    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs + kMouthMotionCloseMs) {
-        const int64_t close_elapsed = elapsed - kMouthMotionOpenMs - kMouthMotionHoldMs;
-        mouth_motion_amount_ = static_cast<int16_t>(256 + (kMouthMotionClosedAmount - 256) *
-                                                              close_elapsed / kMouthMotionCloseMs);
-    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs + kMouthMotionCloseMs +
-                             kMouthMotionClosedHoldMs) {
-        mouth_motion_amount_ = kMouthMotionClosedAmount;
-    } else if (elapsed < kMouthMotionOpenMs + kMouthMotionHoldMs + kMouthMotionCloseMs +
-                             kMouthMotionClosedHoldMs + kMouthMotionSettleMs) {
-        const int64_t settle_elapsed = elapsed - kMouthMotionOpenMs - kMouthMotionHoldMs -
-                                       kMouthMotionCloseMs - kMouthMotionClosedHoldMs;
-        mouth_motion_amount_ =
-            static_cast<int16_t>(kMouthMotionClosedAmount *
-                                 (kMouthMotionSettleMs - settle_elapsed) / kMouthMotionSettleMs);
-    } else {
+    const int64_t duration = mouth_motion_duration_ms_;
+    if (elapsed >= duration) {
         mouth_motion_active_ = false;
         mouth_motion_amount_ = 0;
         mouth_motion_started_ms_ = 0;
+        mouth_motion_duration_ms_ = 0;
+        mouth_motion_peak_ = 0;
+        return;
+    }
+
+    switch (mouth_motion_variant_) {
+        case AmbientMouthVariant::kMicroPulse: {
+            const int64_t peak_ms = duration * 2 / 5;
+            mouth_motion_amount_ = elapsed < peak_ms
+                                       ? InterpolateMouthAmount(elapsed, 0, peak_ms, 0,
+                                                                mouth_motion_peak_)
+                                       : InterpolateMouthAmount(elapsed, peak_ms, duration,
+                                                                mouth_motion_peak_, 0);
+            break;
+        }
+        case AmbientMouthVariant::kSoftOpenClose: {
+            const int64_t peak_ms = duration * 3 / 10;
+            const int64_t close_ms = duration * 7 / 10;
+            const int close_amount = -mouth_motion_peak_ / 4;
+            if (elapsed < peak_ms) {
+                mouth_motion_amount_ = InterpolateMouthAmount(elapsed, 0, peak_ms, 0,
+                                                               mouth_motion_peak_);
+            } else if (elapsed < close_ms) {
+                mouth_motion_amount_ = InterpolateMouthAmount(
+                    elapsed, peak_ms, close_ms, mouth_motion_peak_, close_amount);
+            } else {
+                mouth_motion_amount_ = InterpolateMouthAmount(elapsed, close_ms, duration,
+                                                               close_amount, 0);
+            }
+            break;
+        }
+        case AmbientMouthVariant::kDoubleTwitch: {
+            const int64_t first_peak_ms = duration / 5;
+            const int64_t first_zero_ms = duration * 2 / 5;
+            const int64_t second_peak_ms = duration * 13 / 20;
+            const int second_peak = mouth_motion_peak_ * 2 / 3;
+            if (elapsed < first_peak_ms) {
+                mouth_motion_amount_ = InterpolateMouthAmount(elapsed, 0, first_peak_ms, 0,
+                                                               mouth_motion_peak_);
+            } else if (elapsed < first_zero_ms) {
+                mouth_motion_amount_ = InterpolateMouthAmount(
+                    elapsed, first_peak_ms, first_zero_ms, mouth_motion_peak_, 0);
+            } else if (elapsed < second_peak_ms) {
+                mouth_motion_amount_ = InterpolateMouthAmount(elapsed, first_zero_ms,
+                                                               second_peak_ms, 0, second_peak);
+            } else {
+                mouth_motion_amount_ = InterpolateMouthAmount(elapsed, second_peak_ms,
+                                                               duration, second_peak, 0);
+            }
+            break;
+        }
+        case AmbientMouthVariant::kCount:
+            mouth_motion_amount_ = 0;
+            break;
     }
 }
 
