@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/acoustic_environment_status.h"
 #include "display/secondary_oled.h"
 #include "motion/gyro_turn_controller.h"
 #include "motion/motor_controller.h"
@@ -62,6 +63,7 @@ struct RobotStatus {
     CliffSensor::Status cliff;
     BatteryController::Status battery;
     EnvironmentStatus environment;
+    AcousticEnvironmentStatus acoustic_environment;
 
     bool motion_sensor_available = false;
     bool motion_sensor_valid = false;

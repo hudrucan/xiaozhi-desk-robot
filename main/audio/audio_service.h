@@ -20,6 +20,7 @@
 
 #include "audio_codec.h"
 #include "audio_engine.h"
+#include "acoustic_environment_status.h"
 #include "asr_settings.h"
 #include "fixed_queue.h"
 #include "ogg_demuxer.h"
@@ -128,6 +129,10 @@ public:
     bool IsVoiceDetected() const { return voice_detected_; }
     uint8_t GetInputLevel() const;
     bool IsInputClipping() const;
+    AcousticEnvironmentStatus GetAcousticEnvironmentStatus() const;
+    void SetAcousticMotionActive(bool active) {
+        acoustic_motion_active_.store(active, std::memory_order_relaxed);
+    }
     bool IsIdle();
     bool IsPlaybackIdle();
     // Monotonic modulo-2^32 PCM output clock; readers use unsigned deltas.
@@ -228,6 +233,35 @@ private:
     std::atomic<int64_t> last_input_level_us_{0};
     std::atomic<int64_t> last_input_clip_us_{0};
 
+    // PCM-derived room telemetry. The input task is the sole accumulator writer;
+    // a sequence counter publishes coherent lock-free snapshots to status readers.
+    static constexpr int64_t kAcousticFreshnessUs = 750 * 1000LL;
+    std::atomic<uint32_t> acoustic_snapshot_sequence_{0};
+    std::atomic<bool> acoustic_snapshot_valid_{false};
+    std::atomic<bool> acoustic_floor_valid_{false};
+    std::atomic<float> acoustic_rms_dbfs_{-90.0f};
+    std::atomic<float> acoustic_peak_dbfs_{-90.0f};
+    std::atomic<float> acoustic_noise_floor_dbfs_{-90.0f};
+    std::atomic<float> acoustic_signal_over_floor_db_{0.0f};
+    std::atomic<bool> acoustic_snapshot_self_noise_{false};
+    std::atomic<int64_t> acoustic_last_update_us_{0};
+    std::atomic<int64_t> acoustic_valid_after_us_{0};
+    std::atomic<bool> acoustic_motion_active_{false};
+    std::atomic<bool> acoustic_playback_active_{false};
+    std::atomic<int64_t> acoustic_last_playback_us_{0};
+    std::atomic<bool> acoustic_reset_accumulator_{false};
+    uint64_t acoustic_sum_squares_ = 0;
+    int64_t acoustic_sum_ = 0;
+    size_t acoustic_sample_count_ = 0;
+    uint32_t acoustic_peak_ = 0;
+    bool acoustic_window_self_noise_ = false;
+    bool acoustic_noise_floor_initialized_ = false;
+    float acoustic_noise_floor_estimate_dbfs_ = -90.0f;
+    float acoustic_floor_initial_min_dbfs_ = 0.0f;
+    uint8_t acoustic_floor_initial_samples_ = 0;
+    uint8_t acoustic_elevated_samples_ = 0;
+    float acoustic_elevated_min_dbfs_ = 0.0f;
+
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
@@ -241,6 +275,9 @@ private:
     void CheckAndUpdateAudioPowerState();
     bool IsPlaybackDrainedLocked() const;
     bool MarkPlaybackDrainedLocked();
+    void UpdateAcousticTelemetry(const std::vector<int16_t>& data, int sample_rate,
+                                 uint32_t frame_peak, int64_t now_us, bool input_available);
+    void ResetAcousticAccumulator();
 };
 
 #endif

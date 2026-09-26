@@ -1813,6 +1813,7 @@ private:
     void InitializeMotorStatusLight() {
         motors_.SetMovementStateCallback([this](bool moving) {
             motor_activity_active_.store(moving, std::memory_order_relaxed);
+            Application::GetInstance().GetAudioService().SetAcousticMotionActive(moving);
             if (!moving) {
                 ambient_motion_generation_.store(0, std::memory_order_release);
                 const uint32_t reaction_generation =
@@ -2426,6 +2427,7 @@ private:
         status.motion_gesture = MotionReactions::GestureName(motion_reactions_.GetGesture());
         status.gyro = gyro_turn_controller_.GetStatus();
 #endif
+        status.acoustic_environment = audio_service.GetAcousticEnvironmentStatus();
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         status.oled_available = secondary_display_.IsAvailable();
         status.oled_config = secondary_display_.GetConfig();

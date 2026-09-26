@@ -58,7 +58,8 @@ bool AddBh1750(cJSON* root, const EnvironmentStatus& environment) {
 }  // namespace
 
 cJSON* RobotWebStatus::CreateEnvironment() {
-    const EnvironmentStatus environment = controller_.GetStatus().environment;
+    const RobotStatus status = controller_.GetStatus();
+    const EnvironmentStatus& environment = status.environment;
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         return nullptr;
@@ -68,6 +69,33 @@ cJSON* RobotWebStatus::CreateEnvironment() {
         cJSON_Delete(root);
         return nullptr;
     }
+    cJSON* acoustic = cJSON_AddObjectToObject(root, "acoustic");
+    if (acoustic == nullptr) {
+        cJSON_Delete(root);
+        return nullptr;
+    }
+    const AcousticEnvironmentStatus& acoustic_status = status.acoustic_environment;
+    cJSON_AddBoolToObject(acoustic, "valid", acoustic_status.valid);
+    cJSON_AddBoolToObject(acoustic, "noise_floor_valid", acoustic_status.noise_floor_valid);
+    if (acoustic_status.valid) {
+        cJSON_AddNumberToObject(acoustic, "rms_dbfs", acoustic_status.rms_dbfs);
+        cJSON_AddNumberToObject(acoustic, "peak_dbfs", acoustic_status.peak_dbfs);
+        if (acoustic_status.noise_floor_valid) {
+            cJSON_AddNumberToObject(acoustic, "noise_floor_dbfs",
+                                    acoustic_status.noise_floor_dbfs);
+            cJSON_AddNumberToObject(acoustic, "signal_over_floor_db",
+                                    acoustic_status.signal_over_floor_db);
+        } else {
+            cJSON_AddNullToObject(acoustic, "noise_floor_dbfs");
+            cJSON_AddNullToObject(acoustic, "signal_over_floor_db");
+        }
+    } else {
+        cJSON_AddNullToObject(acoustic, "rms_dbfs");
+        cJSON_AddNullToObject(acoustic, "peak_dbfs");
+        cJSON_AddNullToObject(acoustic, "noise_floor_dbfs");
+        cJSON_AddNullToObject(acoustic, "signal_over_floor_db");
+    }
+    cJSON_AddBoolToObject(acoustic, "self_noise", acoustic_status.self_noise);
     cJSON* summary = cJSON_AddObjectToObject(root, "summary");
     if (summary == nullptr) {
         cJSON_Delete(root);

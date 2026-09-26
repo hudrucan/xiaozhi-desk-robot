@@ -3,6 +3,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "gemini_transcribe_client.h"
@@ -247,10 +248,19 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     last_input_time_ = std::chrono::steady_clock::now();
     debug_statistics_.input_count++;
 
+    if (acoustic_reset_accumulator_.exchange(false, std::memory_order_acq_rel)) {
+        ResetAcousticAccumulator();
+    }
+    const bool acoustic_input_available =
+        !microphone_muted_.load(std::memory_order_relaxed);
     uint32_t peak = 0;
     for (const int16_t sample : data) {
         const int32_t value = sample;
         peak = std::max<uint32_t>(peak, static_cast<uint32_t>(value < 0 ? -value : value));
+        if (acoustic_input_available) {
+            acoustic_sum_ += value;
+            acoustic_sum_squares_ += static_cast<uint64_t>(static_cast<int64_t>(value) * value);
+        }
     }
     const uint8_t measured_level =
         static_cast<uint8_t>(std::min<uint32_t>(100, peak * 100 / 32767));
@@ -266,8 +276,143 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     if (peak >= 32000) {
         last_input_clip_us_.store(now, std::memory_order_relaxed);
     }
+    UpdateAcousticTelemetry(data, sample_rate, peak, now, acoustic_input_available);
 
     return true;
+}
+
+void AudioService::ResetAcousticAccumulator() {
+    acoustic_sum_ = 0;
+    acoustic_sum_squares_ = 0;
+    acoustic_sample_count_ = 0;
+    acoustic_peak_ = 0;
+    acoustic_window_self_noise_ = false;
+}
+
+void AudioService::UpdateAcousticTelemetry(const std::vector<int16_t>& data, int sample_rate,
+                                           uint32_t frame_peak, int64_t now_us,
+                                           bool input_available) {
+    if (!input_available) {
+        ResetAcousticAccumulator();
+        return;
+    }
+
+    acoustic_sample_count_ += data.size();
+    acoustic_peak_ = std::max(acoustic_peak_, frame_peak);
+    const bool playback_noise = acoustic_playback_active_.load(std::memory_order_relaxed) ||
+                                now_us - acoustic_last_playback_us_.load(
+                                             std::memory_order_relaxed) < 150 * 1000LL;
+    acoustic_window_self_noise_ = acoustic_window_self_noise_ || playback_noise ||
+                                  acoustic_motion_active_.load(std::memory_order_relaxed);
+
+    const size_t channels = codec_->input_channels();
+    const size_t window_samples =
+        static_cast<size_t>(std::max(sample_rate, 1)) * std::max<size_t>(channels, 1) / 5;
+    if (acoustic_sample_count_ < window_samples) {
+        return;
+    }
+
+    const double count = static_cast<double>(acoustic_sample_count_);
+    const double mean = static_cast<double>(acoustic_sum_) / count;
+    const double mean_square = static_cast<double>(acoustic_sum_squares_) / count;
+    const float rms = static_cast<float>(std::sqrt(std::max(0.0, mean_square - mean * mean)));
+    const float peak_amplitude = static_cast<float>(std::min<uint32_t>(acoustic_peak_, 32767));
+    constexpr float kSilenceFloorDbfs = -90.0f;
+    const float rms_dbfs = rms > 0.0f
+                               ? std::max(kSilenceFloorDbfs,
+                                          20.0f * std::log10(rms / 32767.0f))
+                               : kSilenceFloorDbfs;
+    const float peak_dbfs = peak_amplitude > 0.0f
+                                ? std::max(kSilenceFloorDbfs,
+                                           20.0f * std::log10(peak_amplitude / 32767.0f))
+                                : kSilenceFloorDbfs;
+
+    if (!acoustic_window_self_noise_) {
+        constexpr uint8_t kInitialFloorSamples = 10;
+        if (!acoustic_noise_floor_initialized_) {
+            if (acoustic_floor_initial_samples_ == 0) {
+                acoustic_floor_initial_min_dbfs_ = rms_dbfs;
+            } else {
+                acoustic_floor_initial_min_dbfs_ =
+                    std::min(acoustic_floor_initial_min_dbfs_, rms_dbfs);
+            }
+            if (++acoustic_floor_initial_samples_ >= kInitialFloorSamples) {
+                acoustic_noise_floor_estimate_dbfs_ = acoustic_floor_initial_min_dbfs_;
+                acoustic_noise_floor_initialized_ = true;
+            }
+        } else if (rms_dbfs <= acoustic_noise_floor_estimate_dbfs_ + 3.0f) {
+            // Follow a quieter room faster than a rising floor. Short transients
+            // above the gate do not influence this estimator.
+            const float alpha = rms_dbfs < acoustic_noise_floor_estimate_dbfs_ ? 0.10f : 0.02f;
+            acoustic_noise_floor_estimate_dbfs_ +=
+                alpha * (rms_dbfs - acoustic_noise_floor_estimate_dbfs_);
+            acoustic_elevated_samples_ = 0;
+        } else {
+            // A continuously elevated room may establish a new floor after five
+            // seconds; isolated sounds leave the floor untouched.
+            if (acoustic_elevated_samples_ == 0) {
+                acoustic_elevated_min_dbfs_ = rms_dbfs;
+            } else {
+                acoustic_elevated_min_dbfs_ = std::min(acoustic_elevated_min_dbfs_, rms_dbfs);
+            }
+            if (acoustic_elevated_samples_ < 25) {
+                ++acoustic_elevated_samples_;
+            }
+            if (acoustic_elevated_samples_ >= 25) {
+                acoustic_noise_floor_estimate_dbfs_ +=
+                    0.02f * (acoustic_elevated_min_dbfs_ - acoustic_noise_floor_estimate_dbfs_);
+                acoustic_elevated_samples_ = 24;
+                acoustic_elevated_min_dbfs_ = rms_dbfs;
+            }
+        }
+    }
+
+    const float signal_over_floor_db = acoustic_noise_floor_initialized_
+                                           ? rms_dbfs - acoustic_noise_floor_estimate_dbfs_
+                                           : 0.0f;
+    acoustic_snapshot_sequence_.fetch_add(1, std::memory_order_acq_rel);
+    acoustic_snapshot_valid_.store(true, std::memory_order_relaxed);
+    acoustic_floor_valid_.store(acoustic_noise_floor_initialized_, std::memory_order_relaxed);
+    acoustic_rms_dbfs_.store(rms_dbfs, std::memory_order_relaxed);
+    acoustic_peak_dbfs_.store(peak_dbfs, std::memory_order_relaxed);
+    acoustic_noise_floor_dbfs_.store(acoustic_noise_floor_estimate_dbfs_,
+                                     std::memory_order_relaxed);
+    acoustic_signal_over_floor_db_.store(signal_over_floor_db, std::memory_order_relaxed);
+    acoustic_snapshot_self_noise_.store(acoustic_window_self_noise_, std::memory_order_relaxed);
+    acoustic_last_update_us_.store(now_us, std::memory_order_relaxed);
+    acoustic_snapshot_sequence_.fetch_add(1, std::memory_order_release);
+    ResetAcousticAccumulator();
+}
+
+AcousticEnvironmentStatus AudioService::GetAcousticEnvironmentStatus() const {
+    AcousticEnvironmentStatus status;
+    uint32_t before = 0;
+    uint32_t after = 0;
+    do {
+        before = acoustic_snapshot_sequence_.load(std::memory_order_acquire);
+        if (before & 1U) {
+            continue;
+        }
+        status.valid = acoustic_snapshot_valid_.load(std::memory_order_relaxed);
+        status.noise_floor_valid = acoustic_floor_valid_.load(std::memory_order_relaxed);
+        status.rms_dbfs = acoustic_rms_dbfs_.load(std::memory_order_relaxed);
+        status.peak_dbfs = acoustic_peak_dbfs_.load(std::memory_order_relaxed);
+        status.noise_floor_dbfs = acoustic_noise_floor_dbfs_.load(std::memory_order_relaxed);
+        status.signal_over_floor_db =
+            acoustic_signal_over_floor_db_.load(std::memory_order_relaxed);
+        status.self_noise = acoustic_snapshot_self_noise_.load(std::memory_order_relaxed);
+        status.last_update_us = acoustic_last_update_us_.load(std::memory_order_relaxed);
+        after = acoustic_snapshot_sequence_.load(std::memory_order_acquire);
+    } while (before != after || (after & 1U));
+
+    const int64_t now_us = esp_timer_get_time();
+    if (service_stopped_.load(std::memory_order_relaxed) ||
+        microphone_muted_.load(std::memory_order_relaxed) || status.last_update_us <= 0 ||
+        status.last_update_us < acoustic_valid_after_us_.load(std::memory_order_acquire) ||
+        now_us - status.last_update_us > kAcousticFreshnessUs) {
+        status.valid = false;
+    }
+    return status;
 }
 
 uint8_t AudioService::GetInputLevel() const {
@@ -390,7 +535,11 @@ void AudioService::AudioOutputTask() {
             callbacks_.on_playback_progress(task.playback_id, task.media_position_ms);
         }
 
+        acoustic_playback_active_.store(true, std::memory_order_relaxed);
+        acoustic_last_playback_us_.store(esp_timer_get_time(), std::memory_order_relaxed);
         codec_->OutputData(task.pcm);
+        acoustic_last_playback_us_.store(esp_timer_get_time(), std::memory_order_relaxed);
+        acoustic_playback_active_.store(false, std::memory_order_relaxed);
         const int output_rate = codec_->output_sample_rate() * codec_->output_channels();
         if (output_rate > 0) {
             output_clock_us_.fetch_add(
@@ -764,6 +913,8 @@ void AudioService::EnableVoiceProcessing(bool enable) {
 
 void AudioService::SetMicrophoneMuted(bool muted) {
     microphone_muted_.store(muted);
+    acoustic_valid_after_us_.store(esp_timer_get_time(), std::memory_order_release);
+    acoustic_reset_accumulator_.store(true, std::memory_order_release);
     if (muted) {
         EnableVoiceProcessing(false);
         EnableWakeWordDetection(false);

@@ -48,7 +48,8 @@ function domainInterval(name) {
       ? 1000
       : null;
   }
-  if (name === "environment") return activeTab === "overview" ? 10000 : 3000;
+  if (name === "environment") return activeTab === "overview" ? 10000
+    : activeTab === "device" ? 1000 : 3000;
   if (name === "system") {
     return activeTab === "diagnostics" ? 2000
       : ["overview", "camera"].includes(activeTab) ? 5000 : 30000;
@@ -448,6 +449,7 @@ function renderEnvironmentStatus(status) {
   const aht20 = status.aht20 || {};
   const bmp280 = status.bmp280 || {};
   const bh1750 = status.bh1750 || {};
+  const acoustic = status.acoustic || {};
   const temperature = aht20.temperature_valid
     ? Number(aht20.temperature_c).toFixed(1) + "°C" : null;
   const humidity = aht20.humidity_valid
@@ -469,6 +471,24 @@ function renderEnvironmentStatus(status) {
     .filter(Boolean).join(" · ");
   $("#bh1750Status").textContent = [environmentStateLabel(bh1750.state), illuminance]
     .filter(Boolean).join(" · ");
+  const acousticFloor = $("#acousticFloorStatus");
+  if (!acoustic.valid) {
+    $("#acousticStatus").textContent = "Unavailable";
+    acousticFloor.hidden = true;
+  } else {
+    const rms = "RMS " + Number(acoustic.rms_dbfs).toFixed(1) + " dBFS";
+    const peak = "Peak " + Number(acoustic.peak_dbfs).toFixed(1) + " dBFS";
+    $("#acousticStatus").textContent = acoustic.self_noise
+      ? rms + " · SELF-NOISE" : rms + " · " + peak;
+    acousticFloor.textContent = acoustic.noise_floor_valid
+      ? "Floor " + Number(acoustic.noise_floor_dbfs).toFixed(1) + " dBFS · " +
+        (acoustic.self_noise
+          ? "paused"
+          : (Number(acoustic.signal_over_floor_db) >= 0 ? "+" : "") +
+            Number(acoustic.signal_over_floor_db).toFixed(1) + " dB")
+      : "Floor learning" + (acoustic.self_noise ? " · paused" : "");
+    acousticFloor.hidden = false;
+  }
 }
 
 function scheduleStatusLoop(delay = 0) {

@@ -647,6 +647,10 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .environment-card .acoustic-floor {
+        color: var(--muted);
+        font-size: 12px;
+      }
       .health {
         display: flex;
         gap: 7px;
