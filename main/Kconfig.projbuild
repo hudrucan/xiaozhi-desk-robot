@@ -1,12 +1,5 @@
 menu "Xiaozhi Assistant"
 
-config DESK_MODE_FONTS
-    bool
-    default y
-    select LV_FONT_MONTSERRAT_18
-    help
-        Native LVGL Montserrat Medium font for the desk date.
-
 config OTA_URL
     string "Default OTA URL"
     default "https://api.tenclass.net/xiaozhi/ota/"
