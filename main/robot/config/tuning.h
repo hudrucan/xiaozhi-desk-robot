@@ -28,8 +28,9 @@
 
 // The upward-facing ambient sensor reads substantially brighter than the scene
 // seen by the forward-facing camera. Treat ordinary 100-150 lx indoor readings
-// as low light for the OV2640, and require office-like illumination before
-// returning to the normal profile. The gap prevents profile flapping.
+// as low light for the forward-facing camera, and require office-like
+// illumination before returning to the normal profile. The gap prevents
+// profile flapping.
 #define CAMERA_AUTO_LOW_LIGHT_ENTER_LUX 180.0f
 #define CAMERA_AUTO_LOW_LIGHT_EXIT_LUX 300.0f
 #define CAMERA_AUTO_LIGHT_STALE_MS 5000

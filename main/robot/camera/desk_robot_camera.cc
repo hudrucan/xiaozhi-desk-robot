@@ -23,7 +23,32 @@ constexpr int kMcpHighResolutionWarmupFrames = 8;
 bool IsHighResolution(CameraResolution resolution) {
     return resolution == CameraResolution::kXga ||
            resolution == CameraResolution::kSxga ||
-           resolution == CameraResolution::kUxga;
+           resolution == CameraResolution::kUxga ||
+           resolution == CameraResolution::kQsxga;
+}
+
+bool SensorSettingsEqual(const CameraSensorSettings& lhs,
+                         const CameraSensorSettings& rhs) {
+    return lhs.profile == rhs.profile &&
+           lhs.brightness == rhs.brightness &&
+           lhs.contrast == rhs.contrast &&
+           lhs.saturation == rhs.saturation &&
+           lhs.auto_exposure == rhs.auto_exposure &&
+           lhs.aec2 == rhs.aec2 &&
+           lhs.ae_level == rhs.ae_level &&
+           lhs.manual_exposure == rhs.manual_exposure &&
+           lhs.auto_gain == rhs.auto_gain &&
+           lhs.manual_gain == rhs.manual_gain &&
+           lhs.gain_ceiling == rhs.gain_ceiling &&
+           lhs.auto_white_balance == rhs.auto_white_balance &&
+           lhs.awb_gain == rhs.awb_gain &&
+           lhs.white_balance_mode == rhs.white_balance_mode &&
+           lhs.black_pixel_correction == rhs.black_pixel_correction &&
+           lhs.white_pixel_correction == rhs.white_pixel_correction &&
+           lhs.gamma == rhs.gamma &&
+           lhs.lens_correction == rhs.lens_correction &&
+           lhs.mirror == rhs.mirror &&
+           lhs.flip == rhs.flip;
 }
 
 }  // namespace
@@ -82,8 +107,8 @@ bool DeskRobotCamera::Capture() {
     }
     const CameraSettingsConfig settings = GetSettings();
     const CameraSensorSettings resolved_sensor = ResolveSensorSettings(settings.sensor);
-    // Change the sensor mode first because OV2640 set_framesize() rewrites its
-    // DVP/pixformat path. Apply the requested image controls to the final mode.
+    // Change the sensor mode first, then apply the requested image controls to
+    // the final capture mode.
     const bool configured =
         ApplyModeCaptureSettings(settings.mcp.resolution, settings.mcp.jpeg_quality) &&
         Esp32Camera::ApplySensorControls(ToSensorControls(resolved_sensor));
@@ -138,6 +163,13 @@ bool DeskRobotCamera::StartWebLive() {
             !ApplyModeSensorSettings(settings.sensor)) {
             return false;
         }
+        // WHEN_EMPTY may still hold the frame captured before this mode switch.
+        // Drain it before the first Web frame so an old QSXGA/profile frame is
+        // never sent as the start of the new stream.
+        if (!Esp32Camera::CaptureForWeb()) {
+            return false;
+        }
+        ReturnCurrentFrame();
         hide_mochan = preview_mode_.load() == PreviewMode::kMochanPreview;
         preview_mode_.store(PreviewMode::kWebLive);
     }
@@ -171,6 +203,12 @@ bool DeskRobotCamera::StartMochanPreview() {
         !ApplyModeSensorSettings(settings.sensor)) {
         return false;
     }
+    // Drop the queued pre-switch frame before decoding the first Mochan
+    // preview. In WHEN_EMPTY mode it may use the previous resolution/profile.
+    if (!Esp32Camera::CaptureForWeb()) {
+        return false;
+    }
+    ReturnCurrentFrame();
     preview_mode_.store(PreviewMode::kMochanPreview);
     return true;
 }
@@ -263,15 +301,51 @@ bool DeskRobotCamera::SendSnapshot(const JpegSender& sender) {
 bool DeskRobotCamera::IsAvailable() const { return Esp32Camera::IsAvailable(); }
 
 bool DeskRobotCamera::ApplySettings(const CameraSettingsConfig& requested) {
-    ForceOff();
-    std::unique_lock<std::timed_mutex> capture_lock(capture_mutex_, std::defer_lock);
-    if (!capture_lock.try_lock_for(std::chrono::seconds(7)) || mcp_operation_active_.load()) {
-        return false;
-    }
     const CameraSettingsConfig normalized = CameraSettingsStore::Normalize(requested);
-    if (!ApplyModeSensorSettings(normalized.sensor)) {
+    std::lock_guard<std::mutex> ownership_lock(ownership_mutex_);
+    if (mcp_operation_active_.load()) {
         return false;
     }
+    std::unique_lock<std::timed_mutex> capture_lock(capture_mutex_, std::defer_lock);
+    if (!capture_lock.try_lock_for(std::chrono::seconds(7))) {
+        return false;
+    }
+
+    const CameraSettingsConfig previous = GetSettings();
+    const PreviewMode mode = preview_mode_.load();
+    const bool sensor_changed = !SensorSettingsEqual(previous.sensor, normalized.sensor);
+    const bool web_capture_changed =
+        mode == PreviewMode::kWebLive &&
+        (previous.web.resolution != normalized.web.resolution ||
+         previous.web.jpeg_quality != normalized.web.jpeg_quality);
+    const bool mochan_capture_changed =
+        mode == PreviewMode::kMochanPreview &&
+        previous.mochan.source_resolution != normalized.mochan.source_resolution;
+    const bool capture_changed = web_capture_changed || mochan_capture_changed;
+
+    if (web_capture_changed &&
+        !ApplyModeCaptureSettings(normalized.web.resolution, normalized.web.jpeg_quality)) {
+        return false;
+    }
+    if (mochan_capture_changed &&
+        !ApplyModeCaptureSettings(normalized.mochan.source_resolution, 12)) {
+        return false;
+    }
+    // A frame-size change can rewrite sensor state, so replay controls after a
+    // current-mode capture change even when the requested controls are equal.
+    if ((sensor_changed || capture_changed) &&
+        !ApplyModeSensorSettings(normalized.sensor)) {
+        return false;
+    }
+    if (mode != PreviewMode::kOff && (sensor_changed || capture_changed)) {
+        // CAMERA_GRAB_WHEN_EMPTY may have queued one frame using the previous
+        // mode or controls. Discard it without changing preview ownership.
+        if (!Esp32Camera::CaptureForWeb()) {
+            return false;
+        }
+        ReturnCurrentFrame();
+    }
+
     std::lock_guard<std::mutex> settings_lock(settings_mutex_);
     settings_ = normalized;
     return true;
@@ -288,7 +362,7 @@ int DeskRobotCamera::WebFrameIntervalMs() const {
 }
 
 const char* DeskRobotCamera::SensorName() const {
-    return SensorPid() == OV2640_PID ? "OV2640" : "Unknown";
+    return SensorPid() == OV5640_PID ? "OV5640" : "Unknown";
 }
 
 CameraImagePolicy::Status DeskRobotCamera::GetImagePolicyStatus() const {
@@ -419,6 +493,8 @@ framesize_t DeskRobotCamera::ToFrameSize(CameraResolution resolution) {
             return FRAMESIZE_SXGA;
         case CameraResolution::kUxga:
             return FRAMESIZE_UXGA;
+        case CameraResolution::kQsxga:
+            return FRAMESIZE_QSXGA;
         case CameraResolution::kAuto:
         case CameraResolution::kVga:
         default:

@@ -105,12 +105,7 @@ async function saveCameraSettings(reset = false) {
   cameraSettingsSaving = true;
   $("#cameraSettingsApply").disabled = true;
   $("#cameraSettingsReset").disabled = true;
-  const restartWeb = browserLive || !!statusCache.web_camera_live;
   try {
-    if (restartWeb) {
-      stopBrowserLive("Applying camera settings", true);
-      if (!await setWebCameraMode("off")) throw Error("Unable to stop Web Live");
-    }
     const response = await fetch("/api/camera/settings", {
       method: reset ? "DELETE" : "POST",
       headers: reset ? {} : { "Content-Type": "application/json" },
@@ -120,7 +115,6 @@ async function saveCameraSettings(reset = false) {
     if (!response.ok || !result.ok) throw Error(result.message || "Camera settings failed");
     populateCameraSettings(result);
     queueDomains(["camera"], 120);
-    if (restartWeb && lastState === "idle") await toggleBrowserLive();
     notify(result.message || "Camera settings applied");
   } catch (error) {
     notify(error.message || "Camera settings failed");

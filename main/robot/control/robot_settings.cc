@@ -59,16 +59,6 @@ void RobotSettings::SetVoiceInputConfig(const VoiceInputConfig& requested) const
     settings.SetBool("agc_enabled", requested.agc_requested);
 }
 
-bool RobotSettings::GetCameraFlipped() const {
-    Settings settings("desk_robot", false);
-    return settings.GetBool("camera_flip", false);
-}
-
-void RobotSettings::SetCameraFlipped(bool flipped) const {
-    Settings settings("desk_robot", true);
-    settings.SetBool("camera_flip", flipped);
-}
-
 bool RobotSettings::GetDisplayFlipped() const {
     Settings settings("desk_robot", false);
     return settings.GetBool("display_flip", false);

@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <mutex>
 
+inline constexpr bool kDefaultCameraMirror = true;
+inline constexpr bool kDefaultCameraFlip = true;
+
 enum class CameraImageProfile : uint8_t {
     kNormal,
     kLowLight,
@@ -19,6 +22,7 @@ enum class CameraResolution : uint8_t {
     kXga,
     kSxga,
     kUxga,
+    kQsxga,
 };
 
 enum class CameraGainCeiling : uint8_t {
@@ -68,8 +72,8 @@ struct CameraSensorSettings {
     bool white_pixel_correction = true;
     bool gamma = true;
     bool lens_correction = true;
-    bool mirror = false;
-    bool flip = false;
+    bool mirror = kDefaultCameraMirror;
+    bool flip = kDefaultCameraFlip;
 };
 
 struct WebCameraSettings {
@@ -85,7 +89,7 @@ struct MochanCameraSettings {
 };
 
 struct McpCameraSettings {
-    CameraResolution resolution = CameraResolution::kVga;
+    CameraResolution resolution = CameraResolution::kUxga;
     int jpeg_quality = 12;
     McpFreshFramePolicy freshness = McpFreshFramePolicy::kFresh;
 };
@@ -99,13 +103,13 @@ struct CameraSettingsConfig {
 
 class CameraSettingsStore {
 public:
-    void Load(bool legacy_flipped);
+    void Load();
     CameraSettingsConfig Get() const;
     void Save(const CameraSettingsConfig& config);
-    void ResetToDefaults(bool flipped = false);
+    void ResetToDefaults();
     void SetOrientation(bool mirror, bool flip);
 
-    static CameraSettingsConfig Defaults(bool flipped = false);
+    static CameraSettingsConfig Defaults();
     static CameraSettingsConfig Normalize(CameraSettingsConfig config);
 
 private:

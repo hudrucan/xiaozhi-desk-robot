@@ -21,6 +21,31 @@ namespace {
 
 constexpr size_t kPreviewDecodeMaxWidth = 320;
 constexpr size_t kPreviewDecodeMaxHeight = 240;
+constexpr int kOv5640GainCeilingRegister = 0x3A18;
+constexpr int kOv5640GainCeilingMask = 0x03FF;
+
+int ApplyGainCeiling(sensor_t* sensor, gainceiling_t ceiling) {
+    if (sensor->id.PID != OV5640_PID) {
+        return sensor->set_gainceiling(sensor, ceiling);
+    }
+
+    // OV5640 encodes the AGC ceiling in 1/16x units in the 10-bit
+    // 0x3A18/0x3A19 field. esp32-camera 2.1.7 writes the gainceiling_t enum
+    // ordinal directly, which turns e.g. 8x into raw value 2 and leaves auto
+    // gain far darker than requested. Keep the workaround in application code
+    // until the component fixes its OV5640 implementation.
+    const int ordinal = std::clamp(static_cast<int>(ceiling),
+                                   static_cast<int>(GAINCEILING_2X),
+                                   static_cast<int>(GAINCEILING_128X));
+    const int multiplier = 2 << ordinal;
+    const int raw_ceiling = std::min(multiplier << 4, kOv5640GainCeilingMask);
+    const int result = sensor->set_reg(sensor, kOv5640GainCeilingRegister,
+                                       kOv5640GainCeilingMask, raw_ceiling);
+    if (result == 0) {
+        sensor->status.gainceiling = static_cast<uint8_t>(ceiling);
+    }
+    return result;
+}
 
 void GetPreviewDecodeSize(size_t source_width, size_t source_height,
                           size_t& target_width, size_t& target_height) {
@@ -387,7 +412,7 @@ bool Esp32Camera::ApplySensorControls(const CameraSensorControls& controls) {
         result |= sensor->set_aec_value(sensor, controls.manual_exposure);
     }
     result |= sensor->set_gain_ctrl(sensor, controls.auto_gain ? 1 : 0);
-    result |= sensor->set_gainceiling(sensor, controls.gain_ceiling);
+    result |= ApplyGainCeiling(sensor, controls.gain_ceiling);
     if (!controls.auto_gain) {
         result |= sensor->set_agc_gain(sensor, controls.manual_gain);
     }
@@ -412,9 +437,9 @@ bool Esp32Camera::ApplyCaptureSettings(framesize_t frame_size, int jpeg_quality)
     if (sensor == nullptr) {
         return false;
     }
-    // Reprogramming the OV2640 frame size resets its DVP/pixformat path and
-    // temporarily destabilizes AEC/AGC. Avoid doing that at every still capture
-    // when the requested capture mode is already active.
+    // Reprogramming the sensor frame size temporarily destabilizes AEC/AGC.
+    // Avoid doing that at every still capture when the requested mode is
+    // already active.
     const int frame_result = sensor->status.framesize == frame_size
                                  ? 0
                                  : sensor->set_framesize(sensor, frame_size);

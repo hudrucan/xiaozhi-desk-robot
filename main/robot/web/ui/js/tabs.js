@@ -19,7 +19,7 @@ const tabMeta = {
   camera: {
     kicker: "Vision",
     title: "Camera",
-    description: "Capture, preview, and tune the OV2640 camera.",
+    description: "Capture, preview, and tune the OV5640 camera.",
   },
   device: {
     kicker: "Hardware",

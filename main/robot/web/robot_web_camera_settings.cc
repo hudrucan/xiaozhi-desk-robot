@@ -30,6 +30,7 @@ const char* ResolutionName(CameraResolution value) {
         case CameraResolution::kXga: return "xga";
         case CameraResolution::kSxga: return "sxga";
         case CameraResolution::kUxga: return "uxga";
+        case CameraResolution::kQsxga: return "qsxga";
     }
     return "vga";
 }
@@ -145,7 +146,7 @@ std::string RobotWebCameraSettings::Encode(bool ok, const char* message) const {
         cJSON_AddStringToObject(root, "message", message);
     }
     cJSON_AddStringToObject(root, "sensor", controller_.GetCameraSensorName().c_str());
-    cJSON_AddStringToObject(root, "max_resolution", "uxga");
+    cJSON_AddStringToObject(root, "max_resolution", "qsxga");
     cJSON_AddBoolToObject(root, "supports_jpeg", true);
     AddSettings(root, controller_.GetCameraSettings());
     char* encoded = cJSON_PrintUnformatted(root);
@@ -178,16 +179,16 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
         {"low_light", CameraImageProfile::kLowLight}, {"custom", CameraImageProfile::kCustom},
         {"auto", CameraImageProfile::kAuto}},
         settings.sensor.profile, error);
-    if (valid) valid = ReadInt(sensor, "brightness", -2, 2, settings.sensor.brightness, error);
-    if (valid) valid = ReadInt(sensor, "contrast", -2, 2, settings.sensor.contrast, error);
-    if (valid) valid = ReadInt(sensor, "saturation", -2, 2, settings.sensor.saturation, error);
+    if (valid) valid = ReadInt(sensor, "brightness", -3, 3, settings.sensor.brightness, error);
+    if (valid) valid = ReadInt(sensor, "contrast", -3, 3, settings.sensor.contrast, error);
+    if (valid) valid = ReadInt(sensor, "saturation", -4, 4, settings.sensor.saturation, error);
     if (valid) valid = ReadBool(sensor, "auto_exposure", settings.sensor.auto_exposure, error);
     if (valid) valid = ReadBool(sensor, "aec2", settings.sensor.aec2, error);
-    if (valid) valid = ReadInt(sensor, "ae_level", -2, 2, settings.sensor.ae_level, error);
+    if (valid) valid = ReadInt(sensor, "ae_level", -5, 5, settings.sensor.ae_level, error);
     if (valid) valid = ReadInt(sensor, "manual_exposure", 0, 1200,
                                settings.sensor.manual_exposure, error);
     if (valid) valid = ReadBool(sensor, "auto_gain", settings.sensor.auto_gain, error);
-    if (valid) valid = ReadInt(sensor, "manual_gain", 0, 30, settings.sensor.manual_gain, error);
+    if (valid) valid = ReadInt(sensor, "manual_gain", 0, 64, settings.sensor.manual_gain, error);
     int gain_ceiling = 2;
     if (valid) valid = ReadInt(sensor, "gain_ceiling", 2, 128, gain_ceiling, error);
     if (valid && (gain_ceiling & (gain_ceiling - 1)) != 0) {
@@ -217,7 +218,8 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
         {"auto", CameraResolution::kAuto}, {"qvga", CameraResolution::kQvga},
         {"hvga", CameraResolution::kHvga}, {"vga", CameraResolution::kVga},
         {"svga", CameraResolution::kSvga}, {"xga", CameraResolution::kXga},
-        {"sxga", CameraResolution::kSxga}, {"uxga", CameraResolution::kUxga}};
+        {"sxga", CameraResolution::kSxga}, {"uxga", CameraResolution::kUxga},
+        {"qsxga", CameraResolution::kQsxga}};
     if (valid) valid = ReadEnum(web, "resolution", resolutions, settings.web.resolution, error);
     if (valid) valid = ReadInt(web, "jpeg_quality", 4, 63, settings.web.jpeg_quality, error);
     if (valid) valid = ReadInt(web, "fps", 1, 30, settings.web.fps, error);

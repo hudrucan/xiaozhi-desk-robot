@@ -96,7 +96,7 @@ function domainsForAction(name) {
     "microphone_mute", "audio_test"].includes(name)) {
     return ["audio"];
   }
-  if (name === "camera_flip" || name === "live_camera") return ["camera"];
+  if (["camera_mirror", "camera_flip", "live_camera"].includes(name)) return ["camera"];
   if (name.startsWith("battery_")) return ["battery"];
   return ["core"];
 }
@@ -112,7 +112,9 @@ async function action(name, extra = {}) {
     if (!response.ok || !result.ok) throw Error(result.message || "Command failed");
     notify(result.message || "Done");
     queueDomains(domainsForAction(name), 120);
-    if (name === "camera_flip") loadCameraSettings();
+    if (name === "camera_mirror" || name === "camera_flip") {
+      setTimeout(() => loadCameraSettings(), 250);
+    }
   } catch (error) {
     notify(error.message || "Robot is offline");
   }

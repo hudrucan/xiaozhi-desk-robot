@@ -117,7 +117,8 @@ private:
     CameraSettingsStore camera_settings_;
     CameraImagePolicy camera_image_policy_;
     std::unique_ptr<RobotWebControlServer> web_control_server_;
-    std::atomic_bool camera_flipped_{false};
+    std::atomic_bool camera_mirrored_{kDefaultCameraMirror};
+    std::atomic_bool camera_flipped_{kDefaultCameraFlip};
     std::atomic_bool display_flipped_{false};
     std::atomic_int speaker_volume_{70};
     std::atomic_bool ambient_sound_enabled_{false};
@@ -751,8 +752,7 @@ private:
     }
 
     void InitializeCamera() {
-        const bool legacy_flipped = robot_settings_.GetCameraFlipped();
-        camera_settings_.Load(legacy_flipped);
+        camera_settings_.Load();
         const CameraSettingsConfig camera_settings = camera_settings_.Get();
         camera_config_t config = {};
         config.pin_d0 = CAMERA_PIN_D0;
@@ -780,19 +780,19 @@ private:
         // Allocate framebuffers for the sensor's maximum mode once. Runtime
         // consumers then switch down to their persisted Web/Mochan/MCP profile
         // without reallocating or reinitializing the shared camera/I2C bus.
-        config.frame_size = FRAMESIZE_UXGA;
+        config.frame_size = FRAMESIZE_QSXGA;
         config.jpeg_quality = 12;
-        config.fb_count = 2;
+        config.fb_count = 1;
         config.fb_location = CAMERA_FB_IN_PSRAM;
-        config.grab_mode = CAMERA_GRAB_LATEST;
+        config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
         camera_ = new DeskRobotCamera(
             config, primary_i2c_.mutex(), camera_settings, camera_image_policy_,
             [this](DeskRobotCamera::McpRequestState state) {
                 OnCameraMcpRequestStateChanged(state);
             });
 
-        const bool flipped = camera_settings.sensor.mirror && camera_settings.sensor.flip;
-        camera_flipped_.store(flipped);
+        camera_mirrored_.store(camera_settings.sensor.mirror);
+        camera_flipped_.store(camera_settings.sensor.flip);
     }
 
 #ifdef DISTANCE_SENSOR_I2C_ADDRESS
@@ -926,9 +926,24 @@ private:
     }
 #endif
 
+    void ApplyCameraMirror(bool mirrored) {
+        CameraSettingsConfig settings = camera_settings_.Get();
+        settings.sensor.mirror = mirrored;
+        if (!ApplyCameraSettings(settings)) {
+            camera_mirrored_.store(!mirrored);
+        }
+    }
+
+    bool QueueCameraMirror() {
+        const bool mirrored = !camera_mirrored_.load();
+        camera_mirrored_.store(mirrored);
+        Application::GetInstance().Schedule(
+            [this, mirrored]() { ApplyCameraMirror(mirrored); });
+        return mirrored;
+    }
+
     void ApplyCameraFlip(bool flipped) {
         CameraSettingsConfig settings = camera_settings_.Get();
-        settings.sensor.mirror = flipped;
         settings.sensor.flip = flipped;
         if (!ApplyCameraSettings(settings)) {
             camera_flipped_.store(!flipped);
@@ -2341,6 +2356,7 @@ private:
         return QueueStatusLightEffect(effect, duration_ms, true);
     }
 
+    bool ToggleCameraMirror() override { return QueueCameraMirror(); }
     bool ToggleCameraFlip() override { return QueueCameraFlip(); }
     bool ToggleDisplayFlip() override {
         NotifyAmbientInteraction();
@@ -2361,37 +2377,17 @@ private:
             return false;
         }
         const CameraSettingsConfig settings = CameraSettingsStore::Normalize(requested);
-        const DeskRobotCamera::PreviewMode previous_mode = camera_->preview_mode();
         if (!camera_->ApplySettings(settings)) {
             return false;
         }
         camera_settings_.Save(settings);
-        const bool flipped = settings.sensor.mirror && settings.sensor.flip;
-        camera_flipped_.store(flipped);
-        // Keep the legacy orientation key as a downgrade/migration fallback.
-        robot_settings_.SetCameraFlipped(flipped);
-
-        if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
-            return true;
-        }
-        // Web settings are applied through the HTTP route, which owns the
-        // stream-client stop/restart handshake. Do not revive a headless Web
-        // mode after its MJPEG client has already disconnected.
-        if (previous_mode == DeskRobotCamera::PreviewMode::kWebLive) {
-            return true;
-        }
-        if (previous_mode == DeskRobotCamera::PreviewMode::kMochanPreview) {
-            const bool started = camera_->StartMochanPreview();
-            if (started && live_camera_task_ != nullptr) {
-                xTaskNotifyGive(live_camera_task_);
-            }
-            return started;
-        }
+        camera_mirrored_.store(settings.sensor.mirror);
+        camera_flipped_.store(settings.sensor.flip);
         return true;
     }
 
     bool ResetCameraSettings() override {
-        return ApplyCameraSettings(CameraSettingsStore::Defaults(false));
+        return ApplyCameraSettings(CameraSettingsStore::Defaults());
     }
 
     std::string GetCameraSensorName() const override {
@@ -2551,6 +2547,7 @@ private:
         status.asr_ready = app.IsAsrReady();
         status.asr_preparing = app.IsGeminiAsrPreparing();
         status.camera_available = camera_ != nullptr && camera_->IsAvailable();
+        status.camera_mirrored = camera_mirrored_.load();
         status.camera_flipped = camera_flipped_.load();
         status.display_flipped = display_flipped_.load();
         status.emotion = display_->GetCurrentEmotion();

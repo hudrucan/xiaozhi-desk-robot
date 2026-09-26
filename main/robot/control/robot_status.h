@@ -20,6 +20,7 @@ struct RobotStatus {
     bool asr_preparing = false;
 
     bool camera_available = false;
+    bool camera_mirrored = false;
     bool camera_flipped = false;
     bool display_flipped = false;
     std::string emotion;

@@ -250,8 +250,17 @@ if(NOT LANG_DIR STREQUAL "en-US")
     endforeach()
 endif()
 
-file(GLOB COMMON_SOUNDS CONFIGURE_DEPENDS
-    ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
+if(CMAKE_BUILD_EARLY_EXPANSION)
+    # ESP-IDF evaluates component requirements with cmake -P, where
+    # CONFIGURE_DEPENDS is invalid. This pass only needs the file list.
+    file(GLOB COMMON_SOUNDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
+else()
+    # During the real configure pass, refresh the embedded common-sound list
+    # whenever assets are added or removed.
+    file(GLOB COMMON_SOUNDS CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
+endif()
 
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}

@@ -70,6 +70,7 @@ cJSON* RobotWebStatus::CreateCamera() {
         return nullptr;
     }
     cJSON_AddBoolToObject(root, "camera_available", status.camera_available);
+    cJSON_AddBoolToObject(root, "camera_mirrored", status.camera_mirrored);
     cJSON_AddBoolToObject(root, "camera_flipped", status.camera_flipped);
     cJSON_AddBoolToObject(root, "live_camera_available", status.live_camera_available);
     cJSON_AddBoolToObject(root, "live_camera", status.live_camera);

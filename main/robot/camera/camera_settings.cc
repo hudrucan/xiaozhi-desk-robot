@@ -11,7 +11,8 @@
 namespace {
 
 constexpr char kNamespace[] = "camera";
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 3;
+constexpr int kFirstCompatibleSchemaVersion = 1;
 
 constexpr char kVersionKey[] = "version";
 constexpr char kProfileKey[] = "profile";
@@ -101,30 +102,25 @@ CameraResolution NormalizeMochanResolution(CameraResolution resolution) {
 CameraResolution NormalizeMcpResolution(CameraResolution resolution) {
     return IsOneOf(resolution, {CameraResolution::kVga, CameraResolution::kSvga,
                                 CameraResolution::kXga, CameraResolution::kSxga,
-                                CameraResolution::kUxga})
+                                CameraResolution::kUxga, CameraResolution::kQsxga})
                ? resolution
-               : CameraResolution::kVga;
+               : CameraResolution::kUxga;
 }
 
 }  // namespace
 
-CameraSettingsConfig CameraSettingsStore::Defaults(bool flipped) {
-    CameraSettingsConfig config;
-    config.sensor.mirror = flipped;
-    config.sensor.flip = flipped;
-    return config;
-}
+CameraSettingsConfig CameraSettingsStore::Defaults() { return {}; }
 
 CameraSettingsConfig CameraSettingsStore::Normalize(CameraSettingsConfig config) {
     config.sensor.profile =
         NormalizeEnum(config.sensor.profile, CameraImageProfile::kAuto,
                       CameraImageProfile::kNormal);
-    config.sensor.brightness = std::clamp(config.sensor.brightness, -2, 2);
-    config.sensor.contrast = std::clamp(config.sensor.contrast, -2, 2);
-    config.sensor.saturation = std::clamp(config.sensor.saturation, -2, 2);
-    config.sensor.ae_level = std::clamp(config.sensor.ae_level, -2, 2);
+    config.sensor.brightness = std::clamp(config.sensor.brightness, -3, 3);
+    config.sensor.contrast = std::clamp(config.sensor.contrast, -3, 3);
+    config.sensor.saturation = std::clamp(config.sensor.saturation, -4, 4);
+    config.sensor.ae_level = std::clamp(config.sensor.ae_level, -5, 5);
     config.sensor.manual_exposure = std::clamp(config.sensor.manual_exposure, 0, 1200);
-    config.sensor.manual_gain = std::clamp(config.sensor.manual_gain, 0, 30);
+    config.sensor.manual_gain = std::clamp(config.sensor.manual_gain, 0, 64);
     config.sensor.gain_ceiling =
         NormalizeEnum(config.sensor.gain_ceiling, CameraGainCeiling::k128x,
                       CameraGainCeiling::k2x);
@@ -169,14 +165,13 @@ CameraSettingsConfig CameraSettingsStore::Normalize(CameraSettingsConfig config)
     return config;
 }
 
-void CameraSettingsStore::Load(bool legacy_flipped) {
+void CameraSettingsStore::Load() {
     Settings settings(kNamespace);
-    // A missing schema uses the legacy 180-degree flip as its orientation
-    // default. Migration is written lazily by the first explicit settings
-    // update, avoiding a large NVS write during boot.
-    CameraSettingsConfig config = Defaults(legacy_flipped);
-    const bool has_current_schema = settings.GetInt(kVersionKey, 0) == kSchemaVersion;
-    if (has_current_schema) {
+    CameraSettingsConfig config = Defaults();
+    const int stored_schema = settings.GetInt(kVersionKey, 0);
+    const bool has_compatible_schema =
+        stored_schema >= kFirstCompatibleSchemaVersion && stored_schema <= kSchemaVersion;
+    if (has_compatible_schema) {
         config.sensor.profile =
             ReadEnum(settings, kProfileKey, config.sensor.profile,
                      static_cast<int>(CameraImageProfile::kAuto));
@@ -209,12 +204,12 @@ void CameraSettingsStore::Load(bool legacy_flipped) {
         config.sensor.flip = settings.GetBool(kFlipKey, config.sensor.flip);
         config.web.resolution =
             ReadEnum(settings, kWebResolutionKey, config.web.resolution,
-                     static_cast<int>(CameraResolution::kUxga));
+                     static_cast<int>(CameraResolution::kQsxga));
         config.web.jpeg_quality = settings.GetInt(kWebQualityKey, config.web.jpeg_quality);
         config.web.fps = settings.GetInt(kWebFpsKey, config.web.fps);
         config.mochan.source_resolution =
             ReadEnum(settings, kMochanResolutionKey, config.mochan.source_resolution,
-                     static_cast<int>(CameraResolution::kUxga));
+                     static_cast<int>(CameraResolution::kQsxga));
         config.mochan.aspect =
             ReadEnum(settings, kMochanAspectKey, config.mochan.aspect,
                      static_cast<int>(MochanAspectMode::kSixteenNine));
@@ -223,14 +218,26 @@ void CameraSettingsStore::Load(bool legacy_flipped) {
                      static_cast<int>(MochanRenderMode::kFit));
         config.mcp.resolution =
             ReadEnum(settings, kMcpResolutionKey, config.mcp.resolution,
-                     static_cast<int>(CameraResolution::kUxga));
+                     static_cast<int>(CameraResolution::kQsxga));
         config.mcp.jpeg_quality = settings.GetInt(kMcpQualityKey, config.mcp.jpeg_quality);
         config.mcp.freshness =
             ReadEnum(settings, kMcpFreshnessKey, config.mcp.freshness,
                      static_cast<int>(McpFreshFramePolicy::kFresh));
     }
 
+    const bool migrate_ov5640_orientation = stored_schema < kSchemaVersion;
+    if (migrate_ov5640_orientation) {
+        // Schemas v0-v2 predate the confirmed physical OV5640 baseline.
+        // Preserve compatible image/capture settings while migrating both
+        // orientation axes once. Schema v3 user choices are never overwritten.
+        config.sensor.mirror = kDefaultCameraMirror;
+        config.sensor.flip = kDefaultCameraFlip;
+    }
+
     config = Normalize(config);
+    if (migrate_ov5640_orientation) {
+        Persist(config);
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     config_ = config;
 }
@@ -247,7 +254,7 @@ void CameraSettingsStore::Save(const CameraSettingsConfig& config) {
     config_ = normalized;
 }
 
-void CameraSettingsStore::ResetToDefaults(bool flipped) { Save(Defaults(flipped)); }
+void CameraSettingsStore::ResetToDefaults() { Save(Defaults()); }
 
 void CameraSettingsStore::SetOrientation(bool mirror, bool flip) {
     std::lock_guard<std::mutex> lock(mutex_);

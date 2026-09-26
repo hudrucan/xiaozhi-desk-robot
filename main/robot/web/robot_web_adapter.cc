@@ -72,8 +72,14 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = "Wake toggled";
         return true;
     }
+    if (action == "camera_mirror") {
+        message = controller_.ToggleCameraMirror() ? "Camera mirrored"
+                                                    : "Camera mirror restored";
+        return true;
+    }
     if (action == "camera_flip") {
-        message = controller_.ToggleCameraFlip() ? "Camera flipped" : "Camera restored";
+        message = controller_.ToggleCameraFlip() ? "Camera flipped"
+                                                  : "Camera flip restored";
         return true;
     }
     if (action == "display_flip") {

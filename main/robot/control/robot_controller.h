@@ -29,6 +29,7 @@ public:
     virtual bool ShowEmotion(const std::string& emotion, int duration_ms) = 0;
     virtual bool ShowSecondaryText(const std::string& text, int duration_ms) = 0;
     virtual bool SetStatusLightEffect(const std::string& effect, int duration_ms) = 0;
+    virtual bool ToggleCameraMirror() = 0;
     virtual bool ToggleCameraFlip() = 0;
     virtual bool ToggleDisplayFlip() = 0;
     virtual bool ToggleStatusLight() = 0;

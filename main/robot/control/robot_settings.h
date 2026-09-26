@@ -12,8 +12,6 @@ public:
     VoiceInputConfig GetVoiceInputConfig() const;
     void SetVoiceInputConfig(const VoiceInputConfig& config) const;
 
-    bool GetCameraFlipped() const;
-    void SetCameraFlipped(bool flipped) const;
     bool GetDisplayFlipped() const;
     void SetDisplayFlipped(bool flipped) const;
     int GetCliffEdgeMm() const;

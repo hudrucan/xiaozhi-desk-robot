@@ -332,6 +332,9 @@ function renderCameraStatus(status) {
   } else if (browserLive && browserLiveConfirmed && !status.web_camera_live) {
     stopBrowserLive("Live preview stopped", true);
   }
+  const orientation = status.camera_mirrored
+    ? status.camera_flipped ? "Mirrored + Flipped" : "Mirrored"
+    : status.camera_flipped ? "Flipped" : "Normal";
   $("#camera").textContent = !available
     ? "Offline"
     : status.camera_mode === "mcp"
@@ -340,7 +343,7 @@ function renderCameraStatus(status) {
       ? "Web live"
       : status.live_camera
       ? "Screen preview"
-      : status.camera_flipped ? "Flipped" : "Normal";
+      : orientation;
   $("#liveCamera").classList.toggle("on", !!status.live_camera);
   $("#liveCamera").textContent = status.live_camera
     ? "Stop screen preview"
@@ -350,6 +353,7 @@ function renderCameraStatus(status) {
   $("#takeSnapshot").disabled = !previewAvailable || !!status.web_camera_live;
   $("#browserLive").disabled = !previewAvailable && !browserLive;
   $("#liveCamera").disabled = !previewAvailable;
+  $("#cameraMirrorQuickAction").classList.toggle("on", !!status.camera_mirrored);
   $("#cameraFlip").classList.toggle("on", !!status.camera_flipped);
   $("#cameraHealth").textContent = available ? "Ready" : "Offline";
   const requestState = status.camera_request_state || "never";
