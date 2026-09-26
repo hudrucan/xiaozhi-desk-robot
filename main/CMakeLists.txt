@@ -250,7 +250,8 @@ if(NOT LANG_DIR STREQUAL "en-US")
     endforeach()
 endif()
 
-file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
+file(GLOB COMMON_SOUNDS CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
 
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
@@ -320,6 +321,7 @@ add_custom_command(
             --output "${LANG_HEADER}"
     DEPENDS
         ${LANG_JSON}
+        ${COMMON_SOUNDS}
         ${PROJECT_DIR}/scripts/gen_lang.py
     COMMENT "Generating ${LANG_DIR} language config"
 )

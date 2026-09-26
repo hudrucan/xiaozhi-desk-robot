@@ -35,6 +35,7 @@ public:
         bool charging = false;
         LightLevel light_level = LightLevel::kUnavailable;
         AmbientGazePersonality gaze_personality = AmbientGazePersonality::kSuppressed;
+        bool ambient_sound_enabled = false;
     };
 
     struct Callbacks {
@@ -48,6 +49,7 @@ public:
         std::function<void(uint32_t)> reset_accents;
         std::function<void(uint32_t, const std::string&, const std::string&, int, bool)>
             apply_accent;
+        std::function<void(AmbientSoundCue)> play_sound;
     };
 
     bool Initialize(ReactionEngine& reaction_engine, Callbacks callbacks);
@@ -95,6 +97,7 @@ private:
         std::string light_effect;
         int light_duration_ms = 0;
         bool motion_accent = false;
+        AmbientSoundCue sound_cue = AmbientSoundCue::kNone;
         uint32_t cancel_reaction_generation = 0;
         bool start_reaction = false;
         std::string reaction_name;
@@ -136,6 +139,9 @@ private:
                            PendingActions& actions);
     void AdvanceIdleActionsLocked(const Context& context, IdleStage stage, int64_t now_us,
                                   PendingActions& actions);
+    void AdvanceAmbientSoundLocked(const Context& context, IdleStage stage,
+                                   bool reaction_active, int64_t now_us,
+                                   PendingActions& actions);
     IdleStage ResolveIdleStageLocked(int64_t now_us) const;
     bool PrepareSemanticReactionLocked(const char* name, int duration_ms, int64_t now_us,
                                        PendingActions& actions);
@@ -169,6 +175,7 @@ private:
     int64_t next_led_accent_us_ = 0;
     int64_t next_motion_accent_us_ = 0;
     int64_t next_semantic_us_ = 0;
+    int64_t next_sound_us_ = 0;
     int64_t yawn_due_us_ = 0;
     int64_t last_yawn_us_ = 0;
 };

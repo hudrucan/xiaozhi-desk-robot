@@ -375,6 +375,9 @@ function renderCameraStatus(status) {
 
 function renderAudioStatus(status) {
   setRange($("#speakerVolume"), status.speaker_volume, $("#speakerValue"), "%");
+  if (document.activeElement !== $("#ambientSound")) {
+    $("#ambientSound").checked = !!status.ambient_sound_enabled;
+  }
   setRange($("#microphoneVoiceGain"), status.voice_gain_db,
     $("#microphoneVoiceGainValue"), " dB");
   setRange($("#microphoneCaptureTrim"), status.capture_trim_db,

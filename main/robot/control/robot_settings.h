@@ -7,6 +7,8 @@ public:
     int GetSpeakerVolume() const;
     bool GetMicrophoneMuted() const;
     void SetMicrophoneMuted(bool muted) const;
+    bool GetAmbientSoundEnabled() const;
+    void SetAmbientSoundEnabled(bool enabled) const;
     VoiceInputConfig GetVoiceInputConfig() const;
     void SetVoiceInputConfig(const VoiceInputConfig& config) const;
 

@@ -26,6 +26,16 @@ void RobotSettings::SetMicrophoneMuted(bool muted) const {
     settings.SetBool("input_muted", muted);
 }
 
+bool RobotSettings::GetAmbientSoundEnabled() const {
+    Settings settings("desk_robot", false);
+    return settings.GetBool("ambient_sound", false);
+}
+
+void RobotSettings::SetAmbientSoundEnabled(bool enabled) const {
+    Settings settings("desk_robot", true);
+    settings.SetBool("ambient_sound", enabled);
+}
+
 VoiceInputConfig RobotSettings::GetVoiceInputConfig() const {
     Settings settings("audio", false);
     VoiceInputConfig config;

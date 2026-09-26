@@ -186,6 +186,8 @@ function bindRobotControls() {
     action("desk_mode_24_hour", { value: event.target.checked ? 1 : 0 });
   $("#microphoneMute").onchange = (event) =>
     action("microphone_mute", { value: event.target.checked ? 1 : 0 });
+  $("#ambientSound").onchange = (event) =>
+    action("ambient_sound", { value: event.target.checked ? 1 : 0 });
   bindMicrophoneProfileSelect();
   $("#microphoneNs").onchange = (event) =>
     action("microphone_ns", { value: event.target.checked ? 1 : 0 });

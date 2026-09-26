@@ -24,6 +24,7 @@ struct RobotStatus {
     bool display_flipped = false;
     std::string emotion;
     int speaker_volume = 0;
+    bool ambient_sound_enabled = false;
     bool microphone_muted = false;
     int microphone_level = 0;
     bool microphone_clipping = false;

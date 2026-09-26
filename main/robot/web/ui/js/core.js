@@ -91,7 +91,7 @@ function domainsForAction(name) {
     name.startsWith("desk_mode") ||
     ["display_flip", "screen_brightness",
     "status_light_brightness", "lights_toggle"].includes(name)) return ["display"];
-  if (["speaker_volume", "microphone_profile", "microphone_capture_trim",
+  if (["speaker_volume", "ambient_sound", "microphone_profile", "microphone_capture_trim",
     "microphone_voice_gain", "microphone_ns", "microphone_agc",
     "microphone_mute", "audio_test"].includes(name)) {
     return ["audio"];

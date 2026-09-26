@@ -15,3 +15,11 @@ enum class AmbientGazePersonality : uint8_t {
     kSuspicious,
     kSuppressed,
 };
+
+enum class AmbientSoundCue : uint8_t {
+    kNone,
+    kRelaxed,
+    kCurious,
+    kPlayful,
+    kSleepy,
+};

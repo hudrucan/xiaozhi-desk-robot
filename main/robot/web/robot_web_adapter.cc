@@ -201,6 +201,12 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = "Speaker volume " + std::to_string(safe_volume) + "%";
         return true;
     }
+    if (action == "ambient_sound") {
+        const bool enabled = value != 0;
+        controller_.SetAmbientSoundEnabled(enabled);
+        message = enabled ? "Ambient sounds enabled" : "Ambient sounds disabled";
+        return true;
+    }
     if (action == "microphone_profile") {
         const bool accepted = controller_.SetMicrophoneProfile(text);
         message = accepted ? "Microphone profile " + text : "Unsupported microphone profile";

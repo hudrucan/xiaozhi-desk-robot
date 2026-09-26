@@ -61,6 +61,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -119,6 +120,7 @@ private:
     std::atomic_bool camera_flipped_{false};
     std::atomic_bool display_flipped_{false};
     std::atomic_int speaker_volume_{70};
+    std::atomic_bool ambient_sound_enabled_{false};
     std::atomic_int status_light_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_int status_light_saved_brightness_{STATUS_LIGHT_DEFAULT_BRIGHTNESS};
     std::atomic_bool desk_mode_enabled_{true};
@@ -324,6 +326,8 @@ private:
 #endif
         context.light_level = environment_controller_.GetStatus().light_level;
         context.gaze_personality = display_->GetAmbientGazePersonality();
+        context.ambient_sound_enabled =
+            ambient_sound_enabled_.load(std::memory_order_acquire);
         ambient_behavior_.Tick(context, now_us);
     }
 
@@ -1622,10 +1626,77 @@ private:
                         QueueAmbientAccent(generation, face, light_effect,
                                            light_duration_ms, motion_accent);
                     },
+                .play_sound =
+                    [this](AmbientSoundCue cue) {
+                        QueueAmbientSound(cue);
+                    },
             });
         if (!initialized) {
             ESP_LOGE(TAG, "Failed to initialize ambient behavior");
         }
+    }
+
+    static std::string_view AmbientSoundAsset(AmbientSoundCue cue) {
+        switch (cue) {
+            case AmbientSoundCue::kRelaxed:
+                return Lang::Sounds::OGG_AMBIENT_RELAXED;
+            case AmbientSoundCue::kCurious:
+                return Lang::Sounds::OGG_AMBIENT_CURIOUS;
+            case AmbientSoundCue::kPlayful:
+                return Lang::Sounds::OGG_AMBIENT_PLAYFUL;
+            case AmbientSoundCue::kSleepy:
+                return Lang::Sounds::OGG_AMBIENT_SLEEPY;
+            case AmbientSoundCue::kNone:
+                return {};
+        }
+        return {};
+    }
+
+    void QueueAmbientSound(AmbientSoundCue cue) {
+        Application::GetInstance().Schedule([this, cue]() {
+            auto& app = Application::GetInstance();
+            auto& audio_service = app.GetAudioService();
+            const int64_t now_us = esp_timer_get_time();
+            if (!ambient_sound_enabled_.load(std::memory_order_acquire) ||
+                app.GetDeviceState() != kDeviceStateIdle ||
+                display_->GetAmbientActivity() != MochanDisplay::AmbientActivity::kIdle ||
+                reaction_engine_.IsActive() ||
+                now_us < ambient_manual_control_until_us_.load(std::memory_order_acquire) ||
+                now_us < ambient_tool_active_until_us_.load(std::memory_order_acquire) ||
+                reaction_motion_generation_.load(std::memory_order_acquire) != 0 ||
+                !audio_service.IsPlaybackIdle()) {
+                return;
+            }
+            if (camera_ != nullptr &&
+                (camera_->IsMcpOperationActive() ||
+                 camera_->preview_mode() != DeskRobotCamera::PreviewMode::kOff)) {
+                return;
+            }
+#ifdef MPU6050_I2C_ADDRESS
+            const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
+            if (gyro.pending || gyro.active) {
+                return;
+            }
+#endif
+            const bool ambient_motion =
+                ambient_motion_generation_.load(std::memory_order_acquire) != 0;
+            if ((motors_.IsActive() ||
+                 motor_activity_active_.load(std::memory_order_relaxed)) &&
+                !ambient_motion) {
+                return;
+            }
+#ifdef INA219_I2C_ADDRESS
+            const auto battery = battery_controller_.GetStatus();
+            if (battery.valid && !battery.charging &&
+                battery.percent <= PROACTIVE_BATTERY_CRITICAL_PERCENT) {
+                return;
+            }
+#endif
+            const std::string_view sound = AmbientSoundAsset(cue);
+            if (!sound.empty() && audio_service.IsPlaybackIdle()) {
+                audio_service.PlaySound(sound);
+            }
+        });
     }
 
     void RelinquishReactionMotion() {
@@ -1787,6 +1858,7 @@ private:
     void InitializeAudioSettings() {
         const int speaker_volume = robot_settings_.GetSpeakerVolume();
         speaker_volume_.store(speaker_volume);
+        ambient_sound_enabled_.store(robot_settings_.GetAmbientSoundEnabled());
         Application::GetInstance().GetAudioService().ConfigureVoiceInput(
             robot_settings_.GetVoiceInputConfig());
         if (robot_settings_.GetMicrophoneMuted()) {
@@ -1936,6 +2008,12 @@ private:
         speaker_volume_.store(safe_volume);
         Application::GetInstance().Schedule(
             [this, safe_volume]() { GetAudioCodec()->SetOutputVolume(safe_volume); });
+    }
+
+    void QueueAmbientSoundEnabled(bool enabled) {
+        ambient_sound_enabled_.store(enabled, std::memory_order_release);
+        Application::GetInstance().Schedule(
+            [this, enabled]() { robot_settings_.SetAmbientSoundEnabled(enabled); });
     }
 
     template <typename Update>
@@ -2380,6 +2458,9 @@ private:
         Application::GetInstance().Schedule(
             [this, muted]() { robot_settings_.SetMicrophoneMuted(muted); });
     }
+    void SetAmbientSoundEnabled(bool enabled) override {
+        QueueAmbientSoundEnabled(enabled);
+    }
     void SetScreenBrightness(int brightness) override {
         NotifyAmbientInteraction();
         QueueScreenBrightness(brightness);
@@ -2474,6 +2555,8 @@ private:
         status.display_flipped = display_flipped_.load();
         status.emotion = display_->GetCurrentEmotion();
         status.speaker_volume = speaker_volume_.load();
+        status.ambient_sound_enabled =
+            ambient_sound_enabled_.load(std::memory_order_acquire);
         status.microphone_muted = app.IsMicrophoneMuted();
         auto& audio_service = app.GetAudioService();
         status.microphone_level = status.microphone_muted ? 0 : audio_service.GetInputLevel();

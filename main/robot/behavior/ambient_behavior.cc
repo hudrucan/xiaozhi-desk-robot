@@ -120,6 +120,9 @@ void AmbientBehavior::ExecuteActions(PendingActions actions) {
                                 actions.light_effect, actions.light_duration_ms,
                                 actions.motion_accent);
     }
+    if (actions.sound_cue != AmbientSoundCue::kNone && callbacks_.play_sound) {
+        callbacks_.play_sound(actions.sound_cue);
+    }
     if (actions.cancel_reaction_generation != 0 && reaction_engine_ != nullptr) {
         reaction_engine_->CancelIfGeneration(actions.cancel_reaction_generation);
     }
@@ -250,6 +253,7 @@ void AmbientBehavior::ResetIdleSessionLocked(int64_t now_us, bool start_idle,
                                   RandomDelayUs(AMBIENT_SEMANTIC_JITTER_MIN_MS,
                                                 AMBIENT_SEMANTIC_JITTER_MAX_MS)
                             : 0;
+    next_sound_us_ = 0;
     yawn_due_us_ = 0;
     BumpAccentGenerationLocked(actions);
     if (start_idle) {
@@ -822,6 +826,59 @@ void AmbientBehavior::AdvanceIdleActionsLocked(const Context& context, IdleStage
     }
 }
 
+void AmbientBehavior::AdvanceAmbientSoundLocked(const Context& context, IdleStage stage,
+                                                bool reaction_active, int64_t now_us,
+                                                PendingActions& actions) {
+    if (!context.ambient_sound_enabled || stage == IdleStage::kAwake) {
+        next_sound_us_ = 0;
+        return;
+    }
+    if (next_sound_us_ == 0) {
+        next_sound_us_ = now_us +
+                         RandomDelayUs(AMBIENT_SOUND_INITIAL_MIN_MS,
+                                       AMBIENT_SOUND_INITIAL_MAX_MS);
+        return;
+    }
+    if (now_us < next_sound_us_) {
+        return;
+    }
+
+    AmbientSoundCue cue = AmbientSoundCue::kNone;
+    int minimum_ms = 0;
+    int maximum_ms = 0;
+    switch (stage) {
+        case IdleStage::kAwake:
+            return;
+        case IdleStage::kRelaxed:
+            cue = AmbientSoundCue::kRelaxed;
+            minimum_ms = AMBIENT_RELAXED_SOUND_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_RELAXED_SOUND_INTERVAL_MAX_MS;
+            break;
+        case IdleStage::kCurious:
+            cue = AmbientSoundCue::kCurious;
+            minimum_ms = AMBIENT_CURIOUS_SOUND_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_CURIOUS_SOUND_INTERVAL_MAX_MS;
+            break;
+        case IdleStage::kPlayful:
+            cue = AmbientSoundCue::kPlayful;
+            minimum_ms = AMBIENT_PLAYFUL_SOUND_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_PLAYFUL_SOUND_INTERVAL_MAX_MS;
+            break;
+        case IdleStage::kSleepy:
+            cue = AmbientSoundCue::kSleepy;
+            minimum_ms = AMBIENT_SLEEPY_SOUND_INTERVAL_MIN_MS;
+            maximum_ms = AMBIENT_SLEEPY_SOUND_INTERVAL_MAX_MS;
+            break;
+    }
+    next_sound_us_ = now_us + RandomDelayUs(minimum_ms, maximum_ms);
+    if (context.activity != Activity::kIdle || hard_suppressed_ || reaction_active ||
+        owned_reaction_generation_ != 0 || foreign_reaction_active_ ||
+        reaction_start_pending_ || actions.start_reaction) {
+        return;
+    }
+    actions.sound_cue = cue;
+}
+
 void AmbientBehavior::Tick(const Context& context, int64_t now_us) {
     ReactionEngine::Status reaction;
     if (reaction_engine_ != nullptr) {
@@ -895,6 +952,10 @@ void AmbientBehavior::Tick(const Context& context, int64_t now_us) {
                 if (context.activity == Activity::kIdle) {
                     AdvanceIdleActionsLocked(context, stage, now_us, actions);
                 }
+            }
+            if (context.activity == Activity::kIdle) {
+                AdvanceAmbientSoundLocked(context, stage, reaction.active, now_us,
+                                          actions);
             }
         }
     }
