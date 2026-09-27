@@ -2456,6 +2456,11 @@ private:
         return camera_ != nullptr ? camera_->GetObserverStatus() : CameraObserverStatus{};
     }
 
+    CameraVisionInferenceStatus GetCameraVisionInferenceStatus() const override {
+        return camera_ != nullptr ? camera_->GetVisionInferenceStatus()
+                                  : CameraVisionInferenceStatus{};
+    }
+
     SecondaryOled::Config GetSecondaryDisplayConfig() const override {
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         return secondary_display_.GetConfig();

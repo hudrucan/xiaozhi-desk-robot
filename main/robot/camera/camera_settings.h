@@ -98,6 +98,7 @@ struct McpCameraSettings {
 struct CameraVisionSettings {
     bool enabled = false;
     int interval_ms = 1000;
+    bool face_detection_enabled = false;
 };
 
 struct CameraSettingsConfig {

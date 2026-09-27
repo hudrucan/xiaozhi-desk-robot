@@ -2,6 +2,23 @@ let cameraSettingsData = null;
 let cameraSettingsSaving = false;
 let cameraNavigationStopPending = false;
 
+function cameraObserverIntervalValue() {
+  const selected = $('input[name="cameraObserverInterval"]:checked');
+  const interval = selected ? Number(selected.value) : 0;
+  if (![500, 1000, 2000].includes(interval)) {
+    throw Error("Observer interval must be 500, 1000, or 2000 ms");
+  }
+  return interval;
+}
+
+function setCameraObserverControlsDisabled(disabled) {
+  $("#cameraObserverEnabled").disabled = disabled;
+  $("#cameraFaceDetectionEnabled").disabled = disabled;
+  $all('input[name="cameraObserverInterval"]').forEach((input) => {
+    input.disabled = disabled;
+  });
+}
+
 const cameraAdvancedIds = ["cameraBrightness", "cameraContrast", "cameraSaturation",
   "cameraAeLevel", "cameraAutoExposure", "cameraAec2", "cameraManualExposure",
   "cameraAutoGain", "cameraManualGain", "cameraGainCeiling", "cameraAwb",
@@ -50,10 +67,14 @@ function populateCameraSettings(data) {
   $("#cameraFlipSetting").checked = sensor.flip;
   const vision = data.vision || { enabled: false, interval_ms: 1000 };
   $("#cameraObserverEnabled").checked = !!vision.enabled;
-  $("#cameraObserverInterval").value = String(vision.interval_ms || 1000);
+  const interval = [500, 1000, 2000].includes(Number(vision.interval_ms))
+    ? Number(vision.interval_ms) : 1000;
+  const intervalControl = $(`input[name="cameraObserverInterval"][value="${interval}"]`);
+  if (intervalControl) intervalControl.checked = true;
+  $("#cameraFaceDetectionEnabled").checked = !!vision.face_detection_enabled;
   $("#cameraSettingsApply").disabled = false;
   $("#cameraSettingsReset").disabled = false;
-  $("#cameraObserverApply").disabled = false;
+  setCameraObserverControlsDisabled(false);
   setCameraAdvancedState();
 }
 
@@ -104,15 +125,13 @@ function collectCameraSettings() {
       jpeg_quality: boundedInteger("cameraMcpQuality", "MCP JPEG quality", 4, 63),
       freshness: checked("cameraMcpFresh") ? "fresh" : "latest" },
     vision: { enabled: checked("cameraObserverEnabled"),
-      interval_ms: boundedInteger("cameraObserverInterval", "Observer interval", 500, 2000) },
+      interval_ms: cameraObserverIntervalValue(),
+      face_detection_enabled: checked("cameraFaceDetectionEnabled") },
   };
 }
 
 async function collectCameraVisionSettings() {
-  const interval = +$("#cameraObserverInterval").value;
-  if (![500, 1000, 2000].includes(interval)) {
-    throw Error("Observer interval must be 500, 1000, or 2000 ms");
-  }
+  const interval = cameraObserverIntervalValue();
   const response = await fetch("/api/camera/settings", { cache: "no-store" });
   const current = await response.json();
   if (!response.ok || !current.ok) {
@@ -123,7 +142,8 @@ async function collectCameraVisionSettings() {
     web: { ...current.web },
     mochan: { ...current.mochan },
     mcp: { ...current.mcp },
-    vision: { enabled: $("#cameraObserverEnabled").checked, interval_ms: interval },
+    vision: { enabled: $("#cameraObserverEnabled").checked, interval_ms: interval,
+      face_detection_enabled: $("#cameraFaceDetectionEnabled").checked },
   };
 }
 
@@ -132,7 +152,7 @@ async function saveCameraSettings(reset = false, visionOnly = false) {
   cameraSettingsSaving = true;
   $("#cameraSettingsApply").disabled = true;
   $("#cameraSettingsReset").disabled = true;
-  $("#cameraObserverApply").disabled = true;
+  setCameraObserverControlsDisabled(true);
   try {
     const response = await fetch("/api/camera/settings", {
       method: reset ? "DELETE" : "POST",
@@ -152,7 +172,7 @@ async function saveCameraSettings(reset = false, visionOnly = false) {
     cameraSettingsSaving = false;
     $("#cameraSettingsApply").disabled = false;
     $("#cameraSettingsReset").disabled = false;
-    $("#cameraObserverApply").disabled = false;
+    setCameraObserverControlsDisabled(false);
   }
 }
 

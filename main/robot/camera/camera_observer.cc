@@ -85,13 +85,14 @@ uint8_t CameraObserver::Rgb565Luma(uint16_t pixel) {
     return static_cast<uint8_t>((red * 77 + green * 150 + blue * 29) >> 8);
 }
 
-bool CameraObserver::ProcessRgb565(size_t width, size_t height, size_t stride,
-                                   uint32_t capture_ms, uint32_t decode_ms,
-                                   int64_t sample_start_us) {
+CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
+    size_t width, size_t height, size_t stride, uint32_t capture_ms,
+    uint32_t decode_ms, int64_t sample_start_us) {
+    CameraObserverAnalysisResult result;
     if (scratch_ == nullptr || width != kDecodeWidth || height != kDecodeHeight ||
         stride < kDecodeStride) {
         RecordFailure(CameraObserverSuspendReason::kInvalidFrame);
-        return false;
+        return result;
     }
 
     const int64_t analyze_start_us = esp_timer_get_time();
@@ -160,6 +161,7 @@ bool CameraObserver::ProcessRgb565(size_t width, size_t height, size_t stride,
             if (low_motion_samples_ >= CAMERA_OBSERVER_MOTION_EXIT_SAMPLES) {
                 status_.motion_active = false;
                 low_motion_samples_ = 0;
+                result.motion_exited = true;
             }
         } else {
             low_motion_samples_ = 0;
@@ -173,6 +175,7 @@ bool CameraObserver::ProcessRgb565(size_t width, size_t height, size_t stride,
                 ++status_.motion_event_count;
                 status_.last_motion_event_ms = analyze_end_us / 1000;
                 high_motion_samples_ = 0;
+                result.motion_entered = true;
             }
         } else {
             high_motion_samples_ = 0;
@@ -193,7 +196,8 @@ bool CameraObserver::ProcessRgb565(size_t width, size_t height, size_t stride,
     status_.total_ms = static_cast<uint32_t>(
         std::max<int64_t>(0, (analyze_end_us - sample_start_us + 999) / 1000));
     ++status_.sample_count;
-    return true;
+    result.valid = true;
+    return result;
 }
 
 CameraObserverStatus CameraObserver::GetStatus() const {

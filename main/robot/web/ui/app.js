@@ -275,7 +275,11 @@ function bindCameraAndLogControls() {
     setCameraAdvancedState();
   };
   $("#cameraSettingsApply").onclick = () => saveCameraSettings(false);
-  $("#cameraObserverApply").onclick = () => saveCameraSettings(false, true);
+  $("#cameraObserverEnabled").onchange = () => saveCameraSettings(false, true);
+  $all('input[name="cameraObserverInterval"]').forEach((input) => {
+    input.onchange = () => saveCameraSettings(false, true);
+  });
+  $("#cameraFaceDetectionEnabled").onchange = () => saveCameraSettings(false, true);
   $("#cameraSettingsReset").onclick = () => {
     if (confirm("Reset all camera settings to safe defaults?")) saveCameraSettings(true);
   };

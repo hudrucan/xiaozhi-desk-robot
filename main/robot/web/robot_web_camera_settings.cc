@@ -136,6 +136,8 @@ cJSON* AddSettings(cJSON* root, const CameraSettingsConfig& settings) {
     cJSON* vision = cJSON_AddObjectToObject(root, "vision");
     cJSON_AddBoolToObject(vision, "enabled", settings.vision.enabled);
     cJSON_AddNumberToObject(vision, "interval_ms", settings.vision.interval_ms);
+    cJSON_AddBoolToObject(vision, "face_detection_enabled",
+                          settings.vision.face_detection_enabled);
     return root;
 }
 
@@ -245,6 +247,8 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
     if (valid) valid = ReadBool(vision, "enabled", settings.vision.enabled, error);
     if (valid) valid = ReadInt(vision, "interval_ms", 500, 2000,
                                settings.vision.interval_ms, error);
+    if (valid) valid = ReadBool(vision, "face_detection_enabled",
+                                settings.vision.face_detection_enabled, error);
     if (valid && settings.vision.interval_ms != 500 &&
         settings.vision.interval_ms != 1000 && settings.vision.interval_ms != 2000) {
         error = "Unsupported interval_ms";

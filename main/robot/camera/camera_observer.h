@@ -54,6 +54,12 @@ struct CameraObserverStatus {
     size_t scratch_psram_bytes = 0;
 };
 
+struct CameraObserverAnalysisResult {
+    bool valid = false;
+    bool motion_entered = false;
+    bool motion_exited = false;
+};
+
 class CameraObserver {
 public:
     static constexpr size_t kDecodeWidth = 160;
@@ -75,9 +81,9 @@ public:
                   bool count_skip = false);
     void RecordFailure(CameraObserverSuspendReason reason);
     void ResetBaseline();
-    bool ProcessRgb565(size_t width, size_t height, size_t stride,
-                       uint32_t capture_ms, uint32_t decode_ms,
-                       int64_t sample_start_us);
+    CameraObserverAnalysisResult ProcessRgb565(
+        size_t width, size_t height, size_t stride, uint32_t capture_ms,
+        uint32_t decode_ms, int64_t sample_start_us);
     CameraObserverStatus GetStatus() const;
 
     static const char* StateName(CameraObserverState state);

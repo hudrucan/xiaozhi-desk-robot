@@ -99,6 +99,8 @@ cJSON* RobotWebStatus::CreateCamera() {
     const RobotStatus status = controller_.GetStatus();
     const CameraDiagnostics diagnostics = controller_.GetCameraDiagnostics();
     const CameraObserverStatus observer = controller_.GetCameraObserverStatus();
+    const CameraVisionInferenceStatus face =
+        controller_.GetCameraVisionInferenceStatus();
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         return nullptr;
@@ -250,6 +252,53 @@ cJSON* RobotWebStatus::CreateCamera() {
                             observer.motion_event_count);
     cJSON_AddNumberToObject(root, "camera_vision_observer_scratch_psram_bytes",
                             observer.scratch_psram_bytes);
+
+    const int64_t face_inference_age_ms = face.last_inference_ms > 0
+                                              ? std::max<int64_t>(
+                                                    0, now_ms - face.last_inference_ms)
+                                              : 0;
+    cJSON_AddBoolToObject(root, "camera_face_detection_enabled", face.enabled);
+    cJSON_AddStringToObject(root, "camera_face_state",
+                            CameraVisionInference::StateName(face.state));
+    cJSON_AddBoolToObject(root, "camera_face_model_loaded", face.model_loaded);
+    cJSON_AddBoolToObject(root, "camera_face_present",
+                          face.enabled && face.face_present);
+    cJSON_AddNumberToObject(root, "camera_face_count",
+                            face.enabled ? face.face_count : 0);
+    cJSON_AddNumberToObject(root, "camera_face_confidence",
+                            face.enabled ? face.best_confidence : 0.0f);
+    cJSON_AddStringToObject(root, "camera_face_region",
+                            CameraVisionInference::RegionName(
+                                face.enabled ? face.face_region
+                                             : CameraFaceRegion::kNone));
+    cJSON_AddNumberToObject(root, "camera_face_box_x1", face.best_box_x1);
+    cJSON_AddNumberToObject(root, "camera_face_box_y1", face.best_box_y1);
+    cJSON_AddNumberToObject(root, "camera_face_box_x2", face.best_box_x2);
+    cJSON_AddNumberToObject(root, "camera_face_box_y2", face.best_box_y2);
+    cJSON_AddNumberToObject(root, "camera_face_last_inference_age_ms",
+                            face_inference_age_ms);
+    cJSON_AddNumberToObject(root, "camera_face_init_ms", face.init_ms);
+    cJSON_AddNumberToObject(root, "camera_face_inference_ms", face.inference_ms);
+    cJSON_AddNumberToObject(root, "camera_face_inference_count",
+                            face.inference_count);
+    cJSON_AddNumberToObject(root, "camera_face_failure_count",
+                            face.failure_count);
+    cJSON_AddNumberToObject(root, "camera_face_internal_before",
+                            face.internal_free_before_init);
+    cJSON_AddNumberToObject(root, "camera_face_internal_after",
+                            face.internal_free_after_init);
+    cJSON_AddNumberToObject(root, "camera_face_internal_delta",
+                            face.internal_init_delta);
+    cJSON_AddNumberToObject(root, "camera_face_largest_before",
+                            face.internal_largest_before_init);
+    cJSON_AddNumberToObject(root, "camera_face_largest_after",
+                            face.internal_largest_after_init);
+    cJSON_AddNumberToObject(root, "camera_face_psram_before",
+                            face.psram_free_before_init);
+    cJSON_AddNumberToObject(root, "camera_face_psram_after",
+                            face.psram_free_after_init);
+    cJSON_AddNumberToObject(root, "camera_face_psram_delta",
+                            face.psram_init_delta);
     return root;
 }
 

@@ -3,6 +3,7 @@
 #include "camera_image_policy.h"
 #include "camera_observer.h"
 #include "camera_settings.h"
+#include "camera_vision_inference.h"
 #include "esp32_camera.h"
 
 #include <atomic>
@@ -73,6 +74,7 @@ public:
     McpRequestHealth GetMcpRequestHealth() const;
     CameraDiagnostics GetDiagnostics();
     CameraObserverStatus GetObserverStatus() const;
+    CameraVisionInferenceStatus GetVisionInferenceStatus() const;
     bool CaptureObserverSample();
     void SetObserverWorkerState(CameraObserverState state,
                                 CameraObserverSuspendReason reason,
@@ -116,6 +118,7 @@ private:
     CameraSensorSettings observer_applied_sensor_settings_;
     bool observer_applied_sensor_settings_valid_ = false;
     CameraObserver observer_;
+    CameraVisionInference vision_inference_;
     CameraImagePolicy& image_policy_;
     McpStateCallback mcp_state_callback_;
     BackgroundWakeCallback background_wake_callback_;

@@ -11,7 +11,7 @@
 namespace {
 
 constexpr char kNamespace[] = "camera";
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 constexpr int kFirstCompatibleSchemaVersion = 1;
 constexpr int kOrientationSchemaVersion = 3;
 
@@ -48,9 +48,10 @@ constexpr char kMcpQualityKey[] = "mcp_quality";
 constexpr char kMcpFreshnessKey[] = "mcp_fresh";
 constexpr char kVisionEnabledKey[] = "vision_en";
 constexpr char kVisionIntervalKey[] = "vision_ms";
+constexpr char kFaceDetectionKey[] = "face_det";
 
 constexpr size_t kNvsNameMaxLength = 15;
-constexpr std::array<std::string_view, 33> kNvsNames = {
+constexpr std::array<std::string_view, 34> kNvsNames = {
     kNamespace,          kVersionKey,          kProfileKey,        kBrightnessKey,
     kContrastKey,        kSaturationKey,       kAecKey,            kAec2Key,
     kAeLevelKey,         kExposureKey,         kAgcKey,            kGainKey,
@@ -59,7 +60,7 @@ constexpr std::array<std::string_view, 33> kNvsNames = {
     kLensCorrectionKey,  kMirrorKey,           kFlipKey,           kWebResolutionKey,
     kWebQualityKey,      kWebFpsKey,           kMochanResolutionKey, kMochanAspectKey,
     kMochanRenderKey,    kMcpResolutionKey,    kMcpQualityKey,       kVisionEnabledKey,
-    kVisionIntervalKey,
+    kVisionIntervalKey,  kFaceDetectionKey,
 };
 static_assert([] {
     for (const std::string_view name : kNvsNames) {
@@ -241,6 +242,9 @@ void CameraSettingsStore::Load() {
             settings.GetBool(kVisionEnabledKey, config.vision.enabled);
         config.vision.interval_ms =
             settings.GetInt(kVisionIntervalKey, config.vision.interval_ms);
+        config.vision.face_detection_enabled =
+            settings.GetBool(kFaceDetectionKey,
+                             config.vision.face_detection_enabled);
     }
 
     const bool migrate_ov5640_orientation =
@@ -321,4 +325,5 @@ void CameraSettingsStore::Persist(const CameraSettingsConfig& config) {
     settings.SetInt(kMcpFreshnessKey, static_cast<int>(config.mcp.freshness));
     settings.SetBool(kVisionEnabledKey, config.vision.enabled);
     settings.SetInt(kVisionIntervalKey, config.vision.interval_ms);
+    settings.SetBool(kFaceDetectionKey, config.vision.face_detection_enabled);
 }
