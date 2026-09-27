@@ -74,6 +74,7 @@ public:
     McpRequestHealth GetMcpRequestHealth() const;
     CameraDiagnostics GetDiagnostics();
     CameraObserverStatus GetObserverStatus() const;
+    int GetObserverRecommendedIntervalMs() const;
     CameraVisionEventFrameStatus GetVisionEventFrameStatus() const;
     bool SetVisionEventFrameEnabled(bool enabled);
     bool SendVisionEventFrame(const CameraVisionEventFrame::FrameSender& sender) const;

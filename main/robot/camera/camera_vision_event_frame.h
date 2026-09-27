@@ -1,5 +1,7 @@
 #pragma once
 
+#include "camera_motion_tracker.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -7,6 +9,7 @@
 
 enum class CameraVisionEventFrameSource : uint8_t {
     kNone,
+    kActivity,
     kMotion,
     kManual,
 };
@@ -18,6 +21,7 @@ struct CameraVisionEventFrameStatus {
     int64_t frame_ms = 0;
     size_t psram_bytes = 0;
     CameraVisionEventFrameSource source = CameraVisionEventFrameSource::kNone;
+    CameraMotionSpatialMetrics spatial;
 };
 
 class CameraVisionEventFrame {
@@ -25,7 +29,8 @@ public:
     static constexpr size_t kWidth = 160;
     static constexpr size_t kHeight = 120;
     static constexpr size_t kBytes = kWidth * kHeight * sizeof(uint16_t);
-    using FrameSender = std::function<bool(const uint8_t*, size_t)>;
+    using FrameSender = std::function<bool(
+        const uint8_t*, size_t, const CameraMotionSpatialMetrics&)>;
 
     CameraVisionEventFrame() = default;
     ~CameraVisionEventFrame();
@@ -35,7 +40,8 @@ public:
 
     void SetEnabled(bool enabled);
     bool Capture(const uint8_t* rgb565, size_t width, size_t height,
-                 size_t stride, CameraVisionEventFrameSource source);
+                 size_t stride, CameraVisionEventFrameSource source,
+                 const CameraMotionSpatialMetrics& spatial);
     bool Send(const FrameSender& sender) const;
     CameraVisionEventFrameStatus GetStatus() const;
     void Clear();

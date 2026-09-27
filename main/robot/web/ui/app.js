@@ -276,9 +276,7 @@ function bindCameraAndLogControls() {
   };
   $("#cameraSettingsApply").onclick = () => saveCameraSettings(false);
   $("#cameraObserverEnabled").onchange = () => saveCameraSettings(false, true);
-  $all('input[name="cameraObserverInterval"]').forEach((input) => {
-    input.onchange = () => saveCameraSettings(false, true);
-  });
+  bindCameraMotionSettings(() => saveCameraSettings(false, true));
   $("#cameraEventFrameEnabled").onchange = (event) =>
     setCameraEventFrameEnabled(event.target.checked);
   $("#cameraEventFrameCapture").onclick = captureCameraEventFrame;

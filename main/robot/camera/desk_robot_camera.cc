@@ -79,7 +79,7 @@ DeskRobotCamera::DeskRobotCamera(const camera_config_t& config, std::mutex& shar
       image_policy_(image_policy),
       mcp_state_callback_(std::move(mcp_state_callback)),
       background_wake_callback_(std::move(background_wake_callback)) {
-    observer_.Configure(settings_.vision.enabled, settings_.vision.interval_ms);
+    observer_.Configure(settings_.vision);
     if (Esp32Camera::IsAvailable() &&
         !ApplyModeSensorSettings(settings_.sensor)) {
         ESP_LOGW(TAG, "Some persisted camera sensor settings were rejected");
@@ -364,8 +364,7 @@ bool DeskRobotCamera::ApplySettings(const CameraSettingsConfig& requested) {
             std::lock_guard<std::mutex> observer_gate(observer_sample_gate_);
             std::lock_guard<std::mutex> settings_lock(settings_mutex_);
             settings_ = normalized;
-            observer_.Configure(normalized.vision.enabled,
-                                normalized.vision.interval_ms);
+            observer_.Configure(normalized.vision);
             if (initial.vision.enabled != normalized.vision.enabled) {
                 observer_baseline_reset_pending_ = false;
             }
@@ -424,8 +423,7 @@ bool DeskRobotCamera::ApplySettings(const CameraSettingsConfig& requested) {
     }
     {
         std::lock_guard<std::mutex> observer_gate(observer_sample_gate_);
-        observer_.Configure(normalized.vision.enabled,
-                            normalized.vision.interval_ms);
+        observer_.Configure(normalized.vision);
         if (initial.vision.enabled != normalized.vision.enabled) {
             observer_baseline_reset_pending_ = false;
         }
@@ -504,6 +502,10 @@ CameraDiagnostics DeskRobotCamera::GetDiagnostics() {
 
 CameraObserverStatus DeskRobotCamera::GetObserverStatus() const {
     return observer_.GetStatus();
+}
+
+int DeskRobotCamera::GetObserverRecommendedIntervalMs() const {
+    return observer_.GetRecommendedIntervalMs();
 }
 
 CameraVisionEventFrameStatus DeskRobotCamera::GetVisionEventFrameStatus() const {
@@ -707,7 +709,8 @@ bool DeskRobotCamera::CaptureObserverSample(bool manual_event_frame) {
     } else if (analysis.valid && manual_event_frame) {
         if (vision_event_frame_.Capture(observer_.scratch_data(), output_width,
                                         output_height, output_stride,
-                                        CameraVisionEventFrameSource::kManual)) {
+                                        CameraVisionEventFrameSource::kManual,
+                                        analysis.spatial)) {
             vision_event_frame_capture_pending_.store(
                 false, std::memory_order_release);
         } else {
@@ -718,10 +721,15 @@ bool DeskRobotCamera::CaptureObserverSample(bool manual_event_frame) {
                     false, std::memory_order_release);
             }
         }
-    } else if (analysis.valid && analysis.motion_entered) {
+    } else if (analysis.valid &&
+               analysis.sampling_state != CameraObserverSamplingState::kQuiet) {
+        const CameraVisionEventFrameSource source =
+            analysis.sampling_state == CameraObserverSamplingState::kMotion
+                ? CameraVisionEventFrameSource::kMotion
+                : CameraVisionEventFrameSource::kActivity;
         vision_event_frame_.Capture(observer_.scratch_data(), output_width,
-                                    output_height, output_stride,
-                                    CameraVisionEventFrameSource::kMotion);
+                                    output_height, output_stride, source,
+                                    analysis.spatial);
     }
     return analysis.valid;
 }

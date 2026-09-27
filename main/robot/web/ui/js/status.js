@@ -417,6 +417,7 @@ function renderCameraObserver(status) {
     ? fixed(status.camera_vision_observer_center_score) : "—");
   set("cameraObserverChangedRatio", samples > 0
     ? (Number(status.camera_vision_observer_changed_ratio) * 100).toFixed(1) + "%" : "—");
+  renderCameraMotionTelemetry(status, samples > 0);
   set("cameraObserverCapture", samples > 0
     ? fmtMs(Number(status.camera_vision_observer_capture_ms) || 0) : "—");
   set("cameraObserverDecode", samples > 0
@@ -436,7 +437,8 @@ function renderCameraObserver(status) {
   set("cameraEventFrameAvailable",
     status.camera_vision_event_frame_available ? "Yes" : "No");
   set("cameraEventFrameSource",
-    status.camera_vision_event_frame_source === "motion" ? "Motion event"
+    status.camera_vision_event_frame_source === "activity" ? "Activity burst"
+      : status.camera_vision_event_frame_source === "motion" ? "Motion event"
       : status.camera_vision_event_frame_source === "manual" ? "Manual capture" : "None");
   set("cameraEventFrameAge", status.camera_vision_event_frame_available
     ? fmtMs(Number(status.camera_vision_event_frame_age_ms) || 0) + " ago" : "—");

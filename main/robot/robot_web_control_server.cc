@@ -375,6 +375,7 @@ bool RobotWebControlServer::Start(int port) {
     // clients are sufficient for status, logs, camera and one action request;
     // recycle the least-recently-used connection if another tab appears.
     config.max_open_sockets = 4;
+    config.max_resp_headers = 16;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
     config.max_uri_handlers = 30;
@@ -1138,13 +1139,53 @@ esp_err_t RobotWebControlServer::HandleGetCameraVisionEventFrame(
     auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
     bool response_started = false;
     const bool sent = self->controller_.SendCameraVisionEventFrame(
-        [&](const uint8_t* data, size_t length) {
+        [&](const uint8_t* data, size_t length,
+            const CameraMotionSpatialMetrics& spatial) {
             response_started = true;
+            std::array<char, 16> centroid_x = {};
+            std::array<char, 16> centroid_y = {};
+            std::array<char, 16> bbox_left = {};
+            std::array<char, 16> bbox_top = {};
+            std::array<char, 16> bbox_right = {};
+            std::array<char, 16> bbox_bottom = {};
+            std::snprintf(centroid_x.data(), centroid_x.size(), "%.4f",
+                          spatial.centroid_x);
+            std::snprintf(centroid_y.data(), centroid_y.size(), "%.4f",
+                          spatial.centroid_y);
+            std::snprintf(bbox_left.data(), bbox_left.size(), "%.4f",
+                          spatial.bbox_left);
+            std::snprintf(bbox_top.data(), bbox_top.size(), "%.4f",
+                          spatial.bbox_top);
+            std::snprintf(bbox_right.data(), bbox_right.size(), "%.4f",
+                          spatial.bbox_right);
+            std::snprintf(bbox_bottom.data(), bbox_bottom.size(), "%.4f",
+                          spatial.bbox_bottom);
             httpd_resp_set_type(request, "application/octet-stream");
             httpd_resp_set_hdr(request, "Cache-Control", "no-store");
             httpd_resp_set_hdr(request, "X-Frame-Width", "160");
             httpd_resp_set_hdr(request, "X-Frame-Height", "120");
             httpd_resp_set_hdr(request, "X-Frame-Format", "RGB565LE");
+            httpd_resp_set_hdr(request, "X-Motion-Valid",
+                               spatial.valid ? "1" : "0");
+            httpd_resp_set_hdr(request, "X-Motion-Centroid-X",
+                               centroid_x.data());
+            httpd_resp_set_hdr(request, "X-Motion-Centroid-Y",
+                               centroid_y.data());
+            httpd_resp_set_hdr(request, "X-Motion-Bbox-Left",
+                               bbox_left.data());
+            httpd_resp_set_hdr(request, "X-Motion-Bbox-Top",
+                               bbox_top.data());
+            httpd_resp_set_hdr(request, "X-Motion-Bbox-Right",
+                               bbox_right.data());
+            httpd_resp_set_hdr(request, "X-Motion-Bbox-Bottom",
+                               bbox_bottom.data());
+            httpd_resp_set_hdr(
+                request, "X-Motion-H-Region",
+                CameraMotionTracker::HorizontalRegionName(
+                    spatial.horizontal_region));
+            httpd_resp_set_hdr(
+                request, "X-Motion-V-Region",
+                CameraMotionTracker::VerticalRegionName(spatial.vertical_region));
             return httpd_resp_send(request,
                                    reinterpret_cast<const char*>(data),
                                    length) == ESP_OK;

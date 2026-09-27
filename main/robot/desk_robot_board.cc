@@ -2193,7 +2193,9 @@ private:
             } else {
                 camera_->CaptureObserverSample();
             }
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(settings.vision.interval_ms));
+            ulTaskNotifyTake(
+                pdTRUE,
+                pdMS_TO_TICKS(camera_->GetObserverRecommendedIntervalMs()));
         }
     }
 
@@ -2470,7 +2472,7 @@ private:
         return camera_ != nullptr && camera_->SetVisionEventFrameEnabled(enabled);
     }
 
-    bool SendCameraVisionEventFrame(const SnapshotSender& sender) const override {
+    bool SendCameraVisionEventFrame(const EventFrameSender& sender) const override {
         return camera_ != nullptr && camera_->SendVisionEventFrame(sender);
     }
 

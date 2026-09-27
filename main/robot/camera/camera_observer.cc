@@ -1,7 +1,5 @@
 #include "camera_observer.h"
 
-#include "config/tuning.h"
-
 #include <algorithm>
 #include <cmath>
 
@@ -14,25 +12,36 @@ CameraObserver::~CameraObserver() {
     }
 }
 
-void CameraObserver::Configure(bool enabled, int interval_ms) {
+void CameraObserver::Configure(const CameraVisionSettings& settings) {
     std::lock_guard<std::mutex> lock(status_mutex_);
-    const bool enabling = enabled && !status_.enabled;
-    status_.enabled = enabled;
-    status_.interval_ms = interval_ms;
-    if (!enabled) {
+    const bool enabling = settings.enabled && !status_.enabled;
+    settings_ = settings;
+    status_.enabled = settings.enabled;
+    status_.interval_ms = settings.quiet_interval_ms;
+    status_.current_interval_ms =
+        status_.sampling_state == CameraObserverSamplingState::kQuiet
+            ? settings.quiet_interval_ms
+            : settings.active_interval_ms;
+    if (!settings.enabled) {
         status_.state = CameraObserverState::kDisabled;
         status_.suspend_reason = CameraObserverSuspendReason::kDisabled;
         status_.motion_active = false;
+        status_.sampling_state = CameraObserverSamplingState::kQuiet;
+        status_.current_interval_ms = settings.quiet_interval_ms;
         have_previous_ = false;
         high_motion_samples_ = 0;
         low_motion_samples_ = 0;
+        burst_deadline_ms_ = 0;
     } else if (enabling || status_.state == CameraObserverState::kDisabled) {
         status_.state = CameraObserverState::kWaiting;
         status_.suspend_reason = CameraObserverSuspendReason::kWaitingFirstSample;
         status_.motion_active = false;
+        status_.sampling_state = CameraObserverSamplingState::kQuiet;
+        status_.current_interval_ms = settings.quiet_interval_ms;
         have_previous_ = false;
         high_motion_samples_ = 0;
         low_motion_samples_ = 0;
+        burst_deadline_ms_ = 0;
     }
 }
 
@@ -73,9 +82,12 @@ void CameraObserver::RecordFailure(CameraObserverSuspendReason reason) {
 void CameraObserver::ResetBaseline() {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_.motion_active = false;
+    status_.sampling_state = CameraObserverSamplingState::kQuiet;
+    status_.current_interval_ms = settings_.quiet_interval_ms;
     have_previous_ = false;
     high_motion_samples_ = 0;
     low_motion_samples_ = 0;
+    burst_deadline_ms_ = 0;
 }
 
 uint8_t CameraObserver::Rgb565Luma(uint16_t pixel) {
@@ -95,6 +107,12 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         return result;
     }
 
+    CameraVisionSettings settings;
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        settings = settings_;
+        result.sampling_state = status_.sampling_state;
+    }
     const int64_t analyze_start_us = esp_timer_get_time();
     uint32_t luma_sum = 0;
     for (size_t grid_y = 0; grid_y < kGridHeight; ++grid_y) {
@@ -117,6 +135,7 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
     float motion_score = 0.0f;
     float center_score = 0.0f;
     float changed_ratio = 0.0f;
+    CameraMotionSpatialMetrics spatial;
     if (have_previous_) {
         uint32_t previous_sum = 0;
         for (const uint8_t value : previous_luma_) {
@@ -124,10 +143,11 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         }
         const float previous_mean = static_cast<float>(previous_sum) / kGridCells;
         const float global_delta = global_luma - previous_mean;
-        uint32_t changed_cells = 0;
         float motion_sum = 0.0f;
         float center_sum = 0.0f;
         size_t center_cells = 0;
+        motion_tracker_.BeginFrame(kGridWidth, kGridHeight,
+                                   settings.cell_threshold);
         for (size_t y = 0; y < kGridHeight; ++y) {
             for (size_t x = 0; x < kGridWidth; ++x) {
                 const size_t index = y * kGridWidth + x;
@@ -135,9 +155,7 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
                     (static_cast<float>(current_luma_[index]) - previous_luma_[index]) -
                     global_delta);
                 motion_sum += difference;
-                if (difference >= CAMERA_OBSERVER_CELL_MOTION_THRESHOLD) {
-                    ++changed_cells;
-                }
+                motion_tracker_.AddCell(x, y, difference);
                 if (x >= kGridWidth / 4 && x < (kGridWidth * 3) / 4 &&
                     y >= kGridHeight / 4 && y < (kGridHeight * 3) / 4) {
                     center_sum += difference;
@@ -147,9 +165,12 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         }
         motion_score = motion_sum / kGridCells;
         center_score = center_cells > 0 ? center_sum / center_cells : 0.0f;
-        changed_ratio = static_cast<float>(changed_cells) / kGridCells;
+        spatial = motion_tracker_.FinishFrame();
+        changed_ratio = static_cast<float>(spatial.active_cells) / kGridCells;
     }
 
+    // Manual event-frame capture may publish telemetry, but it must not become
+    // part of the adaptive sampler's baseline or state machine.
     if (update_motion_state) {
         previous_luma_ = current_luma_;
     }
@@ -157,26 +178,47 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
     std::lock_guard<std::mutex> lock(status_mutex_);
     if (update_motion_state) {
         have_previous_ = true;
+        const int64_t now_ms = analyze_end_us / 1000;
+        const int changed_ratio_bp = static_cast<int>(
+            spatial.active_cells * 10000 / kGridCells);
         if (status_.motion_active) {
+            status_.sampling_state = CameraObserverSamplingState::kMotion;
             high_motion_samples_ = 0;
-            if (changed_ratio <= CAMERA_OBSERVER_MOTION_EXIT_RATIO) {
+            if (changed_ratio_bp <= settings.exit_ratio_bp) {
                 ++low_motion_samples_;
-                if (low_motion_samples_ >= CAMERA_OBSERVER_MOTION_EXIT_SAMPLES) {
+                if (low_motion_samples_ >= settings.exit_samples) {
                     status_.motion_active = false;
                     low_motion_samples_ = 0;
                     result.motion_exited = true;
+                    if (changed_ratio_bp >= settings.activity_ratio_bp) {
+                        status_.sampling_state = CameraObserverSamplingState::kBurst;
+                        burst_deadline_ms_ = now_ms + settings.activity_hold_ms;
+                    } else {
+                        status_.sampling_state = CameraObserverSamplingState::kQuiet;
+                        burst_deadline_ms_ = 0;
+                    }
                 }
             } else {
                 low_motion_samples_ = 0;
             }
         } else {
             low_motion_samples_ = 0;
-            if (changed_ratio >= CAMERA_OBSERVER_MOTION_ENTER_RATIO) {
+            if (changed_ratio_bp >= settings.activity_ratio_bp) {
+                status_.sampling_state = CameraObserverSamplingState::kBurst;
+                burst_deadline_ms_ = now_ms + settings.activity_hold_ms;
+            } else if (status_.sampling_state == CameraObserverSamplingState::kBurst &&
+                       now_ms >= burst_deadline_ms_) {
+                status_.sampling_state = CameraObserverSamplingState::kQuiet;
+                burst_deadline_ms_ = 0;
+            }
+            if (changed_ratio_bp >= settings.enter_ratio_bp) {
                 ++high_motion_samples_;
-                if (high_motion_samples_ >= CAMERA_OBSERVER_MOTION_ENTER_SAMPLES) {
+                if (high_motion_samples_ >= settings.enter_samples) {
                     status_.motion_active = true;
+                    status_.sampling_state = CameraObserverSamplingState::kMotion;
+                    burst_deadline_ms_ = 0;
                     ++status_.motion_event_count;
-                    status_.last_motion_event_ms = analyze_end_us / 1000;
+                    status_.last_motion_event_ms = now_ms;
                     high_motion_samples_ = 0;
                     result.motion_entered = true;
                 }
@@ -184,6 +226,11 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
                 high_motion_samples_ = 0;
             }
         }
+        status_.current_interval_ms =
+            status_.sampling_state == CameraObserverSamplingState::kQuiet
+                ? settings.quiet_interval_ms
+                : settings.active_interval_ms;
+        result.sampling_state = status_.sampling_state;
     }
 
     if (status_.enabled) {
@@ -195,6 +242,7 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
     status_.motion_score = motion_score;
     status_.center_activity_score = center_score;
     status_.changed_pixel_ratio = changed_ratio;
+    status_.spatial = spatial;
     status_.capture_ms = capture_ms;
     status_.decode_ms = decode_ms;
     status_.analyze_ms = static_cast<uint32_t>(
@@ -203,12 +251,18 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         std::max<int64_t>(0, (analyze_end_us - sample_start_us + 999) / 1000));
     ++status_.sample_count;
     result.valid = true;
+    result.spatial = spatial;
     return result;
 }
 
 CameraObserverStatus CameraObserver::GetStatus() const {
     std::lock_guard<std::mutex> lock(status_mutex_);
     return status_;
+}
+
+int CameraObserver::GetRecommendedIntervalMs() const {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    return status_.current_interval_ms;
 }
 
 const char* CameraObserver::StateName(CameraObserverState state) {
@@ -241,5 +295,14 @@ const char* CameraObserver::SuspendReasonName(CameraObserverSuspendReason reason
         case CameraObserverSuspendReason::kDisabled: return "disabled";
         case CameraObserverSuspendReason::kNone:
         default: return "none";
+    }
+}
+
+const char* CameraObserver::SamplingStateName(CameraObserverSamplingState state) {
+    switch (state) {
+        case CameraObserverSamplingState::kBurst: return "burst";
+        case CameraObserverSamplingState::kMotion: return "motion";
+        case CameraObserverSamplingState::kQuiet:
+        default: return "quiet";
     }
 }

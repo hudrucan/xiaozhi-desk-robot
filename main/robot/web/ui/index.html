@@ -1109,47 +1109,76 @@
                     <span class="audio-name"><b>Vision observer</b><small>Idle-only local motion sampling</small></span>
                     <label class="toggle"><input id="cameraObserverEnabled" type="checkbox" /><span>Enabled</span></label>
                   </div>
-                  <div class="audio-row microphone-select-row camera-observer-config-row camera-observer-interval-row">
-                    <span class="audio-name"><b>Sample interval</b><small>Delay between observer samples</small></span>
-                    <div class="camera-observer-intervals" role="radiogroup" aria-label="Observer sample interval">
-                      <label><input type="radio" name="cameraObserverInterval" value="500" /><span>500 ms</span></label>
-                      <label><input type="radio" name="cameraObserverInterval" value="1000" checked /><span>1 s</span></label>
-                      <label><input type="radio" name="cameraObserverInterval" value="2000" /><span>2 s</span></label>
-                    </div>
-                  </div>
                   <div class="audio-row microphone-toggle-row camera-observer-config-row">
-                    <span class="audio-name"><b>Motion event preview</b><small>Latest volatile 160x120 RGB565 frame captured on Quiet → Motion</small></span>
+                    <span class="audio-name"><b>Motion event preview</b><small>Latest volatile frame from activity, motion, or manual capture</small></span>
                     <div class="camera-event-frame-actions">
                       <button id="cameraEventFrameCapture" class="mini-button" type="button" disabled>Capture now</button>
                       <label class="toggle"><input id="cameraEventFrameEnabled" type="checkbox" /><span>Enabled</span></label>
                     </div>
+                  </div>
+                  <h4 class="camera-observer-config-group">Sampling</h4>
+                  <div class="audio-row microphone-select-row camera-observer-config-row camera-observer-interval-row">
+                    <span class="audio-name"><b>Quiet interval</b><small>Normal idle sampling cadence</small></span>
+                    <div class="camera-observer-intervals" role="radiogroup" aria-label="Observer quiet interval">
+                      <label><input type="radio" name="cameraObserverQuietInterval" value="500" /><span>500 ms</span></label>
+                      <label><input type="radio" name="cameraObserverQuietInterval" value="1000" checked /><span>1 s</span></label>
+                      <label><input type="radio" name="cameraObserverQuietInterval" value="2000" /><span>2 s</span></label>
+                    </div>
+                  </div>
+                  <div class="audio-row microphone-select-row camera-observer-config-row camera-observer-interval-row">
+                    <span class="audio-name"><b>Active interval</b><small>Burst and motion sampling cadence</small></span>
+                    <div class="camera-observer-intervals" role="radiogroup" aria-label="Observer active interval">
+                      <label><input type="radio" name="cameraObserverActiveInterval" value="100" /><span>100 ms</span></label>
+                      <label><input type="radio" name="cameraObserverActiveInterval" value="250" checked /><span>250 ms</span></label>
+                      <label><input type="radio" name="cameraObserverActiveInterval" value="500" /><span>500 ms</span></label>
+                    </div>
+                  </div>
+                  <h4 class="camera-observer-config-group">Sensitivity</h4>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Cell threshold</b><small>Per-cell compensated luma delta</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionCellThreshold" type="number" min="1" max="255" step="1" value="18" /><span>luma</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Activity</b><small>Start or extend burst sampling</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionActivityRatio" type="number" min="0.01" max="100" step="0.1" value="2" /><span>%</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Motion enter</b><small>Changed-cell threshold to enter Motion</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionEnterRatio" type="number" min="0.01" max="100" step="0.1" value="5" /><span>%</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Motion exit</b><small>Changed-cell threshold to exit Motion</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionExitRatio" type="number" min="0.01" max="100" step="0.1" value="3" /><span>%</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Enter samples</b><small>Consecutive samples required</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionEnterSamples" type="number" min="1" max="10" step="1" value="2" /><span>samples</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Exit samples</b><small>Consecutive samples required</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionExitSamples" type="number" min="1" max="10" step="1" value="3" /><span>samples</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Activity hold</b><small>Keep burst cadence after activity</small></span>
+                    <div class="camera-observer-number"><input id="cameraMotionActivityHold" type="number" min="250" max="10000" step="250" value="1500" /><span>ms</span></div>
                   </div>
                 </div>
               </div>
               <section class="camera-observer-details-section">
                 <h3>Runtime details</h3>
                 <div class="camera-diagnostics-grid camera-observer-details" aria-label="Vision observer runtime telemetry">
+                <div class="camera-observer-details-column">
                 <section class="camera-diag-group">
                   <h3>Observer lifecycle</h3>
                   <dl>
                     <div><dt>State</dt><dd id="cameraObserverState">Disabled</dd></div>
                     <div><dt>Suspend reason</dt><dd id="cameraObserverReason">Disabled</dd></div>
+                    <div><dt>Sampling state</dt><dd id="cameraObserverSamplingState">Quiet</dd></div>
+                    <div><dt>Current interval</dt><dd id="cameraObserverCurrentInterval">1 s</dd></div>
                     <div><dt>Last sample</dt><dd id="cameraObserverLastSample">Never</dd></div>
                     <div><dt>Samples</dt><dd id="cameraObserverSamples">0</dd></div>
                     <div><dt>Skipped</dt><dd id="cameraObserverSkipped">0</dd></div>
                     <div><dt>Failures</dt><dd id="cameraObserverFailures">0</dd></div>
-                  </dl>
-                </section>
-                <section class="camera-diag-group">
-                  <h3>Motion analysis</h3>
-                  <dl>
-                    <div><dt>Motion state</dt><dd id="cameraObserverMotionState">Quiet</dd></div>
-                    <div><dt>Changed pixels</dt><dd id="cameraObserverChangedRatio">—</dd></div>
-                    <div><dt>Global luma</dt><dd id="cameraObserverLuma">—</dd></div>
-                    <div><dt>Motion score</dt><dd id="cameraObserverMotionScore">—</dd></div>
-                    <div><dt>Center activity</dt><dd id="cameraObserverCenterScore">—</dd></div>
-                    <div><dt>Motion events</dt><dd id="cameraObserverEvents">0</dd></div>
-                    <div class="wide"><dt>Last motion event</dt><dd id="cameraObserverLastEvent">Never</dd></div>
                   </dl>
                 </section>
                 <section class="camera-diag-group">
@@ -1162,6 +1191,26 @@
                     <div><dt>Scratch PSRAM</dt><dd id="cameraObserverScratch">0 B</dd></div>
                   </dl>
                 </section>
+                </div>
+                <div class="camera-observer-details-column">
+                <section class="camera-diag-group">
+                  <h3>Motion analysis</h3>
+                  <dl>
+                    <div><dt>Motion state</dt><dd id="cameraObserverMotionState">Quiet</dd></div>
+                    <div><dt>Changed pixels</dt><dd id="cameraObserverChangedRatio">—</dd></div>
+                    <div><dt>Active cells</dt><dd id="cameraMotionActiveCells">—</dd></div>
+                    <div><dt>Motion centroid</dt><dd id="cameraMotionCentroid">—</dd></div>
+                    <div><dt>Motion region</dt><dd id="cameraMotionRegion">—</dd></div>
+                    <div class="wide"><dt>Motion bbox</dt><dd id="cameraMotionBbox">—</dd></div>
+                    <div><dt>BBox area</dt><dd id="cameraMotionBboxArea">—</dd></div>
+                    <div><dt>Global luma</dt><dd id="cameraObserverLuma">—</dd></div>
+                    <div><dt>Motion score</dt><dd id="cameraObserverMotionScore">—</dd></div>
+                    <div><dt>Center activity</dt><dd id="cameraObserverCenterScore">—</dd></div>
+                    <div><dt>Motion events</dt><dd id="cameraObserverEvents">0</dd></div>
+                    <div class="wide"><dt>Last motion event</dt><dd id="cameraObserverLastEvent">Never</dd></div>
+                  </dl>
+                </section>
+                </div>
                 </div>
                 <section id="cameraEventFrameSection" class="camera-diag-group camera-event-frame-group" hidden>
                   <h3>Event frame</h3>
@@ -1354,6 +1403,7 @@ Waiting for system logs…</pre
     <script src="js/oled.js"></script>
     <script src="js/chat_asr.js"></script>
     <script src="js/server_config.js"></script>
+    <script src="js/camera_motion.js"></script>
     <script src="js/status.js"></script>
     <script src="js/camera_logs.js"></script>
     <script src="js/tabs.js"></script>

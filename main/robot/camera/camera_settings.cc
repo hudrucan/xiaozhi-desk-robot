@@ -11,7 +11,7 @@
 namespace {
 
 constexpr char kNamespace[] = "camera";
-constexpr int kSchemaVersion = 8;
+constexpr int kSchemaVersion = 9;
 constexpr int kFirstCompatibleSchemaVersion = 1;
 constexpr int kOrientationSchemaVersion = 3;
 
@@ -48,9 +48,17 @@ constexpr char kMcpQualityKey[] = "mcp_quality";
 constexpr char kMcpFreshnessKey[] = "mcp_fresh";
 constexpr char kVisionEnabledKey[] = "vision_en";
 constexpr char kVisionIntervalKey[] = "vision_ms";
+constexpr char kVisionActiveIntervalKey[] = "vis_a_ms";
+constexpr char kVisionCellThresholdKey[] = "vis_cell";
+constexpr char kVisionActivityRatioKey[] = "vis_act_bp";
+constexpr char kVisionEnterRatioKey[] = "vis_ent_bp";
+constexpr char kVisionExitRatioKey[] = "vis_ext_bp";
+constexpr char kVisionEnterSamplesKey[] = "vis_ent_n";
+constexpr char kVisionExitSamplesKey[] = "vis_ext_n";
+constexpr char kVisionActivityHoldKey[] = "vis_hold";
 
 constexpr size_t kNvsNameMaxLength = 15;
-constexpr std::array<std::string_view, 33> kNvsNames = {
+constexpr std::array<std::string_view, 41> kNvsNames = {
     kNamespace,          kVersionKey,          kProfileKey,        kBrightnessKey,
     kContrastKey,        kSaturationKey,       kAecKey,            kAec2Key,
     kAeLevelKey,         kExposureKey,         kAgcKey,            kGainKey,
@@ -59,7 +67,9 @@ constexpr std::array<std::string_view, 33> kNvsNames = {
     kLensCorrectionKey,  kMirrorKey,           kFlipKey,           kWebResolutionKey,
     kWebQualityKey,      kWebFpsKey,           kMochanResolutionKey, kMochanAspectKey,
     kMochanRenderKey,    kMcpResolutionKey,    kMcpQualityKey,       kVisionEnabledKey,
-    kVisionIntervalKey,
+    kVisionIntervalKey,   kVisionActiveIntervalKey, kVisionCellThresholdKey,
+    kVisionActivityRatioKey, kVisionEnterRatioKey,  kVisionExitRatioKey,
+    kVisionEnterSamplesKey, kVisionExitSamplesKey,  kVisionActivityHoldKey,
 };
 static_assert([] {
     for (const std::string_view name : kNvsNames) {
@@ -110,12 +120,6 @@ CameraResolution NormalizeMcpResolution(CameraResolution resolution) {
                                 CameraResolution::kUxga, CameraResolution::kQsxga})
                ? resolution
                : CameraResolution::kUxga;
-}
-
-int NormalizeVisionInterval(int interval_ms) {
-    return interval_ms == 500 || interval_ms == 1000 || interval_ms == 2000
-               ? interval_ms
-               : 1000;
 }
 
 }  // namespace
@@ -173,7 +177,26 @@ CameraSettingsConfig CameraSettingsStore::Normalize(CameraSettingsConfig config)
     config.mcp.freshness =
         NormalizeEnum(config.mcp.freshness, McpFreshFramePolicy::kFresh,
                       McpFreshFramePolicy::kFresh);
-    config.vision.interval_ms = NormalizeVisionInterval(config.vision.interval_ms);
+    config.vision.quiet_interval_ms =
+        std::clamp(config.vision.quiet_interval_ms, 250, 5000);
+    config.vision.active_interval_ms =
+        std::clamp(config.vision.active_interval_ms, 100,
+                   config.vision.quiet_interval_ms);
+    config.vision.cell_threshold = std::clamp(config.vision.cell_threshold, 1, 255);
+    config.vision.activity_ratio_bp =
+        std::clamp(config.vision.activity_ratio_bp, 1, 10000);
+    config.vision.enter_ratio_bp =
+        std::clamp(config.vision.enter_ratio_bp, 1, 10000);
+    config.vision.exit_ratio_bp =
+        std::clamp(config.vision.exit_ratio_bp, 1, 10000);
+    config.vision.activity_ratio_bp =
+        std::min(config.vision.activity_ratio_bp, config.vision.enter_ratio_bp);
+    config.vision.exit_ratio_bp =
+        std::min(config.vision.exit_ratio_bp, config.vision.enter_ratio_bp);
+    config.vision.enter_samples = std::clamp(config.vision.enter_samples, 1, 10);
+    config.vision.exit_samples = std::clamp(config.vision.exit_samples, 1, 10);
+    config.vision.activity_hold_ms =
+        std::clamp(config.vision.activity_hold_ms, 250, 10000);
     return config;
 }
 
@@ -239,8 +262,26 @@ void CameraSettingsStore::Load() {
                      static_cast<int>(McpFreshFramePolicy::kFresh));
         config.vision.enabled =
             settings.GetBool(kVisionEnabledKey, config.vision.enabled);
-        config.vision.interval_ms =
-            settings.GetInt(kVisionIntervalKey, config.vision.interval_ms);
+        config.vision.quiet_interval_ms =
+            settings.GetInt(kVisionIntervalKey, config.vision.quiet_interval_ms);
+        if (stored_schema >= 9) {
+            config.vision.active_interval_ms = settings.GetInt(
+                kVisionActiveIntervalKey, config.vision.active_interval_ms);
+            config.vision.cell_threshold = settings.GetInt(
+                kVisionCellThresholdKey, config.vision.cell_threshold);
+            config.vision.activity_ratio_bp = settings.GetInt(
+                kVisionActivityRatioKey, config.vision.activity_ratio_bp);
+            config.vision.enter_ratio_bp = settings.GetInt(
+                kVisionEnterRatioKey, config.vision.enter_ratio_bp);
+            config.vision.exit_ratio_bp = settings.GetInt(
+                kVisionExitRatioKey, config.vision.exit_ratio_bp);
+            config.vision.enter_samples = settings.GetInt(
+                kVisionEnterSamplesKey, config.vision.enter_samples);
+            config.vision.exit_samples = settings.GetInt(
+                kVisionExitSamplesKey, config.vision.exit_samples);
+            config.vision.activity_hold_ms = settings.GetInt(
+                kVisionActivityHoldKey, config.vision.activity_hold_ms);
+        }
     }
 
     const bool migrate_ov5640_orientation =
@@ -320,5 +361,13 @@ void CameraSettingsStore::Persist(const CameraSettingsConfig& config) {
     settings.SetInt(kMcpQualityKey, config.mcp.jpeg_quality);
     settings.SetInt(kMcpFreshnessKey, static_cast<int>(config.mcp.freshness));
     settings.SetBool(kVisionEnabledKey, config.vision.enabled);
-    settings.SetInt(kVisionIntervalKey, config.vision.interval_ms);
+    settings.SetInt(kVisionIntervalKey, config.vision.quiet_interval_ms);
+    settings.SetInt(kVisionActiveIntervalKey, config.vision.active_interval_ms);
+    settings.SetInt(kVisionCellThresholdKey, config.vision.cell_threshold);
+    settings.SetInt(kVisionActivityRatioKey, config.vision.activity_ratio_bp);
+    settings.SetInt(kVisionEnterRatioKey, config.vision.enter_ratio_bp);
+    settings.SetInt(kVisionExitRatioKey, config.vision.exit_ratio_bp);
+    settings.SetInt(kVisionEnterSamplesKey, config.vision.enter_samples);
+    settings.SetInt(kVisionExitSamplesKey, config.vision.exit_samples);
+    settings.SetInt(kVisionActivityHoldKey, config.vision.activity_hold_ms);
 }

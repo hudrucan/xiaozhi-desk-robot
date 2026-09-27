@@ -135,7 +135,24 @@ cJSON* AddSettings(cJSON* root, const CameraSettingsConfig& settings) {
 
     cJSON* vision = cJSON_AddObjectToObject(root, "vision");
     cJSON_AddBoolToObject(vision, "enabled", settings.vision.enabled);
-    cJSON_AddNumberToObject(vision, "interval_ms", settings.vision.interval_ms);
+    cJSON_AddNumberToObject(vision, "quiet_interval_ms",
+                            settings.vision.quiet_interval_ms);
+    cJSON_AddNumberToObject(vision, "active_interval_ms",
+                            settings.vision.active_interval_ms);
+    cJSON_AddNumberToObject(vision, "cell_threshold",
+                            settings.vision.cell_threshold);
+    cJSON_AddNumberToObject(vision, "activity_ratio_bp",
+                            settings.vision.activity_ratio_bp);
+    cJSON_AddNumberToObject(vision, "enter_ratio_bp",
+                            settings.vision.enter_ratio_bp);
+    cJSON_AddNumberToObject(vision, "exit_ratio_bp",
+                            settings.vision.exit_ratio_bp);
+    cJSON_AddNumberToObject(vision, "enter_samples",
+                            settings.vision.enter_samples);
+    cJSON_AddNumberToObject(vision, "exit_samples",
+                            settings.vision.exit_samples);
+    cJSON_AddNumberToObject(vision, "activity_hold_ms",
+                            settings.vision.activity_hold_ms);
     return root;
 }
 
@@ -243,11 +260,37 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
     if (valid) valid = ReadEnum(mcp, "freshness", {{"latest", McpFreshFramePolicy::kLatest},
         {"fresh", McpFreshFramePolicy::kFresh}}, settings.mcp.freshness, error);
     if (valid) valid = ReadBool(vision, "enabled", settings.vision.enabled, error);
-    if (valid) valid = ReadInt(vision, "interval_ms", 500, 2000,
-                               settings.vision.interval_ms, error);
-    if (valid && settings.vision.interval_ms != 500 &&
-        settings.vision.interval_ms != 1000 && settings.vision.interval_ms != 2000) {
-        error = "Unsupported interval_ms";
+    if (valid) valid = ReadInt(vision, "quiet_interval_ms", 250, 5000,
+                               settings.vision.quiet_interval_ms, error);
+    if (valid) valid = ReadInt(vision, "active_interval_ms", 100, 2000,
+                               settings.vision.active_interval_ms, error);
+    if (valid) valid = ReadInt(vision, "cell_threshold", 1, 255,
+                               settings.vision.cell_threshold, error);
+    if (valid) valid = ReadInt(vision, "activity_ratio_bp", 1, 10000,
+                               settings.vision.activity_ratio_bp, error);
+    if (valid) valid = ReadInt(vision, "enter_ratio_bp", 1, 10000,
+                               settings.vision.enter_ratio_bp, error);
+    if (valid) valid = ReadInt(vision, "exit_ratio_bp", 1, 10000,
+                               settings.vision.exit_ratio_bp, error);
+    if (valid) valid = ReadInt(vision, "enter_samples", 1, 10,
+                               settings.vision.enter_samples, error);
+    if (valid) valid = ReadInt(vision, "exit_samples", 1, 10,
+                               settings.vision.exit_samples, error);
+    if (valid) valid = ReadInt(vision, "activity_hold_ms", 250, 10000,
+                               settings.vision.activity_hold_ms, error);
+    if (valid && settings.vision.active_interval_ms >
+                     settings.vision.quiet_interval_ms) {
+        error = "active_interval_ms must not exceed quiet_interval_ms";
+        valid = false;
+    }
+    if (valid && settings.vision.activity_ratio_bp >
+                     settings.vision.enter_ratio_bp) {
+        error = "activity_ratio_bp must not exceed enter_ratio_bp";
+        valid = false;
+    }
+    if (valid && settings.vision.exit_ratio_bp >
+                     settings.vision.enter_ratio_bp) {
+        error = "exit_ratio_bp must not exceed enter_ratio_bp";
         valid = false;
     }
 

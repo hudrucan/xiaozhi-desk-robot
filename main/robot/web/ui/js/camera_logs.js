@@ -7,20 +7,8 @@ let cameraEventFrameAvailable = false;
 let cameraEventFrameTimer = 0;
 let cameraEventFrameFetchPending = false;
 
-function cameraObserverIntervalValue() {
-  const selected = $('input[name="cameraObserverInterval"]:checked');
-  const interval = selected ? Number(selected.value) : 0;
-  if (![500, 1000, 2000].includes(interval)) {
-    throw Error("Observer interval must be 500, 1000, or 2000 ms");
-  }
-  return interval;
-}
-
 function setCameraObserverControlsDisabled(disabled) {
-  $("#cameraObserverEnabled").disabled = disabled;
-  $all('input[name="cameraObserverInterval"]').forEach((input) => {
-    input.disabled = disabled;
-  });
+  setCameraMotionSettingsDisabled(disabled);
 }
 
 const cameraAdvancedIds = ["cameraBrightness", "cameraContrast", "cameraSaturation",
@@ -69,12 +57,9 @@ function populateCameraSettings(data) {
   $("#cameraLenc").checked = sensor.lens_correction;
   $("#cameraMirror").checked = sensor.mirror;
   $("#cameraFlipSetting").checked = sensor.flip;
-  const vision = data.vision || { enabled: false, interval_ms: 1000 };
+  const vision = data.vision || {};
   $("#cameraObserverEnabled").checked = !!vision.enabled;
-  const interval = [500, 1000, 2000].includes(Number(vision.interval_ms))
-    ? Number(vision.interval_ms) : 1000;
-  const intervalControl = $(`input[name="cameraObserverInterval"][value="${interval}"]`);
-  if (intervalControl) intervalControl.checked = true;
+  populateCameraMotionSettings(vision);
   $("#cameraSettingsApply").disabled = false;
   $("#cameraSettingsReset").disabled = false;
   setCameraObserverControlsDisabled(false);
@@ -127,13 +112,11 @@ function collectCameraSettings() {
     mcp: { resolution: $("#cameraMcpResolution").value,
       jpeg_quality: boundedInteger("cameraMcpQuality", "MCP JPEG quality", 4, 63),
       freshness: checked("cameraMcpFresh") ? "fresh" : "latest" },
-    vision: { enabled: checked("cameraObserverEnabled"),
-      interval_ms: cameraObserverIntervalValue() },
+    vision: collectCameraMotionSettings(checked("cameraObserverEnabled")),
   };
 }
 
 async function collectCameraVisionSettings() {
-  const interval = cameraObserverIntervalValue();
   const response = await fetch("/api/camera/settings", { cache: "no-store" });
   const current = await response.json();
   if (!response.ok || !current.ok) {
@@ -144,7 +127,7 @@ async function collectCameraVisionSettings() {
     web: { ...current.web },
     mochan: { ...current.mochan },
     mcp: { ...current.mcp },
-    vision: { enabled: $("#cameraObserverEnabled").checked, interval_ms: interval },
+    vision: collectCameraMotionSettings($("#cameraObserverEnabled").checked),
   };
 }
 
@@ -156,7 +139,7 @@ function clearCameraEventFrame(message) {
   canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
 }
 
-function renderCameraEventFrame(buffer) {
+function renderCameraEventFrame(buffer, motion) {
   if (buffer.byteLength !== 160 * 120 * 2) {
     throw Error("Unexpected event frame size");
   }
@@ -172,6 +155,7 @@ function renderCameraEventFrame(buffer) {
     image.data[output++] = 255;
   }
   context.putImageData(image, 0, 0);
+  drawCameraMotionOverlay(context, canvas, motion);
   $(".camera-event-frame-preview").classList.add("has-frame");
 }
 
@@ -191,9 +175,10 @@ async function refreshCameraEventFrame() {
       cache: "no-store",
     });
     if (!response.ok) throw Error("Event frame is not available yet");
+    const motion = parseCameraMotionHeaders(response.headers);
     const buffer = await response.arrayBuffer();
     if (cameraEventFrameEnabled && !document.hidden && activeTab === "camera") {
-      renderCameraEventFrame(buffer);
+      renderCameraEventFrame(buffer, motion);
     }
   } catch (error) {
     clearCameraEventFrame(error.message || "Event frame is unavailable");

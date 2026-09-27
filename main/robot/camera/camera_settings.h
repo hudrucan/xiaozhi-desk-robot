@@ -97,7 +97,15 @@ struct McpCameraSettings {
 
 struct CameraVisionSettings {
     bool enabled = false;
-    int interval_ms = 1000;
+    int quiet_interval_ms = 1000;
+    int active_interval_ms = 250;
+    int cell_threshold = 18;
+    int activity_ratio_bp = 200;
+    int enter_ratio_bp = 500;
+    int exit_ratio_bp = 300;
+    int enter_samples = 2;
+    int exit_samples = 3;
+    int activity_hold_ms = 1500;
 };
 
 struct CameraSettingsConfig {

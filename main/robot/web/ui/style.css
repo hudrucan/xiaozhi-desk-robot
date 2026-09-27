@@ -1558,6 +1558,17 @@
         grid-template-columns: minmax(110px, 1fr) minmax(100px, auto);
         border-bottom: 1px solid var(--line2);
       }
+      .camera-observer-config-group {
+        grid-column: 1 / -1;
+        margin: 12px 0 0;
+        padding-top: 10px;
+        border-top: 1px solid var(--line2);
+        color: var(--brass);
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.7px;
+        text-transform: uppercase;
+      }
       .camera-observer-settings .audio-row + .audio-row {
         border-top: 0;
       }
@@ -1613,6 +1624,35 @@
         cursor: not-allowed;
         opacity: 0.45;
       }
+      .camera-observer-number {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 9px;
+        white-space: nowrap;
+      }
+      .camera-observer-number input {
+        width: 82px;
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #100d08;
+        color: var(--hi);
+        padding: 8px 9px;
+        font: inherit;
+        font-variant-numeric: tabular-nums;
+      }
+      .camera-observer-number input:focus-visible {
+        border-color: var(--brass);
+        outline: 1px solid rgba(198, 161, 91, 0.35);
+      }
+      .camera-observer-number input:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
       .camera-observer-details-section {
         margin-top: 16px;
       }
@@ -1626,6 +1666,12 @@
       }
       .camera-observer-details-section > .camera-observer-details {
         margin-top: 8px;
+      }
+      .camera-observer-details-column {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 18px;
       }
       .camera-event-frame-actions {
         display: flex;
@@ -2942,6 +2988,9 @@
         }
         .microphone-select-row,
         .microphone-toggle-row {
+          grid-template-columns: minmax(110px, 1fr) auto;
+        }
+        .camera-observer-config-row {
           grid-template-columns: minmax(110px, 1fr) auto;
         }
         .microphone-level-row {

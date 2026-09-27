@@ -14,6 +14,7 @@
 class RobotController {
 public:
     using SnapshotSender = std::function<bool(const uint8_t*, size_t)>;
+    using EventFrameSender = CameraVisionEventFrame::FrameSender;
     enum class MovePolicy { kReplaceCurrent, kPreserveQueued };
 
     virtual ~RobotController();
@@ -51,7 +52,7 @@ public:
     virtual CameraObserverStatus GetCameraObserverStatus() const = 0;
     virtual CameraVisionEventFrameStatus GetCameraVisionEventFrameStatus() const = 0;
     virtual bool SetCameraVisionEventFrameEnabled(bool enabled) = 0;
-    virtual bool SendCameraVisionEventFrame(const SnapshotSender& sender) const = 0;
+    virtual bool SendCameraVisionEventFrame(const EventFrameSender& sender) const = 0;
     virtual bool QueueCameraVisionEventFrameCapture() = 0;
 
     virtual SecondaryOled::Config GetSecondaryDisplayConfig() const = 0;
