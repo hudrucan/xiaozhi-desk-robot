@@ -67,6 +67,7 @@ public:
     const char* SensorName() const;
     CameraImagePolicy::Status GetImagePolicyStatus() const;
     McpRequestHealth GetMcpRequestHealth() const;
+    CameraDiagnostics GetDiagnostics();
     static const char* McpRequestStateName(McpRequestState state);
     std::expected<std::string, std::string> Explain(const std::string& question) override;
     void OnMcpResponseSent() override;
@@ -96,6 +97,9 @@ private:
     std::atomic_size_t mcp_response_bytes_{0};
     mutable std::mutex settings_mutex_;
     CameraSettingsConfig settings_;
+    std::mutex diagnostics_refresh_mutex_;
+    std::mutex diagnostics_cache_mutex_;
+    CameraDiagnostics diagnostics_cache_;
     CameraImagePolicy& image_policy_;
     McpStateCallback mcp_state_callback_;
 };

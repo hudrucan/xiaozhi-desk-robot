@@ -11,8 +11,9 @@
 namespace {
 
 constexpr char kNamespace[] = "camera";
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 constexpr int kFirstCompatibleSchemaVersion = 1;
+constexpr int kOrientationSchemaVersion = 3;
 
 constexpr char kVersionKey[] = "version";
 constexpr char kProfileKey[] = "profile";
@@ -28,6 +29,7 @@ constexpr char kGainKey[] = "gain";
 constexpr char kGainCeilingKey[] = "gain_ceiling";
 constexpr char kAwbKey[] = "awb";
 constexpr char kAwbGainKey[] = "awb_gain";
+constexpr char kAdvancedAwbKey[] = "adv_awb";
 constexpr char kWhiteBalanceModeKey[] = "wb_mode";
 constexpr char kBpcKey[] = "bpc";
 constexpr char kWpcKey[] = "wpc";
@@ -46,15 +48,15 @@ constexpr char kMcpQualityKey[] = "mcp_quality";
 constexpr char kMcpFreshnessKey[] = "mcp_fresh";
 
 constexpr size_t kNvsNameMaxLength = 15;
-constexpr std::array<std::string_view, 30> kNvsNames = {
+constexpr std::array<std::string_view, 31> kNvsNames = {
     kNamespace,          kVersionKey,          kProfileKey,        kBrightnessKey,
     kContrastKey,        kSaturationKey,       kAecKey,            kAec2Key,
     kAeLevelKey,         kExposureKey,         kAgcKey,            kGainKey,
-    kGainCeilingKey,     kAwbKey,              kAwbGainKey,        kWhiteBalanceModeKey,
-    kBpcKey,             kWpcKey,              kGammaKey,          kLensCorrectionKey,
-    kMirrorKey,          kFlipKey,             kWebResolutionKey,  kWebQualityKey,
-    kWebFpsKey,          kMochanResolutionKey, kMochanAspectKey,   kMochanRenderKey,
-    kMcpResolutionKey,   kMcpQualityKey,
+    kGainCeilingKey,     kAwbKey,              kAwbGainKey,        kAdvancedAwbKey,
+    kWhiteBalanceModeKey, kBpcKey,             kWpcKey,            kGammaKey,
+    kLensCorrectionKey,  kMirrorKey,           kFlipKey,           kWebResolutionKey,
+    kWebQualityKey,      kWebFpsKey,           kMochanResolutionKey, kMochanAspectKey,
+    kMochanRenderKey,    kMcpResolutionKey,    kMcpQualityKey,
 };
 static_assert([] {
     for (const std::string_view name : kNvsNames) {
@@ -191,6 +193,8 @@ void CameraSettingsStore::Load() {
         config.sensor.auto_white_balance =
             settings.GetBool(kAwbKey, config.sensor.auto_white_balance);
         config.sensor.awb_gain = settings.GetBool(kAwbGainKey, config.sensor.awb_gain);
+        config.sensor.advanced_awb =
+            settings.GetBool(kAdvancedAwbKey, config.sensor.advanced_awb);
         config.sensor.white_balance_mode =
             settings.GetInt(kWhiteBalanceModeKey, config.sensor.white_balance_mode);
         config.sensor.black_pixel_correction =
@@ -225,7 +229,8 @@ void CameraSettingsStore::Load() {
                      static_cast<int>(McpFreshFramePolicy::kFresh));
     }
 
-    const bool migrate_ov5640_orientation = stored_schema < kSchemaVersion;
+    const bool migrate_ov5640_orientation =
+        stored_schema < kOrientationSchemaVersion;
     if (migrate_ov5640_orientation) {
         // Schemas v0-v2 predate the confirmed physical OV5640 baseline.
         // Preserve compatible image/capture settings while migrating both
@@ -235,7 +240,11 @@ void CameraSettingsStore::Load() {
     }
 
     config = Normalize(config);
-    if (migrate_ov5640_orientation) {
+    // Schema v4 adds Advanced AWB only. Re-persist compatible older settings
+    // without re-running the fixed v3 orientation migration.
+    const bool migrate_compatible_schema =
+        stored_schema >= kFirstCompatibleSchemaVersion && stored_schema < kSchemaVersion;
+    if (migrate_ov5640_orientation || migrate_compatible_schema) {
         Persist(config);
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -279,6 +288,7 @@ void CameraSettingsStore::Persist(const CameraSettingsConfig& config) {
     settings.SetInt(kGainCeilingKey, static_cast<int>(config.sensor.gain_ceiling));
     settings.SetBool(kAwbKey, config.sensor.auto_white_balance);
     settings.SetBool(kAwbGainKey, config.sensor.awb_gain);
+    settings.SetBool(kAdvancedAwbKey, config.sensor.advanced_awb);
     settings.SetInt(kWhiteBalanceModeKey, config.sensor.white_balance_mode);
     settings.SetBool(kBpcKey, config.sensor.black_pixel_correction);
     settings.SetBool(kWpcKey, config.sensor.white_pixel_correction);

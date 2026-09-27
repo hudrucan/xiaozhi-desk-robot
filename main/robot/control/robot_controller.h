@@ -1,6 +1,7 @@
 #pragma once
 
 #include "camera/camera_settings.h"
+#include "platform/camera_diagnostics.h"
 #include "robot_status.h"
 
 #include <cstddef>
@@ -44,6 +45,7 @@ public:
     virtual bool ApplyCameraSettings(const CameraSettingsConfig& settings) = 0;
     virtual bool ResetCameraSettings() = 0;
     virtual std::string GetCameraSensorName() const = 0;
+    virtual CameraDiagnostics GetCameraDiagnostics() = 0;
 
     virtual SecondaryOled::Config GetSecondaryDisplayConfig() const = 0;
     virtual void SetSecondaryDisplayConfig(const SecondaryOled::Config& config) = 0;

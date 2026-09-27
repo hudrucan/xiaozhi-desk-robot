@@ -67,6 +67,7 @@ struct CameraSensorSettings {
     CameraGainCeiling gain_ceiling = CameraGainCeiling::k8x;
     bool auto_white_balance = true;
     bool awb_gain = true;
+    bool advanced_awb = false;
     int white_balance_mode = 0;
     bool black_pixel_correction = false;
     bool white_pixel_correction = true;

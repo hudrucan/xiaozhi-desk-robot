@@ -311,6 +311,85 @@ function renderDisplayStatus(status) {
   renderOledConfig(status);
 }
 
+function cameraDiagSet(id, value, tone = "") {
+  const element = $("#" + id);
+  if (!element) return;
+  element.textContent = value;
+  element.classList.toggle("diag-ok", tone === "ok");
+  element.classList.toggle("diag-warn", tone === "warn");
+}
+
+function cameraDiagHex(value, width = 2) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? "0x" + Math.max(0, number).toString(16).toUpperCase().padStart(width, "0")
+    : "—";
+}
+
+function renderCameraDiagnostics(status, cameraAvailable) {
+  const valid = !!status.camera_diag_valid;
+  const stale = !!status.camera_diag_stale;
+  const state = !cameraAvailable || (!valid && status.camera_sensor !== "OV5640")
+    ? "Unavailable" : !valid ? "Waiting" : stale ? "Stale" : "Live";
+  cameraDiagSet("cameraDiagState", state,
+    valid && !stale ? "ok" : cameraAvailable ? "warn" : "");
+  const logical = (value) => valid ? value ? "On" : "Off" : "—";
+  const raw = (value, width = 2) => valid ? cameraDiagHex(value, width) : "—";
+
+  cameraDiagSet("cameraDiagAwb", logical(status.camera_awb_enabled));
+  cameraDiagSet("cameraDiagAwbGain", logical(status.camera_awb_gain_enabled));
+  cameraDiagSet("cameraDiagAdvancedAwb", logical(status.camera_advanced_awb_enabled));
+  const wbModes = ["Auto", "Sunny", "Cloudy", "Office", "Home"];
+  const wbMode = Number(status.camera_wb_mode);
+  cameraDiagSet("cameraDiagWbMode", valid && Number.isFinite(wbMode)
+    ? (wbModes[wbMode] || "Mode " + wbMode) : "—");
+  cameraDiagSet("cameraDiagWbControl", raw(status.camera_wb_control_raw));
+  cameraDiagSet("cameraDiagRGain", raw(status.camera_awb_r_gain_raw, 4));
+  cameraDiagSet("cameraDiagGGain", raw(status.camera_awb_g_gain_raw, 4));
+  cameraDiagSet("cameraDiagBGain", raw(status.camera_awb_b_gain_raw, 4));
+
+  const ccmState = !valid || !status.camera_ccm_native_valid
+    ? "Unavailable" : status.camera_ccm_matches_native ? "Native" : "Modified";
+  cameraDiagSet("cameraDiagCcmState", ccmState,
+    ccmState === "Native" ? "ok" : ccmState === "Modified" ? "warn" : "");
+  cameraDiagSet("cameraDiagCcmCurrent", valid ? status.camera_ccm_current || "—" : "—");
+  cameraDiagSet("cameraDiagCcmNative",
+    valid && status.camera_ccm_native_valid ? status.camera_ccm_native || "—" : "—");
+  const awbTableState = !valid || !status.camera_awb_table_native_valid
+    ? "Unavailable" : status.camera_awb_table_matches_native ? "Intact" : "Modified";
+  cameraDiagSet("cameraDiagAwbTableState", awbTableState,
+    awbTableState === "Intact" ? "ok" : awbTableState === "Modified" ? "warn" : "");
+  cameraDiagSet("cameraDiagAwbCurrentHash",
+    valid ? status.camera_awb_table_current_hash || "—" : "—");
+  cameraDiagSet("cameraDiagAwbNativeHash",
+    valid && status.camera_awb_table_native_valid
+      ? status.camera_awb_table_native_hash || "—" : "—");
+  cameraDiagSet("cameraDiagIsp00", raw(status.camera_isp_control_00_raw));
+  cameraDiagSet("cameraDiagIsp01", raw(status.camera_isp_control_01_raw));
+
+  cameraDiagSet("cameraDiagAec", logical(status.camera_aec_enabled));
+  cameraDiagSet("cameraDiagAec2", logical(status.camera_aec2_enabled));
+  cameraDiagSet("cameraDiagAgc", logical(status.camera_agc_enabled));
+  cameraDiagSet("cameraDiagExposure", raw(status.camera_exposure_raw, 5));
+  cameraDiagSet("cameraDiagGain", raw(status.camera_gain_raw));
+  cameraDiagSet("cameraDiagGainCeiling", raw(status.camera_gain_ceiling_raw, 3));
+  cameraDiagSet("cameraDiagAeHigh", raw(status.camera_ae_target_high));
+  cameraDiagSet("cameraDiagAeLow", raw(status.camera_ae_target_low));
+  cameraDiagSet("cameraDiagAeHigh2", raw(status.camera_ae_target_high_2));
+  cameraDiagSet("cameraDiagAeLow2", raw(status.camera_ae_target_low_2));
+  cameraDiagSet("cameraDiagAeFastHigh", raw(status.camera_ae_fast_high));
+  cameraDiagSet("cameraDiagAeFastLow", raw(status.camera_ae_fast_low));
+
+  cameraDiagSet("cameraDiagBpc", logical(status.camera_bpc_enabled));
+  cameraDiagSet("cameraDiagWpc", logical(status.camera_wpc_enabled));
+  cameraDiagSet("cameraDiagGamma", logical(status.camera_gamma_enabled));
+  cameraDiagSet("cameraDiagLenc", logical(status.camera_lens_correction_enabled));
+  cameraDiagSet("cameraDiagMirror", logical(status.camera_mirror_enabled));
+  cameraDiagSet("cameraDiagFlip", logical(status.camera_flip_enabled));
+  cameraDiagSet("cameraDiagAge", valid ? fmtMs(Number(status.camera_diag_age_ms) || 0) : "—");
+  cameraDiagSet("cameraDiagRead", valid ? fmtMs(Number(status.camera_diag_read_ms) || 0) : "—");
+}
+
 function renderCameraStatus(status) {
   Object.assign(statusCache, status);
   const idle = lastState === "idle";
@@ -375,6 +454,7 @@ function renderCameraStatus(status) {
     ].filter(Boolean);
     $("#cameraLastRequest").textContent = details.join(" · ");
   }
+  renderCameraDiagnostics(status, available);
 }
 
 function renderAudioStatus(status) {

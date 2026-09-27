@@ -1061,7 +1061,7 @@
                         <div class="field camera-control-card">
                           <div class="camera-field-heading">
                             <label class="camera-field-title" for="cameraWbMode">White balance mode</label>
-                            <div class="camera-field-options"><label class="camera-inline-check"><input id="cameraAwb" type="checkbox" /><span>Auto</span></label><label class="camera-inline-check"><input id="cameraAwbGain" type="checkbox" /><span>AWB gain</span></label></div>
+                            <div class="camera-field-options"><label class="camera-inline-check"><input id="cameraAwb" type="checkbox" /><span>Auto</span></label><label class="camera-inline-check"><input id="cameraAwbGain" type="checkbox" /><span>AWB gain</span></label><label class="camera-inline-check"><input id="cameraAdvancedAwb" type="checkbox" /><span>Advanced AWB</span></label></div>
                           </div>
                           <select id="cameraWbMode">
                             <option value="0">Auto</option><option value="1">Sunny</option><option value="2">Cloudy</option>
@@ -1093,6 +1093,73 @@
                   <button id="cameraSettingsReset" class="mini-button danger-soft" disabled>Reset defaults</button>
                 </div>
               </details>
+            </section>
+            <section class="card camera-diagnostics" data-tabs="camera">
+              <div class="section-title">
+                <strong data-caption="Read-only OV5640 runtime state">Camera diagnostics</strong
+                ><span id="cameraDiagState">Waiting</span>
+              </div>
+              <div class="camera-diagnostics-grid">
+                <section class="camera-diag-group">
+                  <h3>White balance</h3>
+                  <dl>
+                    <div><dt>AWB engine</dt><dd id="cameraDiagAwb">—</dd></div>
+                    <div><dt>AWB gain</dt><dd id="cameraDiagAwbGain">—</dd></div>
+                    <div><dt>Advanced AWB</dt><dd id="cameraDiagAdvancedAwb">—</dd></div>
+                    <div><dt>WB mode</dt><dd id="cameraDiagWbMode">—</dd></div>
+                    <div><dt>WB control · 3406</dt><dd id="cameraDiagWbControl">—</dd></div>
+                    <div><dt>R gain · 3400/01</dt><dd id="cameraDiagRGain">—</dd></div>
+                    <div><dt>G gain · 3402/03</dt><dd id="cameraDiagGGain">—</dd></div>
+                    <div><dt>B gain · 3404/05</dt><dd id="cameraDiagBGain">—</dd></div>
+                  </dl>
+                </section>
+                <section class="camera-diag-group">
+                  <h3>Color / ISP</h3>
+                  <dl>
+                    <div><dt>CCM state</dt><dd id="cameraDiagCcmState">—</dd></div>
+                    <div><dt>AWB calibration</dt><dd id="cameraDiagAwbTableState">—</dd></div>
+                    <div class="wide"><dt>Current CCM · 5381–538B</dt><dd id="cameraDiagCcmCurrent">—</dd></div>
+                    <div class="wide"><dt>Native CCM</dt><dd id="cameraDiagCcmNative">—</dd></div>
+                    <div><dt>Current AWB hash</dt><dd id="cameraDiagAwbCurrentHash">—</dd></div>
+                    <div><dt>Native AWB hash</dt><dd id="cameraDiagAwbNativeHash">—</dd></div>
+                    <div><dt>ISP control · 5000</dt><dd id="cameraDiagIsp00">—</dd></div>
+                    <div><dt>ISP control · 5001</dt><dd id="cameraDiagIsp01">—</dd></div>
+                  </dl>
+                </section>
+                <section class="camera-diag-group">
+                  <h3>Exposure / gain</h3>
+                  <dl>
+                    <div><dt>AEC</dt><dd id="cameraDiagAec">—</dd></div>
+                    <div><dt>AEC2</dt><dd id="cameraDiagAec2">—</dd></div>
+                    <div><dt>AGC</dt><dd id="cameraDiagAgc">—</dd></div>
+                    <div><dt>Exposure raw</dt><dd id="cameraDiagExposure">—</dd></div>
+                    <div><dt>Gain raw</dt><dd id="cameraDiagGain">—</dd></div>
+                    <div><dt>Gain ceiling</dt><dd id="cameraDiagGainCeiling">—</dd></div>
+                    <div><dt>AE high · 3A0F</dt><dd id="cameraDiagAeHigh">—</dd></div>
+                    <div><dt>AE low · 3A10</dt><dd id="cameraDiagAeLow">—</dd></div>
+                    <div><dt>AE high 2 · 3A1B</dt><dd id="cameraDiagAeHigh2">—</dd></div>
+                    <div><dt>AE low 2 · 3A1E</dt><dd id="cameraDiagAeLow2">—</dd></div>
+                    <div><dt>AE fast high · 3A11</dt><dd id="cameraDiagAeFastHigh">—</dd></div>
+                    <div><dt>AE fast low · 3A1F</dt><dd id="cameraDiagAeFastLow">—</dd></div>
+                  </dl>
+                </section>
+                <section class="camera-diag-group">
+                  <h3>Image pipeline</h3>
+                  <dl>
+                    <div><dt>BPC</dt><dd id="cameraDiagBpc">—</dd></div>
+                    <div><dt>WPC</dt><dd id="cameraDiagWpc">—</dd></div>
+                    <div><dt>Gamma</dt><dd id="cameraDiagGamma">—</dd></div>
+                    <div><dt>Lens correction</dt><dd id="cameraDiagLenc">—</dd></div>
+                    <div><dt>Mirror</dt><dd id="cameraDiagMirror">—</dd></div>
+                    <div><dt>Flip</dt><dd id="cameraDiagFlip">—</dd></div>
+                  </dl>
+                  <h3 class="camera-diag-health-title">Diagnostic health</h3>
+                  <dl>
+                    <div><dt>Snapshot age</dt><dd id="cameraDiagAge">—</dd></div>
+                    <div><dt>Register read</dt><dd id="cameraDiagRead">—</dd></div>
+                  </dl>
+                </section>
+              </div>
             </section>
             <section
               class="card"
@@ -1152,6 +1219,12 @@
               </div>
             </section>
           </div>
+          <section class="card log-card camera-log-card" data-tabs="camera">
+            <div class="log-head">
+              <div class="log-state"><i></i><span id="cameraLogState">Camera log · filtered</span></div>
+            </div>
+            <pre id="cameraLogOutput" class="log-output">No camera logs yet</pre>
+          </section>
           <section class="card log-card" data-tabs="diagnostics">
             <div class="log-head">
               <div class="log-state">

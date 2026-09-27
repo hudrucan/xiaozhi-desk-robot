@@ -1525,6 +1525,68 @@
         gap: 8px;
         margin-top: 12px;
       }
+      .camera-diagnostics-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px 24px;
+        margin-top: 13px;
+      }
+      .camera-diag-group {
+        min-width: 0;
+      }
+      .camera-diag-group h3 {
+        margin: 0 0 8px;
+        color: var(--brass);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.7px;
+        text-transform: uppercase;
+      }
+      .camera-diag-group .camera-diag-health-title {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--line2);
+      }
+      .camera-diag-group dl {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0 14px;
+        margin: 0;
+      }
+      .camera-diag-group dl > div {
+        display: flex;
+        min-width: 0;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 0;
+        border-bottom: 1px solid rgba(198, 161, 91, 0.1);
+      }
+      .camera-diag-group dl > div.wide {
+        grid-column: 1 / -1;
+      }
+      .camera-diag-group dt {
+        min-width: 0;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.35;
+      }
+      .camera-diag-group dd {
+        min-width: 0;
+        margin: 0;
+        color: var(--hi);
+        font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        text-align: right;
+        overflow-wrap: anywhere;
+      }
+      .camera-diag-group dd.diag-ok,
+      #cameraDiagState.diag-ok {
+        color: var(--green);
+      }
+      .camera-diag-group dd.diag-warn,
+      #cameraDiagState.diag-warn {
+        color: #e2b46c;
+      }
       .danger-soft {
         color: #ffaaa2;
         border-color: #643a30;
@@ -2183,6 +2245,10 @@
         height: 62dvh;
         min-height: 420px;
       }
+      .camera-log-card {
+        height: 34dvh;
+        min-height: 260px;
+      }
       .log-head {
         display: flex;
         align-items: center;
@@ -2562,6 +2628,10 @@
           height: 54dvh;
           min-height: 380px;
         }
+        .camera-log-card {
+          height: 38dvh;
+          min-height: 260px;
+        }
         .card {
           border-radius: 12px;
         }
@@ -2661,8 +2731,13 @@
           grid-template-columns: 1fr;
         }
         .camera-settings-grid,
-        .camera-settings-actions {
+        .camera-settings-actions,
+        .camera-diagnostics-grid,
+        .camera-diag-group dl {
           grid-template-columns: 1fr;
+        }
+        .camera-diag-group dl > div.wide {
+          grid-column: auto;
         }
         .status,
         .device-grid {

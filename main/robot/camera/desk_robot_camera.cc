@@ -19,6 +19,7 @@ namespace {
 constexpr int kMcpFreshWarmupFrames = 2;
 constexpr int kMcpLowLightWarmupFrames = 4;
 constexpr int kMcpHighResolutionWarmupFrames = 8;
+constexpr int64_t kDiagnosticsRefreshIntervalMs = 2000;
 
 bool IsHighResolution(CameraResolution resolution) {
     return resolution == CameraResolution::kXga ||
@@ -42,6 +43,7 @@ bool SensorSettingsEqual(const CameraSensorSettings& lhs,
            lhs.gain_ceiling == rhs.gain_ceiling &&
            lhs.auto_white_balance == rhs.auto_white_balance &&
            lhs.awb_gain == rhs.awb_gain &&
+           lhs.advanced_awb == rhs.advanced_awb &&
            lhs.white_balance_mode == rhs.white_balance_mode &&
            lhs.black_pixel_correction == rhs.black_pixel_correction &&
            lhs.white_pixel_correction == rhs.white_pixel_correction &&
@@ -380,6 +382,45 @@ DeskRobotCamera::McpRequestHealth DeskRobotCamera::GetMcpRequestHealth() const {
     return health;
 }
 
+CameraDiagnostics DeskRobotCamera::GetDiagnostics() {
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    CameraDiagnostics cached;
+    {
+        std::lock_guard<std::mutex> cache_lock(diagnostics_cache_mutex_);
+        cached = diagnostics_cache_;
+    }
+    if (cached.last_read_ms > 0 &&
+        now_ms - cached.last_read_ms < kDiagnosticsRefreshIntervalMs) {
+        return cached;
+    }
+
+    std::unique_lock<std::mutex> refresh_lock(diagnostics_refresh_mutex_,
+                                               std::try_to_lock);
+    if (!refresh_lock.owns_lock()) {
+        return cached;
+    }
+    // Keep the normal ownership -> capture -> shared-I2C order. Every lock in
+    // this diagnostic path is a try-lock so camera work always wins.
+    std::unique_lock<std::mutex> ownership_lock(ownership_mutex_, std::try_to_lock);
+    if (!ownership_lock.owns_lock() || mcp_operation_active_.load()) {
+        return cached;
+    }
+    std::unique_lock<std::timed_mutex> capture_lock(capture_mutex_, std::try_to_lock);
+    if (!capture_lock.owns_lock()) {
+        return cached;
+    }
+
+    CameraDiagnostics refreshed;
+    if (!Esp32Camera::ReadDiagnostics(refreshed)) {
+        return cached;
+    }
+    {
+        std::lock_guard<std::mutex> cache_lock(diagnostics_cache_mutex_);
+        diagnostics_cache_ = refreshed;
+    }
+    return refreshed;
+}
+
 const char* DeskRobotCamera::McpRequestStateName(McpRequestState state) {
     switch (state) {
         case McpRequestState::kCapturing:
@@ -536,6 +577,7 @@ CameraSensorControls DeskRobotCamera::ToSensorControls(const CameraSensorSetting
         .gain_ceiling = ToGainCeiling(settings.gain_ceiling),
         .auto_white_balance = settings.auto_white_balance,
         .awb_gain = settings.awb_gain,
+        .advanced_awb = settings.advanced_awb,
         .white_balance_mode = settings.white_balance_mode,
         .black_pixel_correction = settings.black_pixel_correction,
         .white_pixel_correction = settings.white_pixel_correction,

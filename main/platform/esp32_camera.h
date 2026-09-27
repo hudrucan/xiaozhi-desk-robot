@@ -1,6 +1,8 @@
 #pragma once
 #include "sdkconfig.h"
 
+#include <array>
+#include <cstdint>
 #include <lvgl.h>
 #include <memory>
 #include <mutex>
@@ -11,6 +13,7 @@
 #include <freertos/queue.h>
 
 #include "camera.h"
+#include "camera_diagnostics.h"
 #include "esp_camera.h"
 #include "jpg/image_to_jpeg.h"
 
@@ -50,6 +53,7 @@ struct CameraSensorControls {
     gainceiling_t gain_ceiling = GAINCEILING_8X;
     bool auto_white_balance = true;
     bool awb_gain = true;
+    bool advanced_awb = false;
     int white_balance_mode = 0;
     bool black_pixel_correction = false;
     bool white_pixel_correction = true;
@@ -72,6 +76,11 @@ private:
     std::mutex mcp_snapshot_mutex_;
     OwnedJpeg mcp_snapshot_;
     std::mutex* shared_i2c_mutex_ = nullptr;
+    std::array<uint8_t, 11> ov5640_native_ccm_{};
+    bool ov5640_native_ccm_valid_ = false;
+    std::array<uint8_t, 31> ov5640_native_awb_table_{};
+    uint32_t ov5640_native_awb_table_hash_ = 0;
+    bool ov5640_native_awb_table_valid_ = false;
 
 public:
     Esp32Camera(const camera_config_t& config, std::mutex* shared_i2c_mutex = nullptr);
@@ -88,6 +97,7 @@ public:
     virtual bool SetSwapBytes(bool enabled) override;
     bool ApplySensorControls(const CameraSensorControls& controls);
     bool ApplyCaptureSettings(framesize_t frame_size, int jpeg_quality);
+    bool ReadDiagnostics(CameraDiagnostics& diagnostics);
     int SensorPid() const;
     virtual std::expected<std::string, std::string> Explain(const std::string& question) override;
 
@@ -96,5 +106,8 @@ protected:
     void ReturnCurrentFrame();
 
 private:
+    void CaptureOv5640NativeCcm(sensor_t* sensor);
+    void CaptureOv5640NativeAwbTable(sensor_t* sensor);
+    int ApplySaturation(sensor_t* sensor, int saturation);
     bool CaptureInternal(bool update_preview, int discard_frames);
 };

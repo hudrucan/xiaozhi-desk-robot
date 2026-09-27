@@ -103,6 +103,7 @@ cJSON* AddSettings(cJSON* root, const CameraSettingsConfig& settings) {
                             2 << static_cast<int>(settings.sensor.gain_ceiling));
     cJSON_AddBoolToObject(sensor, "auto_white_balance", settings.sensor.auto_white_balance);
     cJSON_AddBoolToObject(sensor, "awb_gain", settings.sensor.awb_gain);
+    cJSON_AddBoolToObject(sensor, "advanced_awb", settings.sensor.advanced_awb);
     cJSON_AddNumberToObject(sensor, "white_balance_mode", settings.sensor.white_balance_mode);
     cJSON_AddBoolToObject(sensor, "black_pixel_correction",
                           settings.sensor.black_pixel_correction);
@@ -203,6 +204,7 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
     if (valid) valid = ReadBool(sensor, "auto_white_balance",
                                 settings.sensor.auto_white_balance, error);
     if (valid) valid = ReadBool(sensor, "awb_gain", settings.sensor.awb_gain, error);
+    if (valid) valid = ReadBool(sensor, "advanced_awb", settings.sensor.advanced_awb, error);
     if (valid) valid = ReadInt(sensor, "white_balance_mode", 0, 4,
                                settings.sensor.white_balance_mode, error);
     if (valid) valid = ReadBool(sensor, "black_pixel_correction",

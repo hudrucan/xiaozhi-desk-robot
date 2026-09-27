@@ -53,7 +53,6 @@ struct RobotStatus {
     uint32_t camera_vision_ms = 0;
     size_t camera_image_bytes = 0;
     size_t camera_response_bytes = 0;
-
     int motor_speed = 0;
     int drive_duration_ms = 0;
     bool emotion_movement_enabled = false;

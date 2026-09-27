@@ -2394,6 +2394,10 @@ private:
         return camera_ != nullptr ? camera_->SensorName() : "Unavailable";
     }
 
+    CameraDiagnostics GetCameraDiagnostics() override {
+        return camera_ != nullptr ? camera_->GetDiagnostics() : CameraDiagnostics{};
+    }
+
     SecondaryOled::Config GetSecondaryDisplayConfig() const override {
 #ifdef SECONDARY_OLED_I2C_ADDRESS
         return secondary_display_.GetConfig();

@@ -5,8 +5,8 @@ let cameraNavigationStopPending = false;
 const cameraAdvancedIds = ["cameraBrightness", "cameraContrast", "cameraSaturation",
   "cameraAeLevel", "cameraAutoExposure", "cameraAec2", "cameraManualExposure",
   "cameraAutoGain", "cameraManualGain", "cameraGainCeiling", "cameraAwb",
-  "cameraAwbGain", "cameraWbMode", "cameraBpc", "cameraWpc", "cameraGamma",
-  "cameraLenc", "cameraMirror", "cameraFlipSetting"];
+  "cameraAwbGain", "cameraAdvancedAwb", "cameraWbMode", "cameraBpc", "cameraWpc",
+  "cameraGamma", "cameraLenc", "cameraMirror", "cameraFlipSetting"];
 
 function setCameraAdvancedState() {
   const custom = $("#cameraProfile").value === "custom";
@@ -40,6 +40,7 @@ function populateCameraSettings(data) {
   $("#cameraGainCeiling").value = sensor.gain_ceiling;
   $("#cameraAwb").checked = sensor.auto_white_balance;
   $("#cameraAwbGain").checked = sensor.awb_gain;
+  $("#cameraAdvancedAwb").checked = sensor.advanced_awb;
   $("#cameraWbMode").value = sensor.white_balance_mode;
   $("#cameraBpc").checked = sensor.black_pixel_correction;
   $("#cameraWpc").checked = sensor.white_pixel_correction;
@@ -84,6 +85,7 @@ function collectCameraSettings() {
       manual_exposure: number("cameraManualExposure"), auto_gain: checked("cameraAutoGain"),
       manual_gain: number("cameraManualGain"), gain_ceiling: number("cameraGainCeiling"),
       auto_white_balance: checked("cameraAwb"), awb_gain: checked("cameraAwbGain"),
+      advanced_awb: checked("cameraAdvancedAwb"),
       white_balance_mode: number("cameraWbMode"), black_pixel_correction: checked("cameraBpc"),
       white_pixel_correction: checked("cameraWpc"), gamma: checked("cameraGamma"),
       lens_correction: checked("cameraLenc"), mirror: checked("cameraMirror"),
@@ -238,6 +240,8 @@ async function toggleBrowserLive() {
 }
 
 const logOutput = $("#logOutput");
+const cameraLogOutput = $("#cameraLogOutput");
+const cameraLogState = $("#cameraLogState");
 const pauseLog = $("#pauseLog");
 const logState = $("#logState");
 const autoScroll = $("#autoScroll");
@@ -292,6 +296,18 @@ function renderLogs(force = false) {
   logRenderPending = false;
 }
 
+function renderCameraLogs() {
+  if (!cameraLogOutput) return;
+  const pinned = cameraLogOutput.scrollHeight - cameraLogOutput.scrollTop -
+    cameraLogOutput.clientHeight < 30;
+  const markers = ["Esp32Camera", "DeskRobotCamera", "camera_mcp", "jpeg_to_image"];
+  const lines = allLogs.split("\n").filter((line) =>
+    markers.some((marker) => line.includes(marker)),
+  ).slice(-160);
+  cameraLogOutput.textContent = lines.join("\n") || "No camera logs yet";
+  if (pinned) cameraLogOutput.scrollTop = cameraLogOutput.scrollHeight;
+}
+
 async function fetchLogs() {
   if (logPaused || logPending) return;
   logPending = true;
@@ -319,6 +335,7 @@ async function fetchLogs() {
       } catch (_) {}
     }
     if (changed || logRenderPending) renderLogs();
+    if (changed) renderCameraLogs();
   } catch (_) {
     logState.textContent = "Log disconnected";
   } finally {
@@ -330,6 +347,9 @@ function toggleLogPause() {
   logPaused = !logPaused;
   pauseLog.textContent = logPaused ? "Resume" : "Pause";
   logState.textContent = logPaused ? "Log paused" : "Live system log";
+  cameraLogState.textContent = logPaused
+    ? "Camera log · filtered · Paused"
+    : "Camera log · filtered";
   if (logPaused) {
     clearInterval(logPollTimer);
     logPollTimer = null;
@@ -346,6 +366,7 @@ function clearLogs() {
     localStorage.removeItem("xiaozhiLogs");
   } catch (_) {}
   renderLogs(true);
+  renderCameraLogs();
 }
 
 function downloadLogs() {
@@ -362,6 +383,7 @@ function restoreLogs() {
     if (allLogs) {
       logStarted = true;
       renderLogs(true);
+      renderCameraLogs();
     }
   } catch (_) {}
 }

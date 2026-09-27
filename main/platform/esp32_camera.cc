@@ -2,6 +2,7 @@
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -23,6 +24,31 @@ constexpr size_t kPreviewDecodeMaxWidth = 320;
 constexpr size_t kPreviewDecodeMaxHeight = 240;
 constexpr int kOv5640GainCeilingRegister = 0x3A18;
 constexpr int kOv5640GainCeilingMask = 0x03FF;
+constexpr int kOv5640CcmFirstRegister = 0x5381;
+constexpr int kOv5640CcmRegisterMask = 0xFF;
+constexpr int kOv5640AwbTableFirstRegister = 0x5180;
+constexpr int kOv5640AwbTableLastRegister = 0x519E;
+constexpr size_t kOv5640AwbTableSize =
+    kOv5640AwbTableLastRegister - kOv5640AwbTableFirstRegister + 1;
+constexpr size_t kOv5640AdvancedAwbIndex = 0x5183 - kOv5640AwbTableFirstRegister;
+
+uint32_t HashRegisterBytes(const uint8_t* bytes, size_t length) {
+    uint32_t hash = 2166136261u;
+    for (size_t index = 0; index < length; ++index) {
+        hash ^= bytes[index];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+std::array<uint8_t, kOv5640AwbTableSize> NormalizeAwbCalibrationTable(
+    const std::array<uint8_t, kOv5640AwbTableSize>& table) {
+    auto normalized = table;
+    // 0x5183 bit 7 selects Advanced/Simple AWB and is runtime mode state,
+    // not calibration data. Preserve the other seven calibration bits.
+    normalized[kOv5640AdvancedAwbIndex] &= 0x7F;
+    return normalized;
+}
 
 int ApplyGainCeiling(sensor_t* sensor, gainceiling_t ceiling) {
     if (sensor->id.PID != OV5640_PID) {
@@ -165,6 +191,8 @@ Esp32Camera::Esp32Camera(const camera_config_t& config, std::mutex* shared_i2c_m
 
     sensor_t* s = esp_camera_sensor_get();
     if (s) {
+        CaptureOv5640NativeCcm(s);
+        CaptureOv5640NativeAwbTable(s);
         if (s->id.PID == GC0308_PID) {
             s->set_hmirror(s, 0);  // Control camera mirror: 1 for mirror, 0 for normal
         }
@@ -391,6 +419,199 @@ bool Esp32Camera::SetSwapBytes(bool enabled) {
     return true;
 }
 
+void Esp32Camera::CaptureOv5640NativeCcm(sensor_t* sensor) {
+    if (sensor->id.PID != OV5640_PID) {
+        return;
+    }
+
+    for (size_t index = 0; index < ov5640_native_ccm_.size(); ++index) {
+        const int value = sensor->get_reg(
+            sensor, kOv5640CcmFirstRegister + static_cast<int>(index),
+            kOv5640CcmRegisterMask);
+        if (value < 0) {
+            ESP_LOGW(TAG,
+                     "Cannot capture native OV5640 CCM at 0x%04x; neutral saturation "
+                     "will use the driver fallback",
+                     kOv5640CcmFirstRegister + static_cast<int>(index));
+            ov5640_native_ccm_valid_ = false;
+            return;
+        }
+        ov5640_native_ccm_[index] = static_cast<uint8_t>(value);
+    }
+    ov5640_native_ccm_valid_ = true;
+    ESP_LOGI(TAG, "Captured native OV5640 neutral CCM");
+}
+
+void Esp32Camera::CaptureOv5640NativeAwbTable(sensor_t* sensor) {
+    if (sensor->id.PID != OV5640_PID) {
+        return;
+    }
+
+    for (size_t index = 0; index < ov5640_native_awb_table_.size(); ++index) {
+        const int value = sensor->get_reg(
+            sensor, kOv5640AwbTableFirstRegister + static_cast<int>(index),
+            kOv5640CcmRegisterMask);
+        if (value < 0) {
+            ESP_LOGW(TAG, "Cannot capture native OV5640 AWB table at 0x%04x",
+                     kOv5640AwbTableFirstRegister + static_cast<int>(index));
+            ov5640_native_awb_table_valid_ = false;
+            return;
+        }
+        ov5640_native_awb_table_[index] = static_cast<uint8_t>(value);
+    }
+    const auto normalized = NormalizeAwbCalibrationTable(ov5640_native_awb_table_);
+    ov5640_native_awb_table_hash_ =
+        HashRegisterBytes(normalized.data(), normalized.size());
+    ov5640_native_awb_table_valid_ = true;
+    ESP_LOGI(TAG, "Captured native OV5640 AWB calibration table");
+}
+
+bool Esp32Camera::ReadDiagnostics(CameraDiagnostics& diagnostics) {
+    CameraDiagnostics snapshot;
+    sensor_t* sensor = esp_camera_sensor_get();
+    snapshot.available = sensor != nullptr && sensor->id.PID == OV5640_PID;
+    if (!snapshot.available) {
+        diagnostics = snapshot;
+        return false;
+    }
+
+    std::unique_lock<std::mutex> i2c_lock;
+    if (shared_i2c_mutex_ != nullptr) {
+        i2c_lock = std::unique_lock<std::mutex>(*shared_i2c_mutex_, std::try_to_lock);
+        if (!i2c_lock.owns_lock()) {
+            return false;
+        }
+    }
+
+    const int64_t read_start_us = esp_timer_get_time();
+    auto read8 = [sensor](int address, uint8_t& output) {
+        const int value = sensor->get_reg(sensor, address, 0xFF);
+        if (value < 0) {
+            return false;
+        }
+        output = static_cast<uint8_t>(value);
+        return true;
+    };
+    auto read16 = [&read8](int address, uint16_t& output) {
+        uint8_t high = 0;
+        uint8_t low = 0;
+        if (!read8(address, high) || !read8(address + 1, low)) {
+            return false;
+        }
+        output = static_cast<uint16_t>((static_cast<uint16_t>(high) << 8) | low);
+        return true;
+    };
+
+    snapshot.awb_enabled = sensor->status.awb;
+    snapshot.awb_gain_enabled = sensor->status.awb_gain;
+    snapshot.advanced_awb_enabled = sensor->status.dcw;
+    snapshot.wb_mode = sensor->status.wb_mode;
+    snapshot.aec_enabled = sensor->status.aec;
+    snapshot.aec2_enabled = sensor->status.aec2;
+    snapshot.agc_enabled = sensor->status.agc;
+    snapshot.bpc_enabled = sensor->status.bpc;
+    snapshot.wpc_enabled = sensor->status.wpc;
+    snapshot.gamma_enabled = sensor->status.raw_gma;
+    snapshot.lens_correction_enabled = sensor->status.lenc;
+    snapshot.mirror_enabled = sensor->status.hmirror;
+    snapshot.flip_enabled = sensor->status.vflip;
+
+    uint8_t exposure_high = 0;
+    uint8_t exposure_middle = 0;
+    uint8_t exposure_low = 0;
+    uint8_t gain_high = 0;
+    uint8_t gain_low = 0;
+    if (!read8(0x3406, snapshot.wb_control_raw) ||
+        !read16(0x3400, snapshot.awb_r_gain_raw) ||
+        !read16(0x3402, snapshot.awb_g_gain_raw) ||
+        !read16(0x3404, snapshot.awb_b_gain_raw) ||
+        !read8(0x5000, snapshot.isp_control_00_raw) ||
+        !read8(0x5001, snapshot.isp_control_01_raw) ||
+        !read8(0x3500, exposure_high) ||
+        !read8(0x3501, exposure_middle) ||
+        !read8(0x3502, exposure_low) ||
+        !read8(0x350A, gain_high) ||
+        !read8(0x350B, gain_low) ||
+        !read16(kOv5640GainCeilingRegister, snapshot.gain_ceiling_raw) ||
+        !read8(0x3A0F, snapshot.ae_target_high) ||
+        !read8(0x3A10, snapshot.ae_target_low) ||
+        !read8(0x3A1B, snapshot.ae_target_high_2) ||
+        !read8(0x3A1E, snapshot.ae_target_low_2) ||
+        !read8(0x3A11, snapshot.ae_fast_high) ||
+        !read8(0x3A1F, snapshot.ae_fast_low)) {
+        return false;
+    }
+    snapshot.awb_r_gain_raw &= 0x0FFF;
+    snapshot.awb_g_gain_raw &= 0x0FFF;
+    snapshot.awb_b_gain_raw &= 0x0FFF;
+
+    snapshot.exposure_raw =
+        (static_cast<uint32_t>(exposure_high & 0x0F) << 12) |
+        (static_cast<uint32_t>(exposure_middle) << 4) |
+        ((exposure_low & 0xF0) >> 4);
+    snapshot.gain_raw = static_cast<uint8_t>(((gain_low & 0xF0) >> 4) |
+                                             ((gain_high & 0x03) << 4));
+    if ((gain_low & 0x0F) != 0) {
+        ++snapshot.gain_raw;
+    }
+    snapshot.gain_ceiling_raw &= kOv5640GainCeilingMask;
+
+    for (size_t index = 0; index < snapshot.ccm_current.size(); ++index) {
+        if (!read8(kOv5640CcmFirstRegister + static_cast<int>(index),
+                   snapshot.ccm_current[index])) {
+            return false;
+        }
+    }
+    snapshot.ccm_native = ov5640_native_ccm_;
+    snapshot.ccm_native_valid = ov5640_native_ccm_valid_;
+    snapshot.ccm_matches_native =
+        snapshot.ccm_native_valid && snapshot.ccm_current == snapshot.ccm_native;
+
+    std::array<uint8_t, kOv5640AwbTableSize> current_awb_table{};
+    for (size_t index = 0; index < current_awb_table.size(); ++index) {
+        if (!read8(kOv5640AwbTableFirstRegister + static_cast<int>(index),
+                   current_awb_table[index])) {
+            return false;
+        }
+    }
+    const auto normalized_current = NormalizeAwbCalibrationTable(current_awb_table);
+    const auto normalized_native =
+        NormalizeAwbCalibrationTable(ov5640_native_awb_table_);
+    snapshot.awb_table_current_hash =
+        HashRegisterBytes(normalized_current.data(), normalized_current.size());
+    snapshot.awb_table_native_hash = ov5640_native_awb_table_hash_;
+    snapshot.awb_table_native_valid = ov5640_native_awb_table_valid_;
+    snapshot.awb_table_matches_native =
+        snapshot.awb_table_native_valid &&
+        normalized_current == normalized_native;
+
+    const int64_t read_end_us = esp_timer_get_time();
+    snapshot.register_read_ms = static_cast<uint32_t>(
+        std::max<int64_t>(0, (read_end_us - read_start_us + 999) / 1000));
+    snapshot.last_read_ms = read_end_us / 1000;
+    snapshot.valid = true;
+    diagnostics = snapshot;
+    return true;
+}
+
+int Esp32Camera::ApplySaturation(sensor_t* sensor, int saturation) {
+    if (sensor->id.PID != OV5640_PID || saturation != 0 ||
+        !ov5640_native_ccm_valid_) {
+        return sensor->set_saturation(sensor, saturation);
+    }
+
+    for (size_t index = 0; index < ov5640_native_ccm_.size(); ++index) {
+        const int result = sensor->set_reg(
+            sensor, kOv5640CcmFirstRegister + static_cast<int>(index),
+            kOv5640CcmRegisterMask, ov5640_native_ccm_[index]);
+        if (result != 0) {
+            return result;
+        }
+    }
+    sensor->status.saturation = 0;
+    return 0;
+}
+
 bool Esp32Camera::ApplySensorControls(const CameraSensorControls& controls) {
     std::unique_lock<std::mutex> i2c_lock;
     if (shared_i2c_mutex_ != nullptr) {
@@ -404,7 +625,7 @@ bool Esp32Camera::ApplySensorControls(const CameraSensorControls& controls) {
     int result = 0;
     result |= sensor->set_brightness(sensor, controls.brightness);
     result |= sensor->set_contrast(sensor, controls.contrast);
-    result |= sensor->set_saturation(sensor, controls.saturation);
+    result |= ApplySaturation(sensor, controls.saturation);
     result |= sensor->set_exposure_ctrl(sensor, controls.auto_exposure ? 1 : 0);
     result |= sensor->set_aec2(sensor, controls.aec2 ? 1 : 0);
     result |= sensor->set_ae_level(sensor, controls.ae_level);
@@ -419,6 +640,7 @@ bool Esp32Camera::ApplySensorControls(const CameraSensorControls& controls) {
     result |= sensor->set_whitebal(sensor, controls.auto_white_balance ? 1 : 0);
     result |= sensor->set_awb_gain(sensor, controls.awb_gain ? 1 : 0);
     result |= sensor->set_wb_mode(sensor, controls.white_balance_mode);
+    result |= sensor->set_dcw(sensor, controls.advanced_awb ? 1 : 0);
     result |= sensor->set_bpc(sensor, controls.black_pixel_correction ? 1 : 0);
     result |= sensor->set_wpc(sensor, controls.white_pixel_correction ? 1 : 0);
     result |= sensor->set_raw_gma(sensor, controls.gamma ? 1 : 0);

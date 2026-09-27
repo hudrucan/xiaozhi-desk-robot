@@ -137,7 +137,7 @@ function applyTab(tab, updateHash = true) {
 
   if (!document.hidden) {
     setStatusTab(tab);
-    setLogPollingEnabled(tab === "diagnostics");
+    setLogPollingEnabled(tab === "diagnostics" || tab === "camera");
   }
 
   try {
@@ -156,7 +156,7 @@ function handlePageVisibility() {
     return;
   }
   setStatusTab(activeTab);
-  setLogPollingEnabled(activeTab === "diagnostics");
+  setLogPollingEnabled(activeTab === "diagnostics" || activeTab === "camera");
 }
 
 function bindTabs() {
