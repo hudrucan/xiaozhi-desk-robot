@@ -6,6 +6,24 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
+namespace {
+
+bool VisionSettingsEqual(const CameraVisionSettings& lhs,
+                         const CameraVisionSettings& rhs) {
+    return lhs.enabled == rhs.enabled &&
+           lhs.quiet_interval_ms == rhs.quiet_interval_ms &&
+           lhs.active_interval_ms == rhs.active_interval_ms &&
+           lhs.cell_threshold == rhs.cell_threshold &&
+           lhs.activity_ratio_bp == rhs.activity_ratio_bp &&
+           lhs.enter_ratio_bp == rhs.enter_ratio_bp &&
+           lhs.exit_ratio_bp == rhs.exit_ratio_bp &&
+           lhs.enter_samples == rhs.enter_samples &&
+           lhs.exit_samples == rhs.exit_samples &&
+           lhs.activity_hold_ms == rhs.activity_hold_ms;
+}
+
+}  // namespace
+
 CameraObserver::~CameraObserver() {
     if (scratch_ != nullptr) {
         heap_caps_free(scratch_);
@@ -15,6 +33,9 @@ CameraObserver::~CameraObserver() {
 void CameraObserver::Configure(const CameraVisionSettings& settings) {
     std::lock_guard<std::mutex> lock(status_mutex_);
     const bool enabling = settings.enabled && !status_.enabled;
+    const bool reset_temporal_for_settings =
+        settings.enabled && status_.enabled &&
+        !VisionSettingsEqual(settings_, settings);
     settings_ = settings;
     status_.enabled = settings.enabled;
     status_.interval_ms = settings.quiet_interval_ms;
@@ -32,6 +53,7 @@ void CameraObserver::Configure(const CameraVisionSettings& settings) {
         high_motion_samples_ = 0;
         low_motion_samples_ = 0;
         burst_deadline_ms_ = 0;
+        ResetTemporalLocked();
     } else if (enabling || status_.state == CameraObserverState::kDisabled) {
         status_.state = CameraObserverState::kWaiting;
         status_.suspend_reason = CameraObserverSuspendReason::kWaitingFirstSample;
@@ -42,6 +64,9 @@ void CameraObserver::Configure(const CameraVisionSettings& settings) {
         high_motion_samples_ = 0;
         low_motion_samples_ = 0;
         burst_deadline_ms_ = 0;
+        ResetTemporalLocked();
+    } else if (reset_temporal_for_settings) {
+        ResetTemporalLocked();
     }
 }
 
@@ -63,6 +88,10 @@ void CameraObserver::SetState(CameraObserverState state,
     status_.state = status_.enabled ? state : CameraObserverState::kDisabled;
     status_.suspend_reason = status_.enabled ? reason
                                              : CameraObserverSuspendReason::kDisabled;
+    if (state != CameraObserverState::kActive &&
+        state != CameraObserverState::kWaiting) {
+        ResetTemporalLocked();
+    }
     if (status_.enabled && count_skip) {
         ++status_.skipped_count;
     }
@@ -74,6 +103,7 @@ void CameraObserver::RecordFailure(CameraObserverSuspendReason reason) {
                                     : CameraObserverState::kDisabled;
     status_.suspend_reason = status_.enabled ? reason
                                              : CameraObserverSuspendReason::kDisabled;
+    ResetTemporalLocked();
     if (status_.enabled) {
         ++status_.failure_count;
     }
@@ -88,6 +118,12 @@ void CameraObserver::ResetBaseline() {
     high_motion_samples_ = 0;
     low_motion_samples_ = 0;
     burst_deadline_ms_ = 0;
+    ResetTemporalLocked();
+}
+
+void CameraObserver::ResetTemporalLocked() {
+    temporal_tracker_.Reset();
+    status_.temporal = temporal_tracker_.GetResult();
 }
 
 uint8_t CameraObserver::Rgb565Luma(uint16_t pixel) {
@@ -112,6 +148,7 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         std::lock_guard<std::mutex> lock(status_mutex_);
         settings = settings_;
         result.sampling_state = status_.sampling_state;
+        result.temporal = status_.temporal;
     }
     const int64_t analyze_start_us = esp_timer_get_time();
     uint32_t luma_sum = 0;
@@ -230,7 +267,15 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
             status_.sampling_state == CameraObserverSamplingState::kQuiet
                 ? settings.quiet_interval_ms
                 : settings.active_interval_ms;
+        if (status_.sampling_state == CameraObserverSamplingState::kQuiet) {
+            ResetTemporalLocked();
+        } else if (spatial.valid) {
+            status_.temporal = temporal_tracker_.Observe(now_ms, spatial);
+        } else {
+            status_.temporal = temporal_tracker_.Advance(now_ms);
+        }
         result.sampling_state = status_.sampling_state;
+        result.temporal = status_.temporal;
     }
 
     if (status_.enabled) {

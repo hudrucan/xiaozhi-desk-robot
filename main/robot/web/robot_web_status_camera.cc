@@ -159,6 +159,11 @@ cJSON* RobotWebStatus::CreateCamera() {
                                               ? std::max<int64_t>(
                                                     0, now_ms - observer.last_motion_event_ms)
                                               : 0;
+    const int64_t last_crossing_age_ms = observer.temporal.last_crossing_ms > 0
+                                             ? std::max<int64_t>(
+                                                   0, now_ms -
+                                                          observer.temporal.last_crossing_ms)
+                                             : 0;
     cJSON_AddBoolToObject(root, "camera_vision_observer_enabled", observer.enabled);
     cJSON_AddStringToObject(root, "camera_vision_observer_state",
                             CameraObserver::StateName(observer.state));
@@ -226,6 +231,32 @@ cJSON* RobotWebStatus::CreateCamera() {
     cJSON_AddStringToObject(
         root, "camera_motion_vertical_region",
         CameraMotionTracker::VerticalRegionName(observer.spatial.vertical_region));
+    cJSON_AddBoolToObject(root, "camera_motion_track_valid",
+                          observer.temporal.valid);
+    cJSON_AddNumberToObject(root, "camera_motion_track_samples",
+                            observer.temporal.sample_count);
+    cJSON_AddNumberToObject(root, "camera_motion_track_span_ms",
+                            observer.temporal.span_ms);
+    cJSON_AddNumberToObject(root, "camera_motion_velocity_x",
+                            observer.temporal.velocity_x_per_sec);
+    cJSON_AddNumberToObject(root, "camera_motion_velocity_y",
+                            observer.temporal.velocity_y_per_sec);
+    cJSON_AddStringToObject(
+        root, "camera_motion_direction",
+        CameraMotionTemporalTracker::DirectionName(observer.temporal.direction));
+    cJSON_AddBoolToObject(root, "camera_motion_crossed_center",
+                          observer.temporal.crossed_center);
+    cJSON_AddStringToObject(
+        root, "camera_motion_crossing",
+        CameraMotionTemporalTracker::CrossingName(observer.temporal.crossing));
+    cJSON_AddNumberToObject(root, "camera_motion_crossing_count",
+                            observer.temporal.crossing_count);
+    cJSON_AddStringToObject(
+        root, "camera_motion_last_crossing",
+        CameraMotionTemporalTracker::CrossingName(
+            observer.temporal.last_crossing));
+    cJSON_AddNumberToObject(root, "camera_motion_last_crossing_age_ms",
+                            last_crossing_age_ms);
 
     const int64_t event_frame_age_ms = event_frame.frame_ms > 0
                                            ? std::max<int64_t>(

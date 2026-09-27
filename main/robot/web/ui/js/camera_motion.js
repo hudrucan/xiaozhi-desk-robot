@@ -165,12 +165,32 @@ function drawCameraMotionOverlay(context, canvas, motion) {
 function renderCameraMotionTelemetry(status, hasSample) {
   const valid = hasSample && !!status.camera_motion_spatial_valid;
   const set = (id, value) => { $("#" + id).textContent = value; };
+  const title = (value) => {
+    const text = String(value || "none").replaceAll("_", " ");
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
   const samplingState = String(
     status.camera_vision_observer_sampling_state || "quiet").replaceAll("_", " ");
   set("cameraObserverSamplingState",
     samplingState.charAt(0).toUpperCase() + samplingState.slice(1));
   set("cameraObserverCurrentInterval",
     fmtMs(Number(status.camera_vision_observer_current_interval_ms) || 0));
+  const trackSamples = Number(status.camera_motion_track_samples) || 0;
+  const trackValid = !!status.camera_motion_track_valid;
+  set("cameraMotionTrack", trackValid ? "Tracked" : trackSamples > 0 ? "Collecting" : "None");
+  set("cameraMotionDirection", title(status.camera_motion_direction));
+  set("cameraMotionVelocity", trackValid
+    ? Number(status.camera_motion_velocity_x).toFixed(2) + " / " +
+      Number(status.camera_motion_velocity_y).toFixed(2) + " norm/s"
+    : "—");
+  set("cameraMotionHistory", trackSamples + " samples · " +
+    fmtMs(Number(status.camera_motion_track_span_ms) || 0));
+  const lastCrossing = String(status.camera_motion_last_crossing || "none");
+  set("cameraMotionCrossing", lastCrossing !== "none"
+    ? title(lastCrossing).replace(" to ", " → ") + " · " +
+      fmtMs(Number(status.camera_motion_last_crossing_age_ms) || 0) + " ago"
+    : "—");
+  set("cameraMotionCrossingCount", Number(status.camera_motion_crossing_count) || 0);
   if (!valid) {
     ["cameraMotionActiveCells", "cameraMotionCentroid", "cameraMotionRegion",
       "cameraMotionBbox", "cameraMotionBboxArea"].forEach((id) => set(id, "—"));

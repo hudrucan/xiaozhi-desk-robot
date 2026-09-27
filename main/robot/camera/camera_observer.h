@@ -1,5 +1,6 @@
 #pragma once
 
+#include "camera_motion_temporal_tracker.h"
 #include "camera_motion_tracker.h"
 #include "camera_settings.h"
 
@@ -53,6 +54,7 @@ struct CameraObserverStatus {
     float center_activity_score = 0.0f;
     float changed_pixel_ratio = 0.0f;
     CameraMotionSpatialMetrics spatial;
+    CameraMotionTemporalResult temporal;
     bool motion_active = false;
     uint32_t motion_event_count = 0;
     int64_t last_motion_event_ms = 0;
@@ -72,6 +74,7 @@ struct CameraObserverAnalysisResult {
     bool motion_exited = false;
     CameraObserverSamplingState sampling_state = CameraObserverSamplingState::kQuiet;
     CameraMotionSpatialMetrics spatial;
+    CameraMotionTemporalResult temporal;
 };
 
 class CameraObserver {
@@ -108,6 +111,7 @@ public:
 
 private:
     static uint8_t Rgb565Luma(uint16_t pixel);
+    void ResetTemporalLocked();
 
     mutable std::mutex status_mutex_;
     CameraObserverStatus status_;
@@ -116,6 +120,7 @@ private:
     std::array<uint8_t, kGridCells> previous_luma_{};
     std::array<uint8_t, kGridCells> current_luma_{};
     CameraMotionTracker motion_tracker_;
+    CameraMotionTemporalTracker temporal_tracker_;
     bool have_previous_ = false;
     uint8_t high_motion_samples_ = 0;
     uint8_t low_motion_samples_ = 0;

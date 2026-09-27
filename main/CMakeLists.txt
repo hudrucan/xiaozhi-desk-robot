@@ -75,6 +75,7 @@ list(APPEND SOURCES
     "robot/camera/camera_settings.cc"
     "robot/camera/camera_image_policy.cc"
     "robot/camera/camera_motion_tracker.cc"
+    "robot/camera/camera_motion_temporal_tracker.cc"
     "robot/camera/camera_observer.cc"
     "robot/camera/camera_vision_event_frame.cc"
     "robot/camera/desk_robot_camera.cc"
