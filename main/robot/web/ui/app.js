@@ -303,6 +303,7 @@ bindServerConfigControls();
 bindRangeControls();
 bindRobotControls();
 bindCameraAndLogControls();
+bindFaceGeometryEditor();
 bindOledPreviewToggle();
 restoreLogs();
 bindTabs();

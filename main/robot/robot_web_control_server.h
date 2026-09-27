@@ -2,6 +2,7 @@
 
 #include "web/robot_web_adapter.h"
 #include "web/robot_web_camera_settings.h"
+#include "web/robot_web_face_geometry.h"
 #include "web/robot_web_status.h"
 
 #include <esp_http_server.h>
@@ -46,6 +47,9 @@ private:
     static esp_err_t HandleGetCameraSettings(httpd_req_t* request);
     static esp_err_t HandleSaveCameraSettings(httpd_req_t* request);
     static esp_err_t HandleResetCameraSettings(httpd_req_t* request);
+    static esp_err_t HandleGetFaceGeometry(httpd_req_t* request);
+    static esp_err_t HandleSaveFaceGeometry(httpd_req_t* request);
+    static esp_err_t HandleResetFaceGeometry(httpd_req_t* request);
     static esp_err_t HandleGetCameraVisionEventFrame(httpd_req_t* request);
     static esp_err_t HandleSetCameraVisionEventFrame(httpd_req_t* request);
     static esp_err_t HandleCaptureCameraVisionEventFrame(httpd_req_t* request);
@@ -65,6 +69,7 @@ private:
     RobotController& controller_;
     RobotWebAdapter robot_adapter_;
     RobotWebCameraSettings camera_settings_;
+    RobotWebFaceGeometry face_geometry_;
     RobotWebStatus robot_status_;
     ChatProbeHandler chat_probe_handler_;
     std::atomic_bool camera_stream_task_active_{false};

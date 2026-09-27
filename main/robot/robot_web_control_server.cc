@@ -39,6 +39,7 @@ constexpr size_t kAsrConfigRequestMaxBytes = 2 * 1024;
 constexpr size_t kServerConfigRequestMaxBytes = 768;
 constexpr size_t kServerUrlMaxBytes = 512;
 constexpr size_t kCameraSettingsRequestMaxBytes = 4 * 1024;
+constexpr size_t kFaceGeometryRequestMaxBytes = 2 * 1024;
 constexpr size_t kConversationMaxBytes = 12 * 1024;
 constexpr size_t kConversationMessageMaxBytes = 4 * 1024;
 constexpr uint32_t kCameraStreamTaskStackSize = 8192;
@@ -69,6 +70,19 @@ bool ReceiveRequestBody(httpd_req_t* request, char* body, size_t length) {
         }
         received += static_cast<size_t>(result);
     }
+    return true;
+}
+
+bool ReadQueryValue(httpd_req_t* request, const char* key, std::string& value) {
+    const size_t length = httpd_req_get_url_query_len(request);
+    if (length == 0 || length > 128) return false;
+    std::array<char, 129> query{};
+    std::array<char, 64> decoded{};
+    if (httpd_req_get_url_query_str(request, query.data(), length + 1) != ESP_OK ||
+        httpd_query_key_value(query.data(), key, decoded.data(), decoded.size()) != ESP_OK) {
+        return false;
+    }
+    value = decoded.data();
     return true;
 }
 
@@ -352,6 +366,7 @@ RobotWebControlServer::RobotWebControlServer(RobotController& controller,
     : controller_(controller),
       robot_adapter_(controller),
       camera_settings_(controller),
+      face_geometry_(controller),
       robot_status_(controller),
       chat_probe_handler_(std::move(chat_probe_handler)) {
     BeginLogCapture();
@@ -378,7 +393,7 @@ bool RobotWebControlServer::Start(int port) {
     config.max_resp_headers = 16;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
-    config.max_uri_handlers = 30;
+    config.max_uri_handlers = 33;
     config.stack_size = 6144;
     config.recv_wait_timeout = 2;
     config.send_wait_timeout = 2;
@@ -449,6 +464,24 @@ bool RobotWebControlServer::Start(int port) {
         .uri = "/api/camera/settings",
         .method = HTTP_DELETE,
         .handler = HandleResetCameraSettings,
+        .user_ctx = this,
+    };
+    const httpd_uri_t get_face_geometry = {
+        .uri = "/api/face-geometry",
+        .method = HTTP_GET,
+        .handler = HandleGetFaceGeometry,
+        .user_ctx = this,
+    };
+    const httpd_uri_t save_face_geometry = {
+        .uri = "/api/face-geometry",
+        .method = HTTP_PUT,
+        .handler = HandleSaveFaceGeometry,
+        .user_ctx = this,
+    };
+    const httpd_uri_t reset_face_geometry = {
+        .uri = "/api/face-geometry",
+        .method = HTTP_DELETE,
+        .handler = HandleResetFaceGeometry,
         .user_ctx = this,
     };
     const httpd_uri_t get_camera_vision_event_frame = {
@@ -529,6 +562,9 @@ bool RobotWebControlServer::Start(int port) {
         httpd_register_uri_handler(server_, &get_camera_settings) != ESP_OK ||
         httpd_register_uri_handler(server_, &save_camera_settings) != ESP_OK ||
         httpd_register_uri_handler(server_, &reset_camera_settings) != ESP_OK ||
+        httpd_register_uri_handler(server_, &get_face_geometry) != ESP_OK ||
+        httpd_register_uri_handler(server_, &save_face_geometry) != ESP_OK ||
+        httpd_register_uri_handler(server_, &reset_face_geometry) != ESP_OK ||
         httpd_register_uri_handler(server_, &get_camera_vision_event_frame) != ESP_OK ||
         httpd_register_uri_handler(server_, &set_camera_vision_event_frame) != ESP_OK ||
         httpd_register_uri_handler(server_, &capture_camera_vision_event_frame) != ESP_OK ||
@@ -1132,6 +1168,75 @@ esp_err_t RobotWebControlServer::HandleResetCameraSettings(httpd_req_t* request)
     }
     return SendJson(request, "200 OK",
                     self->camera_settings_.Encode(true, "Camera defaults restored"));
+}
+
+esp_err_t RobotWebControlServer::HandleGetFaceGeometry(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    std::string emotion;
+    if (!ReadQueryValue(request, "emotion", emotion)) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Missing emotion"})");
+    }
+    FaceGeometry defaults{};
+    if (!FaceGeometryStore::GetDefault(emotion, defaults)) {
+        return SendJson(request, "404 Not Found",
+                        self->face_geometry_.Encode(emotion));
+    }
+    return SendJson(request, "200 OK", self->face_geometry_.Encode(emotion));
+}
+
+esp_err_t RobotWebControlServer::HandleSaveFaceGeometry(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (request->content_len <= 0 ||
+        request->content_len > static_cast<int>(kFaceGeometryRequestMaxBytes)) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid face geometry request"})");
+    }
+    std::vector<char> body(static_cast<size_t>(request->content_len));
+    if (!ReceiveRequestBody(request, body.data(), body.size())) return ESP_FAIL;
+
+    std::string emotion;
+    FaceGeometry geometry{};
+    std::string error;
+    if (!self->face_geometry_.Decode(body.data(), body.size(), emotion, geometry, error)) {
+        cJSON* response = cJSON_CreateObject();
+        cJSON_AddBoolToObject(response, "ok", false);
+        cJSON_AddStringToObject(response, "message", error.c_str());
+        return SendJson(request, "400 Bad Request",
+                        EncodeJson(response, R"({"ok":false})"));
+    }
+    if (!self->controller_.SaveFaceGeometry(emotion, geometry)) {
+        return SendJson(request, "500 Internal Server Error",
+                        self->face_geometry_.Encode(emotion, false,
+                                                    "Could not persist face geometry"));
+    }
+    return SendJson(request, "200 OK",
+                    self->face_geometry_.Encode(emotion, true, "Face geometry saved"));
+}
+
+esp_err_t RobotWebControlServer::HandleResetFaceGeometry(httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    std::string emotion;
+    if (!ReadQueryValue(request, "emotion", emotion)) {
+        if (!self->controller_.ResetAllFaceGeometry()) {
+            return SendJson(request, "500 Internal Server Error",
+                            R"({"ok":false,"message":"Could not reset face geometry"})");
+        }
+        return SendJson(request, "200 OK",
+                        R"({"ok":true,"message":"All face geometry restored"})");
+    }
+    FaceGeometry defaults{};
+    if (!FaceGeometryStore::GetDefault(emotion, defaults)) {
+        return SendJson(request, "404 Not Found",
+                        self->face_geometry_.Encode(emotion));
+    }
+    if (!self->controller_.ResetFaceGeometry(emotion)) {
+        return SendJson(request, "500 Internal Server Error",
+                        self->face_geometry_.Encode(emotion, false,
+                                                    "Could not reset face geometry"));
+    }
+    return SendJson(request, "200 OK",
+                    self->face_geometry_.Encode(emotion, true, "Compiled default restored"));
 }
 
 esp_err_t RobotWebControlServer::HandleGetCameraVisionEventFrame(

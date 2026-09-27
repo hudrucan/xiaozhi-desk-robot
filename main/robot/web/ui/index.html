@@ -402,6 +402,29 @@
                 Suspicious</button
               ><button class="emotion" data-emotion="shake">Shake</button>
             </div>
+            <details id="faceGeometryEditor" class="face-geometry-editor">
+              <summary>
+                <span>Customize Geometry</span><b id="faceGeometryState">Not loaded</b>
+              </summary>
+              <div class="face-geometry-toolbar">
+                <label>Emotion<select id="faceGeometryEmotion"></select></label>
+                <span id="faceGeometryHint">Open the editor to load geometry.</span>
+              </div>
+              <div class="face-geometry-workspace">
+                <canvas id="faceGeometryCanvas" width="240" height="240"
+                  aria-label="Local Mochan face geometry preview"></canvas>
+                <div class="face-geometry-controls">
+                  <fieldset><legend>Left Eye</legend><div id="faceGeometryLeft"></div></fieldset>
+                  <fieldset><legend>Right Eye</legend><div id="faceGeometryRight"></div></fieldset>
+                  <fieldset><legend>Mouth</legend><div id="faceGeometryMouth"></div></fieldset>
+                </div>
+              </div>
+              <div class="face-geometry-actions">
+                <button id="faceGeometrySave" class="log-button" type="button">Save</button>
+                <button id="faceGeometryReset" class="log-button" type="button">Reset current emotion</button>
+                <button id="faceGeometryResetAll" class="log-button danger" type="button">Reset All</button>
+              </div>
+            </details>
           </section>
           <section
             class="card"
@@ -1449,6 +1472,7 @@ Waiting for system logs…</pre
     <script src="js/chat_asr.js"></script>
     <script src="js/server_config.js"></script>
     <script src="js/camera_motion.js"></script>
+    <script src="js/face_geometry.js"></script>
     <script src="js/status.js"></script>
     <script src="js/camera_logs.js"></script>
     <script src="js/tabs.js"></script>

@@ -126,6 +126,23 @@ MochanDisplay::AmbientActivity MochanDisplay::GetAmbientActivity() const {
     return ambient_activity_.load(std::memory_order_acquire);
 }
 
+bool MochanDisplay::GetFaceGeometry(const std::string& emotion, FaceGeometry& geometry,
+                                    bool* customized) const {
+    return face_geometry_store_.Get(emotion, geometry, customized);
+}
+
+bool MochanDisplay::SaveFaceGeometry(const std::string& emotion, FaceGeometry geometry) {
+    return face_geometry_store_.Save(emotion, geometry);
+}
+
+bool MochanDisplay::ResetFaceGeometry(const std::string& emotion) {
+    return face_geometry_store_.Reset(emotion);
+}
+
+bool MochanDisplay::ResetAllFaceGeometry() {
+    return face_geometry_store_.ResetAll();
+}
+
 AmbientGazePersonality MochanDisplay::GetAmbientGazePersonality() const {
     return ambient_gaze_personality_.load(std::memory_order_acquire);
 }

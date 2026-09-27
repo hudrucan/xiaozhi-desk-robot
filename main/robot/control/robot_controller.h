@@ -4,6 +4,7 @@
 #include "camera/camera_settings.h"
 #include "camera/camera_vision_event_frame.h"
 #include "behavior/camera_attention_controller.h"
+#include "display/face_geometry.h"
 #include "platform/camera_diagnostics.h"
 #include "robot_status.h"
 
@@ -32,6 +33,13 @@ public:
     virtual void NotifyToolResult(bool success) = 0;
 
     virtual bool ShowEmotion(const std::string& emotion, int duration_ms) = 0;
+    virtual bool GetFaceGeometry(const std::string& emotion, FaceGeometry& geometry,
+                                 bool* customized = nullptr) const = 0;
+    virtual bool GetFaceGeometryLayoutYOffset(const std::string& emotion,
+                                              int& offset_y) const = 0;
+    virtual bool SaveFaceGeometry(const std::string& emotion, FaceGeometry geometry) = 0;
+    virtual bool ResetFaceGeometry(const std::string& emotion) = 0;
+    virtual bool ResetAllFaceGeometry() = 0;
     virtual bool ShowSecondaryText(const std::string& text, int duration_ms) = 0;
     virtual bool SetStatusLightEffect(const std::string& effect, int duration_ms) = 0;
     virtual bool ToggleCameraMirror() = 0;

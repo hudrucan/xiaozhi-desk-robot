@@ -1891,6 +1891,140 @@
         color: var(--hi);
         box-shadow: inset 0 0 0 1px rgba(227, 194, 123, 0.12);
       }
+      .face-geometry-editor {
+        container-type: inline-size;
+        margin-top: 14px;
+        border-top: 1px solid var(--line);
+        padding-top: 11px;
+      }
+      .face-geometry-editor > summary {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: var(--hi);
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .face-geometry-editor > summary b {
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 500;
+        text-transform: uppercase;
+      }
+      .face-geometry-toolbar,
+      .face-geometry-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: end;
+        margin-top: 12px;
+      }
+      .face-geometry-toolbar label {
+        display: grid;
+        gap: 5px;
+        color: var(--muted);
+        font-size: 9px;
+        text-transform: uppercase;
+      }
+      .face-geometry-toolbar select,
+      .face-geometry-number {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #17120b;
+        color: var(--hi);
+        padding: 6px 7px;
+        font-size: 10px;
+      }
+      #faceGeometryHint {
+        color: var(--muted);
+        font-size: 9px;
+        padding-bottom: 7px;
+      }
+      .face-geometry-workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+        margin-top: 12px;
+      }
+      #faceGeometryCanvas {
+        width: min(240px, 100%);
+        height: auto;
+        aspect-ratio: 1;
+        justify-self: center;
+        border: 1px solid var(--line2);
+        border-radius: 12px;
+        background: #000;
+      }
+      .face-geometry-controls {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 9px;
+      }
+      .face-geometry-controls fieldset {
+        min-width: 0;
+        margin: 0;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 8px;
+      }
+      .face-geometry-controls legend {
+        padding: 0 4px;
+        color: var(--brass);
+        font-size: 9px;
+        text-transform: uppercase;
+      }
+      .face-geometry-field {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr) 54px;
+        gap: 6px;
+        align-items: center;
+        margin: 5px 0;
+        color: var(--muted);
+        font-size: 9px;
+      }
+      .face-geometry-field input[type="range"] {
+        width: 100%;
+        accent-color: var(--brass);
+      }
+      .face-geometry-number {
+        width: 54px;
+        box-sizing: border-box;
+      }
+      .face-geometry-actions .danger {
+        color: #ffaaa2;
+        border-color: #63342f;
+      }
+      @container (min-width: 620px) {
+        .face-geometry-workspace {
+          grid-template-columns: 240px minmax(0, 1fr);
+        }
+        #faceGeometryCanvas {
+          justify-self: start;
+        }
+        .face-geometry-controls {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          align-items: start;
+        }
+        .face-geometry-controls fieldset:last-child {
+          grid-column: 1 / -1;
+        }
+        #faceGeometryMouth {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          column-gap: 14px;
+        }
+      }
+      @container (max-width: 260px) {
+        .face-geometry-field {
+          grid-template-columns: 62px minmax(0, 1fr) 50px;
+          gap: 4px;
+        }
+        .face-geometry-number {
+          width: 50px;
+          padding-inline: 4px;
+        }
+      }
       .reaction-head-status {
         display: flex;
         align-items: center;

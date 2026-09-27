@@ -2,6 +2,7 @@
 
 #include "behavior/ambient_behavior_types.h"
 #include "display/lcd_display.h"
+#include "face_geometry.h"
 
 #include <atomic>
 #include <cstddef>
@@ -67,6 +68,12 @@ public:
     void SetAmbientBaseFace(uint32_t generation, const std::string& emotion);
     void ClearAmbientBaseFace(uint32_t generation);
     static bool IsSupportedEmotion(const std::string& emotion);
+    bool GetFaceGeometry(const std::string& emotion, FaceGeometry& geometry,
+                         bool* customized = nullptr) const;
+    bool GetFaceGeometryLayoutYOffset(const std::string& emotion, int& offset_y) const;
+    bool SaveFaceGeometry(const std::string& emotion, FaceGeometry geometry);
+    bool ResetFaceGeometry(const std::string& emotion);
+    bool ResetAllFaceGeometry();
 
     void ShowBootSplash();
     void HideBootSplash();
@@ -123,17 +130,7 @@ private:
         kLookDownRight,
     };
 
-    struct EyeGeometry {
-        int width;
-        int height;
-        int x;
-        int y;
-        int rotation;
-        int top_curve = 0;
-        int bottom_curve = 0;
-        int slope = 0;
-        int water = 0;
-    };
+    using EyeGeometry = FaceEyeGeometry;
 
     struct EyeRaster {
         static constexpr int kWidth = 96;
@@ -195,6 +192,7 @@ private:
     MouthRaster mouth_raster_;
     MouthMorphState mouth_morph_state_;
     SleepyZzRaster sleepy_zz_raster_;
+    FaceGeometryStore face_geometry_store_;
     int mouth_shape_opacity_ = 0;
     bool InitializeEyeRasters();
     bool InitializeMouthRaster();
@@ -202,8 +200,8 @@ private:
     bool RenderEyeRaster(EyeRaster& raster, const EyeGeometry& geometry, uint8_t blink_amount);
     void AdvanceSleepyZzAnimation(bool visual_eligible);
     void UpdateMouth(uint8_t blink_amount, const std::string& emotion);
-    static bool HasMouthGeometry(const std::string& emotion);
-    static bool GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y);
+    bool HasMouthGeometry(const std::string& emotion) const;
+    bool GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y) const;
 
     void SetFaceState(FaceState state);
     void ApplyRestingFaceLocked();

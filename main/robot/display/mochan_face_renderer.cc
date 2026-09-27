@@ -31,56 +31,37 @@ constexpr float kAttentionMouthYawOffset = 4.0f;
 constexpr float kAttentionMouthPitchGap = 6.0f;
 constexpr char kTag[] = "MochanDisplay";
 
-struct MouthGeometry {
+struct MouthAnimationProfile {
     const char* emotion;
-    int width;
-    int height;
-    float top_curve;
-    float bottom_curve;
-    float slope;
-    int gap;
     int idle_eye_offset_y;
     int base_scale_y;
     int blink_scale_y;
     int idle_open_scale_y;
 };
 
-constexpr std::array<MouthGeometry, 24> kMouthGeometries = {{
-    // Base expressions
-    {"neutral", 72, 24, 2.0f, 2.0f, 0.0f, 74, 20, 256, -88, 24},
-    {"happy", 80, 20, 2.5f, 12.0f, 0.0f, 64, 25, 256, -80, 24},
-    {"bored", 76, 22, 0.0f, 0.0f, -1.5f, 72, 16, 256, -88, 32},
-    {"sleepy", 56, 28, -6.0f, 6.0f, 0.0f, 70, 14, 256, -88, 32},
-    {"surprised", 54, 38, -3.0f, 10.0f, 0.0f, 78, 17, 256, -96, 64},
-    {"angry", 78, 24, -10.0f, -6.0f, 0.0f, 74, 17, 256, -96, 72},
-    {"sad", 68, 20, -6.0f, -4.0f, 0.0f, 66, 23, 256, -80, 24},
-    {"crying", 62, 28, -7.5f, 6.0f, 0.0f, 68, 20, 256, -88, 32},
+// Expression behavior stays in the renderer. Only the editable base shape lives in
+// FaceGeometryStore.
+constexpr std::array<MouthAnimationProfile, FaceGeometryStore::kEmotionCount>
+    kMouthAnimationProfiles = {{
+        {"neutral",20,256,-88,24}, {"happy",25,256,-80,24},
+        {"bored",16,256,-88,32}, {"sleepy",14,256,-88,32},
+        {"surprised",17,256,-96,64}, {"angry",17,256,-96,72},
+        {"sad",23,256,-80,24}, {"crying",20,256,-88,32},
+        {"laughing",19,256,-96,64}, {"loving",25,256,-80,24},
+        {"winking",22,256,-80,24}, {"kissy",19,256,-70,16},
+        {"shocked",17,256,-96,72}, {"embarrassed",22,256,-80,24},
+        {"delicious",21,256,-80,32}, {"confident",21,256,-80,24},
+        {"cool",19,256,-80,24}, {"relaxed",20,256,-80,24},
+        {"confused",22,256,-80,24}, {"suspicious",20,256,-80,24},
+        {"funny",21,256,-80,24}, {"silly",21,256,-80,32},
+        {"thinking",22,256,-70,16}, {"shake",20,256,-80,24},
+    }};
 
-    // Extended emotional expressions
-    {"laughing", 84, 36, 4.0f, 20.0f, 0.0f, 62, 19, 256, -96, 64},
-    {"loving", 54, 20, 2.0f, 9.0f, 0.0f, 62, 25, 256, -80, 24},
-    {"winking", 74, 22, 1.5f, 8.0f, 3.5f, 64, 22, 256, -80, 24},
-    {"kissy", 36, 28, -2.0f, 3.0f, 0.0f, 62, 19, 256, -70, 16},
-    {"shocked", 52, 48, -4.0f, 12.0f, 0.0f, 76, 17, 256, -96, 72},
-    {"embarrassed", 56, 16, -2.0f, 1.0f, 2.0f, 64, 22, 256, -80, 24},
-    {"delicious", 74, 26, 2.5f, 14.0f, 0.0f, 64, 21, 256, -80, 32},
-    {"confident", 72, 22, 1.0f, 6.0f, 3.0f, 66, 21, 256, -80, 24},
-    {"cool", 66, 16, 0.0f, 2.0f, 2.0f, 68, 19, 256, -80, 24},
-    {"relaxed", 68, 18, 1.5f, 5.0f, 0.0f, 68, 20, 256, -80, 24},
-    {"confused", 58, 20, -2.0f, 2.0f, 3.5f, 66, 22, 256, -80, 24},
-    {"suspicious", 64, 16, -1.0f, -1.0f, -1.5f, 68, 20, 256, -80, 24},
-
-    // Additional expressions matching control panel
-    {"funny", 68, 26, -3.0f, 6.0f, -4.0f, 68, 21, 256, -80, 24},
-    {"silly", 70, 28, -2.0f, 12.0f, -4.0f, 66, 21, 256, -80, 32},
-    {"thinking", 52, 18, 1.0f, 0.0f, 3.0f, 66, 22, 256, -70, 16},
-    {"shake", 66, 22, 0.0f, 4.0f, 0.0f, 70, 20, 256, -80, 24},
-}};
-
-const MouthGeometry* FindMouthGeometry(const std::string& emotion) {
-    auto found = std::find_if(kMouthGeometries.begin(), kMouthGeometries.end(),
-                              [&emotion](const auto& item) { return emotion == item.emotion; });
-    return found == kMouthGeometries.end() ? nullptr : &*found;
+const MouthAnimationProfile* FindMouthAnimationProfile(const std::string& emotion) {
+    const auto found = std::find_if(
+        kMouthAnimationProfiles.begin(), kMouthAnimationProfiles.end(),
+        [&emotion](const auto& profile) { return emotion == profile.emotion; });
+    return found == kMouthAnimationProfiles.end() ? nullptr : &*found;
 }
 
 int TriangleWave(uint16_t phase, int period, int amplitude) {
@@ -186,16 +167,23 @@ void RenderMouthSdf(uint32_t* pixels, lv_image_dsc_t* descriptor, int raster_wid
 
 }  // namespace
 
-bool MochanDisplay::HasMouthGeometry(const std::string& emotion) {
-    return FindMouthGeometry(emotion) != nullptr;
+bool MochanDisplay::HasMouthGeometry(const std::string& emotion) const {
+    FaceGeometry geometry{};
+    return face_geometry_store_.Get(emotion, geometry);
 }
 
-bool MochanDisplay::GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y) {
-    const auto* geometry = FindMouthGeometry(emotion);
-    if (geometry == nullptr) {
-        return false;
-    }
-    offset_y = geometry->idle_eye_offset_y;
+bool MochanDisplay::GetMouthIdleEyeOffset(const std::string& emotion, int& offset_y) const {
+    const auto* profile = FindMouthAnimationProfile(emotion);
+    if (profile == nullptr) return false;
+    offset_y = profile->idle_eye_offset_y;
+    return true;
+}
+
+bool MochanDisplay::GetFaceGeometryLayoutYOffset(const std::string& emotion,
+                                                  int& offset_y) const {
+    int idle_eye_offset_y = 0;
+    if (!GetMouthIdleEyeOffset(emotion, idle_eye_offset_y)) return false;
+    offset_y = kEyeLayoutOffsetY + idle_eye_offset_y;
     return true;
 }
 
@@ -329,10 +317,16 @@ void MochanDisplay::AdvanceSleepyZzAnimation(bool visual_eligible) {
     }
 
     const bool sleepy_active = face_state_ == FaceState::kSleepy;
-    const bool sleepy_settled =
-        std::abs(right_eye_geometry_.width - 72) <= 3 &&
-        right_eye_geometry_.height <= 32 && right_eye_geometry_.bottom_curve > 0 &&
-        right_eye_geometry_.slope == 0 && right_eye_geometry_.water == 0;
+    FaceGeometry sleepy_geometry{};
+    const bool has_sleepy_target = face_geometry_store_.Get("sleepy", sleepy_geometry);
+    const auto& target = sleepy_geometry.right_eye;
+    // Keep the original settled-pose gate, but compare against the active Sleepy base.
+    const bool sleepy_settled = has_sleepy_target &&
+        std::abs(right_eye_geometry_.width - target.width) <= 3 &&
+        std::abs(right_eye_geometry_.height - target.height) <= 6 &&
+        right_eye_geometry_.bottom_curve == target.bottom_curve &&
+        right_eye_geometry_.slope == target.slope &&
+        right_eye_geometry_.water == target.water;
 
     if (!visual_eligible) {
         sleepy_zz_raster_.hold_ticks = 0;
@@ -388,9 +382,13 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
         emotion = exiting_mouth_emotion_;
     }
 
-    const auto* geometry = FindMouthGeometry(emotion);
+    FaceGeometry face_geometry{};
+    const auto* animation = FindMouthAnimationProfile(emotion);
+    const bool has_geometry = face_geometry_store_.Get(emotion, face_geometry) &&
+                              animation != nullptr;
+    const auto& geometry = face_geometry.mouth;
     auto& state = mouth_morph_state_;
-    if (geometry == nullptr || face_layout_progress_ == 0) {
+    if (!has_geometry || face_layout_progress_ == 0) {
         if (!lv_obj_has_flag(mouth_, LV_OBJ_FLAG_HIDDEN)) {
             lv_obj_add_flag(mouth_, LV_OBJ_FLAG_HIDDEN);
         }
@@ -405,12 +403,12 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
     mouth_shape_opacity_ = std::min(256, mouth_shape_opacity_ + 48);
 
     if (!state.initialized) {
-        state.width = geometry->width;
-        state.height = geometry->height;
-        state.top_curve = geometry->top_curve;
-        state.bottom_curve = geometry->bottom_curve;
-        state.slope = geometry->slope;
-        state.gap = geometry->gap;
+        state.width = geometry.width;
+        state.height = geometry.height;
+        state.top_curve = geometry.top_curve;
+        state.bottom_curve = geometry.bottom_curve;
+        state.slope = geometry.slope;
+        state.gap = geometry.gap;
         state.initialized = true;
         RenderMouthSdf(mouth_raster_.pixels, &mouth_raster_.descriptor,
                        MouthRaster::kWidth, MouthRaster::kHeight,
@@ -431,12 +429,12 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
             const float step = delta / 3.0f;
             return current + (std::fabs(step) >= 0.25f ? step : (delta > 0.0f ? 0.25f : -0.25f));
         };
-        state.width = approach_val(state.width, geometry->width);
-        state.height = approach_val(state.height, geometry->height);
-        state.top_curve = approach_val(state.top_curve, geometry->top_curve);
-        state.bottom_curve = approach_val(state.bottom_curve, geometry->bottom_curve);
-        state.slope = approach_val(state.slope, geometry->slope);
-        state.gap = approach_val(state.gap, geometry->gap);
+        state.width = approach_val(state.width, geometry.width);
+        state.height = approach_val(state.height, geometry.height);
+        state.top_curve = approach_val(state.top_curve, geometry.top_curve);
+        state.bottom_curve = approach_val(state.bottom_curve, geometry.bottom_curve);
+        state.slope = approach_val(state.slope, geometry.slope);
+        state.gap = approach_val(state.gap, geometry.gap);
 
         const bool shape_changed =
             (std::fabs(state.rendered_width - state.width) > 0.1f ||
@@ -486,10 +484,10 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
                          : 256;
     const int scale_x =
         (256 - yawn_amount_ * 48 / 256) * expression_scale_x / 256 * attention_scale_x / 256;
-    const int deformation_y = geometry->base_scale_y + expression_deformation_y +
+    const int deformation_y = animation->base_scale_y + expression_deformation_y +
                               yawn_amount_ * (emotion == "sleepy" ? 112 : 160) / 256 +
-                              mouth_motion_amount_ * geometry->idle_open_scale_y / 256 +
-                              blink_amount * geometry->blink_scale_y / 100;
+                              mouth_motion_amount_ * animation->idle_open_scale_y / 256 +
+                              blink_amount * animation->blink_scale_y / 100;
 
     const int attention_scale_y =
         camera_attention ? static_cast<int>(
@@ -732,14 +730,25 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
     struct EyeTarget {
         EyeGeometry geometry;
     };
-    EyeTarget left{{74, 54, -48, -59, 0, 3, 0, 0}};
-    EyeTarget right{{74, 54, 48, -59, 0, 3, 0, 0}};
+    FaceGeometry base{};
+    face_geometry_store_.Get("neutral", base);
+    EyeTarget left{base.left_eye};
+    EyeTarget right{base.right_eye};
 
     const int gentle = TriangleWave(animation_phase_, 32, 2);
 
     const bool camera_attention =
         camera_attention_active_.load(std::memory_order_acquire);
     if (!camera_attention) {
+        std::string emotion;
+        {
+            std::lock_guard<std::mutex> lock(emotion_mutex_);
+            emotion = current_emotion_;
+        }
+        if (face_geometry_store_.Get(emotion, base)) {
+            left.geometry = base.left_eye;
+            right.geometry = base.right_eye;
+        }
         switch (face_state_) {
         case FaceState::kListening:
             left.geometry = {78, 54 + gentle, -48, -59, 0};
@@ -752,110 +761,98 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
             break;
         }
         case FaceState::kThinking:
-            left.geometry = {60, 54, -53, -63, 0, 3, 0, -5};
-            right.geometry = {68, 34, 45, -53, 0, 8, 0, 3};
             break;
         case FaceState::kHappy:
-            left.geometry = {76, 50, -47, -56 + gentle, 0, 3, -6, 0};
-            right.geometry = {76, 50, 47, -56 + gentle, 0, 3, -6, 0};
+            left.geometry.y += gentle;
+            right.geometry.y += gentle;
             break;
         case FaceState::kLaughing: {
             const int bounce = TriangleWave(animation_phase_, 16, 4);
-            left.geometry = {76, 38, -47, -54 + bounce, 0, -9, -19, -2};
-            right.geometry = {76, 38, 47, -54 + bounce, 0, -9, -19, 2};
+            left.geometry.y += bounce;
+            right.geometry.y += bounce;
             break;
         }
         case FaceState::kFunny: {
             const int sway = TriangleWave(animation_phase_, 30, 4);
-            left.geometry = {54, 61, -48 + sway, -61, -60, 0, -3};
-            right.geometry = {72, 40, 48 + sway, -54, 40, -5, -18};
+            left.geometry.x += sway;
+            right.geometry.x += sway;
             break;
         }
         case FaceState::kAngry: {
             const int tension = TriangleWave(animation_phase_, 40, 2);
-            left.geometry = {74, 43, -45 + tension, -55 + tension / 2, 0, 2, 0, 12};
-            right.geometry = {74, 43, 45 - tension, -55 + tension / 2, 0, 2, 0, -12};
+            left.geometry.x += tension;
+            right.geometry.x -= tension;
+            left.geometry.y += tension / 2;
+            right.geometry.y += tension / 2;
             break;
         }
         case FaceState::kSad:
-            left.geometry = {72, 49, -47, -55, 0, 10, 0, -9};
-            right.geometry = {72, 49, 47, -55, 0, 10, 0, 9};
             break;
         case FaceState::kCrying:
-            left.geometry = {72, 49, -47, -55 + gentle, 0, 10, 0, -9, 18};
-            right.geometry = {72, 49, 47, -55 + gentle, 0, 10, 0, 9, 18};
+            left.geometry.y += gentle;
+            right.geometry.y += gentle;
             break;
         case FaceState::kLoving: {
             const int pulse = TriangleWave(animation_phase_, 36, 2);
-            left.geometry = {62 + pulse, 48 + pulse, -40, -57, 60, -4, -12, 2};
-            right.geometry = {62 + pulse, 48 + pulse, 40, -57, -60, -4, -12, -2};
+            left.geometry.width += pulse;
+            left.geometry.height += pulse;
+            right.geometry.width += pulse;
+            right.geometry.height += pulse;
             break;
         }
         case FaceState::kEmbarrassed:
-            left.geometry = {59, 38, -51, -47 + gentle, 0, 8, -3, -5};
-            right.geometry = {59, 38, 41, -47 + gentle, 0, 8, -3, 5};
+            left.geometry.y += gentle;
+            right.geometry.y += gentle;
             break;
         case FaceState::kSurprised: {
             const int pulse = TriangleWave(animation_phase_, 30, 2);
             const int spread = pulse / 2;
-            left.geometry = {49, 65, -44 - spread, -57, 0};
-            right.geometry = {49, 65, 44 + spread, -57, 0};
+            left.geometry.x -= spread;
+            right.geometry.x += spread;
             break;
         }
         case FaceState::kShocked: {
             const int tremble = TriangleWave(animation_phase_, 10, 2);
-            left.geometry = {59, 69, -44 + tremble, -57, 0};
-            right.geometry = {49, 72, 44 + tremble, -59, 0};
+            left.geometry.x += tremble;
+            right.geometry.x += tremble;
             break;
         }
         case FaceState::kWinking:
-            left.geometry = {69, 30, -47, -53, 0, -6, -15};
-            right.geometry = {70, 54, 47, -58, 0, 0, -5};
             break;
         case FaceState::kCool:
-            left.geometry = {78, 33, -46, -55, 0, 0, 0, -3};
-            right.geometry = {78, 33, 46, -55, 0, 0, 0, 3};
             break;
         case FaceState::kRelaxed:
-            left.geometry = {71, 40, -47, -54 + gentle, 0, 4, -6};
-            right.geometry = {71, 40, 47, -54 + gentle, 0, 4, -6};
+            left.geometry.y += gentle;
+            right.geometry.y += gentle;
             break;
         case FaceState::kDelicious: {
             const int savor = TriangleWave(animation_phase_, 32, 3);
-            left.geometry = {69, 41, -45, -54 + savor, 0, -4, -15};
-            right.geometry = {69, 41, 45, -54 - savor, 0, -4, -15};
+            left.geometry.y += savor;
+            right.geometry.y -= savor;
             break;
         }
         case FaceState::kKissy:
-            left.geometry = {53, 33, -37, -54, -80, -3, -12};
-            right.geometry = {53, 33, 37, -54, 80, -3, -12};
             break;
         case FaceState::kConfident:
-            left.geometry = {70, 51, -46, -61, 0, -3, 0, 3};
-            right.geometry = {73, 34, 46, -53, 0, 4, -2, -4};
             break;
         case FaceState::kSleepy:
-            left.geometry = {72, 26, -46, -48 + gentle, 0, 7, 1, 0};
-            right.geometry = {72, 26, 46, -48 + gentle, 0, 7, 1, 0};
+            left.geometry.y += gentle;
+            right.geometry.y += gentle;
             break;
         case FaceState::kSilly: {
             const int sway = TriangleWave(animation_phase_, 24, 4);
-            left.geometry = {48, 62, -48 + sway, -64, 80, 0, 0, -3};
-            right.geometry = {77, 33, 48 + sway, -46, -80, 2, -8};
+            left.geometry.x += sway;
+            right.geometry.x += sway;
             break;
         }
         case FaceState::kConfused:
-            left.geometry = {69, 33, -49, -49, 0, 8, 0, -7};
-            right.geometry = {54, 57, 48, -63, 0, -3, 0, 3};
             break;
         case FaceState::kSuspicious:
-            left.geometry = {74, 31, -40, -52, 0, 6, 0, 3};
-            right.geometry = {63, 43, 54, -59, 0, 9, 0, -3};
             break;
         case FaceState::kShake: {
             const int shake = TriangleWave(animation_phase_, 12, 11);
-            left.geometry = {72, 46, -48 + shake, -57, 0};
-            right.geometry = {72, 46, 48 + shake, -57, 0};
+            left.geometry.x += shake;
+            right.geometry.x += shake;
             break;
         }
         case FaceState::kLookLeft:

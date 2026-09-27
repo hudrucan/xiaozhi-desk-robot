@@ -2538,6 +2538,29 @@ private:
         return QueueTemporaryEmotion(emotion, duration_ms, EmotionSource::kPreview, true);
     }
 
+    bool GetFaceGeometry(const std::string& emotion, FaceGeometry& geometry,
+                         bool* customized = nullptr) const override {
+        return display_ != nullptr && display_->GetFaceGeometry(emotion, geometry, customized);
+    }
+
+    bool GetFaceGeometryLayoutYOffset(const std::string& emotion,
+                                      int& offset_y) const override {
+        return display_ != nullptr &&
+               display_->GetFaceGeometryLayoutYOffset(emotion, offset_y);
+    }
+
+    bool SaveFaceGeometry(const std::string& emotion, FaceGeometry geometry) override {
+        return display_ != nullptr && display_->SaveFaceGeometry(emotion, geometry);
+    }
+
+    bool ResetFaceGeometry(const std::string& emotion) override {
+        return display_ != nullptr && display_->ResetFaceGeometry(emotion);
+    }
+
+    bool ResetAllFaceGeometry() override {
+        return display_ != nullptr && display_->ResetAllFaceGeometry();
+    }
+
     bool ShowSecondaryText(const std::string& text, int duration_ms) override {
         NotifyAmbientInteraction(duration_ms);
 #ifdef SECONDARY_OLED_I2C_ADDRESS
