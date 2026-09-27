@@ -3,6 +3,7 @@
 #include "camera/camera_observer.h"
 #include "camera/camera_settings.h"
 #include "camera/camera_vision_event_frame.h"
+#include "behavior/camera_attention_controller.h"
 #include "platform/camera_diagnostics.h"
 #include "robot_status.h"
 
@@ -54,6 +55,10 @@ public:
     virtual bool SetCameraVisionEventFrameEnabled(bool enabled) = 0;
     virtual bool SendCameraVisionEventFrame(const EventFrameSender& sender) const = 0;
     virtual bool QueueCameraVisionEventFrameCapture() = 0;
+    virtual CameraAttentionController::Status GetCameraAttentionStatus() const = 0;
+    virtual void SetCameraAttentionEnabled(bool enabled) = 0;
+    virtual void SetCameraAttentionMotionLossTimeoutMs(int timeout_ms) = 0;
+    virtual void SetCameraAttentionTrackingGainPercent(int gain_percent) = 0;
 
     virtual SecondaryOled::Config GetSecondaryDisplayConfig() const = 0;
     virtual void SetSecondaryDisplayConfig(const SecondaryOled::Config& config) = 0;

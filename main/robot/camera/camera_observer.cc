@@ -47,6 +47,7 @@ void CameraObserver::Configure(const CameraVisionSettings& settings) {
         status_.state = CameraObserverState::kDisabled;
         status_.suspend_reason = CameraObserverSuspendReason::kDisabled;
         status_.motion_active = false;
+        status_.activity_active = false;
         status_.sampling_state = CameraObserverSamplingState::kQuiet;
         status_.current_interval_ms = settings.quiet_interval_ms;
         have_previous_ = false;
@@ -58,6 +59,7 @@ void CameraObserver::Configure(const CameraVisionSettings& settings) {
         status_.state = CameraObserverState::kWaiting;
         status_.suspend_reason = CameraObserverSuspendReason::kWaitingFirstSample;
         status_.motion_active = false;
+        status_.activity_active = false;
         status_.sampling_state = CameraObserverSamplingState::kQuiet;
         status_.current_interval_ms = settings.quiet_interval_ms;
         have_previous_ = false;
@@ -66,6 +68,7 @@ void CameraObserver::Configure(const CameraVisionSettings& settings) {
         burst_deadline_ms_ = 0;
         ResetTemporalLocked();
     } else if (reset_temporal_for_settings) {
+        status_.activity_active = false;
         ResetTemporalLocked();
     }
 }
@@ -90,6 +93,7 @@ void CameraObserver::SetState(CameraObserverState state,
                                              : CameraObserverSuspendReason::kDisabled;
     if (state != CameraObserverState::kActive &&
         state != CameraObserverState::kWaiting) {
+        status_.activity_active = false;
         ResetTemporalLocked();
     }
     if (status_.enabled && count_skip) {
@@ -103,6 +107,7 @@ void CameraObserver::RecordFailure(CameraObserverSuspendReason reason) {
                                     : CameraObserverState::kDisabled;
     status_.suspend_reason = status_.enabled ? reason
                                              : CameraObserverSuspendReason::kDisabled;
+    status_.activity_active = false;
     ResetTemporalLocked();
     if (status_.enabled) {
         ++status_.failure_count;
@@ -112,6 +117,7 @@ void CameraObserver::RecordFailure(CameraObserverSuspendReason reason) {
 void CameraObserver::ResetBaseline() {
     std::lock_guard<std::mutex> lock(status_mutex_);
     status_.motion_active = false;
+    status_.activity_active = false;
     status_.sampling_state = CameraObserverSamplingState::kQuiet;
     status_.current_interval_ms = settings_.quiet_interval_ms;
     have_previous_ = false;
@@ -218,6 +224,8 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         const int64_t now_ms = analyze_end_us / 1000;
         const int changed_ratio_bp = static_cast<int>(
             spatial.active_cells * 10000 / kGridCells);
+        status_.activity_active =
+            changed_ratio_bp >= settings.activity_ratio_bp;
         if (status_.motion_active) {
             status_.sampling_state = CameraObserverSamplingState::kMotion;
             high_motion_samples_ = 0;
@@ -295,6 +303,9 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
     status_.total_ms = static_cast<uint32_t>(
         std::max<int64_t>(0, (analyze_end_us - sample_start_us + 999) / 1000));
     ++status_.sample_count;
+    if (update_motion_state) {
+        ++status_.normal_sample_count;
+    }
     result.valid = true;
     result.spatial = spatial;
     return result;

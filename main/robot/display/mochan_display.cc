@@ -11,6 +11,7 @@
 #include <esp_random.h>
 #include <material_symbols.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 
@@ -434,6 +435,125 @@ bool MochanDisplay::CanShowDeskModeLocked() const {
            (camera_image_ == nullptr || lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN));
 }
 
+bool MochanDisplay::CanCameraAttentionOwnFaceLocked() const {
+    return splash_ == nullptr && activity_state_ == FaceState::kIdle && !emotion_active_ &&
+           !face_override_active_.load(std::memory_order_acquire) && !status_dot_busy_ &&
+           !response_box_requested_ && response_box_progress_ == 0 &&
+           (notification_ == nullptr || lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) &&
+           (camera_image_ == nullptr || lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN));
+}
+
+bool MochanDisplay::CanCameraAttentionOwnFace() const {
+    DisplayLockGuard lock(const_cast<MochanDisplay*>(this));
+    return CanCameraAttentionOwnFaceLocked();
+}
+
+void MochanDisplay::CancelCameraAttentionLocked() {
+    if (!camera_attention_active_.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    camera_attention_target_x_.store(0.0f, std::memory_order_release);
+    camera_attention_target_y_.store(0.0f, std::memory_order_release);
+    camera_attention_render_x_ = 0.0f;
+    camera_attention_render_y_ = 0.0f;
+    camera_attention_deform_x_ = 0.0f;
+    camera_attention_deform_y_ = 0.0f;
+    camera_attention_mouth_pose_x_ = 0.0f;
+    camera_attention_mouth_pose_y_ = 0.0f;
+    camera_attention_applied_x_.store(0.0f, std::memory_order_release);
+    camera_attention_applied_y_.store(0.0f, std::memory_order_release);
+    camera_attention_applied_px_x_.store(0, std::memory_order_release);
+    camera_attention_applied_px_y_.store(0, std::memory_order_release);
+    camera_attention_centered_.store(true, std::memory_order_release);
+}
+
+bool MochanDisplay::StartCameraAttention(bool from_desk_mode) {
+    DisplayLockGuard lock(this);
+    if (!CanCameraAttentionOwnFaceLocked()) {
+        return false;
+    }
+    if (desk_mode_active_.load(std::memory_order_acquire) != from_desk_mode) {
+        return false;
+    }
+    camera_attention_target_x_.store(0.0f, std::memory_order_release);
+    camera_attention_target_y_.store(0.0f, std::memory_order_release);
+    camera_attention_centered_.store(false, std::memory_order_release);
+    camera_attention_active_.store(true, std::memory_order_release);
+    exiting_mouth_emotion_.clear();
+    CancelAmbientAnimations();
+    if (from_desk_mode && desk_mode_active_.exchange(false, std::memory_order_acq_rel)) {
+        desk_mode_->Hide();
+    }
+    lv_obj_remove_flag(face_, LV_OBJ_FLAG_HIDDEN);
+    if (eye_timer_ != nullptr) {
+        lv_timer_resume(eye_timer_);
+    }
+    {
+        std::lock_guard<std::mutex> state_lock(emotion_mutex_);
+        current_emotion_ = "neutral";
+    }
+    emotion_active_ = false;
+    SetFaceState(FaceState::kIdle);
+    UpdateFaceLayoutTarget("neutral", esp_timer_get_time());
+    return true;
+}
+
+bool MochanDisplay::SetCameraAttentionTarget(float x, float y) {
+    if (!camera_attention_active_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const float target_x = std::clamp(x, -1.0f, 1.0f);
+    const float target_y = std::clamp(y, -1.0f, 1.0f);
+    camera_attention_target_x_.store(target_x, std::memory_order_release);
+    camera_attention_target_y_.store(target_y, std::memory_order_release);
+    if (std::fabs(target_x) >= 0.03f || std::fabs(target_y) >= 0.03f) {
+        camera_attention_centered_.store(false, std::memory_order_release);
+    }
+    return true;
+}
+
+void MochanDisplay::EndCameraAttention(bool return_to_desk_mode) {
+    DisplayLockGuard lock(this);
+    CancelCameraAttentionLocked();
+    if (return_to_desk_mode && CanShowDeskModeLocked()) {
+        FreezeMouthForExit();
+        CancelAmbientAnimations();
+        lv_obj_add_flag(face_, LV_OBJ_FLAG_HIDDEN);
+        desk_mode_->UpdateClock(time(nullptr));
+        desk_mode_->Show();
+        desk_mode_active_.store(true, std::memory_order_release);
+        if (eye_timer_ != nullptr) {
+            lv_timer_pause(eye_timer_);
+        }
+    } else {
+        ApplyRestingFaceLocked();
+    }
+}
+
+bool MochanDisplay::IsCameraAttentionActive() const {
+    return camera_attention_active_.load(std::memory_order_acquire);
+}
+
+bool MochanDisplay::IsCameraAttentionCentered() const {
+    return camera_attention_centered_.load(std::memory_order_acquire);
+}
+
+float MochanDisplay::GetCameraAttentionAppliedX() const {
+    return camera_attention_applied_x_.load(std::memory_order_acquire);
+}
+
+float MochanDisplay::GetCameraAttentionAppliedY() const {
+    return camera_attention_applied_y_.load(std::memory_order_acquire);
+}
+
+int MochanDisplay::GetCameraAttentionAppliedPxX() const {
+    return camera_attention_applied_px_x_.load(std::memory_order_acquire);
+}
+
+int MochanDisplay::GetCameraAttentionAppliedPxY() const {
+    return camera_attention_applied_px_y_.load(std::memory_order_acquire);
+}
+
 void MochanDisplay::HideDeskModeLocked() {
     if (!desk_mode_active_.exchange(false, std::memory_order_acq_rel)) {
         return;
@@ -448,6 +568,9 @@ void MochanDisplay::HideDeskModeLocked() {
 
 void MochanDisplay::SetDeskModeActive(bool active) {
     DisplayLockGuard lock(this);
+    if (camera_attention_active_.load(std::memory_order_acquire)) {
+        return;
+    }
     if (!active || !CanShowDeskModeLocked()) {
         HideDeskModeLocked();
         return;
@@ -512,6 +635,7 @@ void MochanDisplay::UpdateStatusDot() {
 }
 
 void MochanDisplay::ShowResponseBox() {
+    CancelCameraAttentionLocked();
     HideDeskModeLocked();
     FreezeMouthForExit();
     CancelAmbientAnimations();
@@ -681,6 +805,9 @@ void MochanDisplay::CancelAmbientAnimations() {
 
 void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
                                                     bool idle_eligible) {
+    if (camera_attention_active_.load(std::memory_order_acquire)) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);
     if (applied_ambient_primitive_generation_ != ambient_primitive_generation_) {
         applied_ambient_primitive_generation_ = ambient_primitive_generation_;
@@ -725,6 +852,9 @@ void MochanDisplay::ConsumeAmbientPrimitiveRequests(const std::string& emotion,
 }
 
 void MochanDisplay::ConsumeAmbientBaseFaceRequest() {
+    if (camera_attention_active_.load(std::memory_order_acquire)) {
+        return;
+    }
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(ambient_primitive_mutex_);

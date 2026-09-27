@@ -1717,7 +1717,7 @@
       }
       .camera-event-frame-group {
         display: grid;
-        grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+        grid-template-columns: minmax(460px, 654px) minmax(0, 1fr);
         align-items: start;
         gap: 0 24px;
         margin-top: 18px;
@@ -1732,6 +1732,34 @@
       }
       .camera-event-frame-group .camera-event-frame-preview {
         margin-bottom: 0;
+      }
+      .camera-event-frame-visuals {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 320px));
+        align-items: start;
+        gap: 14px;
+      }
+      .camera-event-frame-visual,
+      .camera-motion-coordinate-visual {
+        width: 100%;
+        max-width: 320px;
+      }
+      .camera-event-frame-visual h4,
+      .camera-motion-coordinate-visual h4 {
+        margin: 0 0 7px;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+      }
+      .camera-motion-coordinate-visual canvas {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        aspect-ratio: 4 / 3;
+        border-radius: 9px;
+        background: #080704;
       }
       .camera-diagnostics-grid {
         display: grid;
@@ -2810,6 +2838,15 @@
         .camera-observer-settings {
           grid-template-columns: 1fr;
         }
+        .camera-event-frame-group {
+          grid-template-columns: 1fr;
+        }
+        .camera-event-frame-group > h3 {
+          grid-column: auto;
+        }
+        .camera-event-frame-group dl {
+          margin-top: 8px;
+        }
         .brand small {
           display: none;
           letter-spacing: 0.45px;
@@ -2891,6 +2928,9 @@
         }
         h1 {
           font-size: 25px;
+        }
+        .camera-event-frame-visuals {
+          grid-template-columns: 1fr;
         }
         .page-description {
           max-width: 250px;

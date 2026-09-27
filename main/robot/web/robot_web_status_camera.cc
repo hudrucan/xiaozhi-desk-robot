@@ -44,6 +44,8 @@ cJSON* RobotWebStatus::CreateCamera() {
     const CameraObserverStatus observer = controller_.GetCameraObserverStatus();
     const CameraVisionEventFrameStatus event_frame =
         controller_.GetCameraVisionEventFrameStatus();
+    const CameraAttentionController::Status attention =
+        controller_.GetCameraAttentionStatus();
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         return nullptr;
@@ -185,6 +187,8 @@ cJSON* RobotWebStatus::CreateCamera() {
                             observer.center_activity_score);
     cJSON_AddNumberToObject(root, "camera_vision_observer_changed_ratio",
                             observer.changed_pixel_ratio);
+    cJSON_AddBoolToObject(root, "camera_vision_observer_activity_active",
+                          observer.activity_active);
     cJSON_AddBoolToObject(root, "camera_vision_observer_motion_active",
                           observer.motion_active);
     cJSON_AddNumberToObject(root, "camera_vision_observer_event_age_ms",
@@ -257,6 +261,35 @@ cJSON* RobotWebStatus::CreateCamera() {
             observer.temporal.last_crossing));
     cJSON_AddNumberToObject(root, "camera_motion_last_crossing_age_ms",
                             last_crossing_age_ms);
+
+    const int64_t wake_age_ms = attention.wake_stage_started_ms > 0
+                                    ? std::max<int64_t>(
+                                          0, now_ms - attention.wake_stage_started_ms)
+                                    : 0;
+    cJSON_AddBoolToObject(root, "camera_attention_enabled", attention.enabled);
+    cJSON_AddStringToObject(root, "camera_attention_state",
+                            CameraAttentionController::StateName(attention.state));
+    cJSON_AddStringToObject(root, "camera_attention_origin",
+                            CameraAttentionController::OriginName(attention.origin));
+    cJSON_AddNumberToObject(root, "camera_attention_input_x", attention.input_x);
+    cJSON_AddNumberToObject(root, "camera_attention_input_y", attention.input_y);
+    cJSON_AddNumberToObject(root, "camera_attention_target_x", attention.target_x);
+    cJSON_AddNumberToObject(root, "camera_attention_target_y", attention.target_y);
+    cJSON_AddNumberToObject(root, "camera_attention_applied_x", attention.applied_x);
+    cJSON_AddNumberToObject(root, "camera_attention_applied_y", attention.applied_y);
+    cJSON_AddNumberToObject(root, "camera_attention_applied_px_x", attention.applied_px_x);
+    cJSON_AddNumberToObject(root, "camera_attention_applied_px_y", attention.applied_px_y);
+    cJSON_AddNumberToObject(root, "camera_attention_motion_loss_timeout_ms",
+                            attention.motion_loss_timeout_ms);
+    cJSON_AddNumberToObject(root, "camera_attention_tracking_gain",
+                            attention.tracking_gain_percent / 100.0);
+    cJSON_AddNumberToObject(root, "camera_attention_loss_grace_remaining_ms",
+                            attention.loss_grace_remaining_ms);
+    cJSON_AddStringToObject(
+        root, "camera_attention_wake_stage",
+        CameraVisualWakeDetector::StageName(attention.wake_stage));
+    cJSON_AddNumberToObject(root, "camera_attention_wake_age_ms", wake_age_ms);
+    cJSON_AddNumberToObject(root, "camera_attention_wake_count", attention.wake_count);
 
     const int64_t event_frame_age_ms = event_frame.frame_ms > 0
                                            ? std::max<int64_t>(

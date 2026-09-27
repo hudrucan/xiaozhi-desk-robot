@@ -242,10 +242,15 @@ void MochanDisplay::SetStatus(const char* status) {
 
     DisplayLockGuard lock(this);
     if (next_activity != FaceState::kIdle || status_dot_busy) {
+        CancelCameraAttentionLocked();
         HideDeskModeLocked();
     }
     activity_state_ = next_activity;
     status_dot_busy_ = status_dot_busy;
+    if (camera_attention_active_.load(std::memory_order_acquire)) {
+        UpdateStatusDot();
+        return;
+    }
     if (activity_state_ != FaceState::kSpeaking) {
         FinishTyping();
     }
@@ -274,12 +279,14 @@ void MochanDisplay::SetFaceOverrideActive(bool active) {
     face_override_active_.store(active, std::memory_order_release);
     if (active) {
         DisplayLockGuard lock(this);
+        CancelCameraAttentionLocked();
         HideDeskModeLocked();
     }
 }
 
 void MochanDisplay::RestoreActivityFace() {
     DisplayLockGuard lock(this);
+    CancelCameraAttentionLocked();
     HideDeskModeLocked();
     FreezeMouthForExit();
     emotion_active_ = false;
@@ -600,6 +607,7 @@ void MochanDisplay::ShowNotification(const char* notification, int duration_ms) 
         return;
     }
     DisplayLockGuard lock(this);
+    CancelCameraAttentionLocked();
     HideDeskModeLocked();
     FreezeMouthForExit();
     CancelAmbientAnimations();
@@ -624,6 +632,7 @@ void MochanDisplay::SetEmotion(const char* emotion) {
     }
     const std::string requested(emotion);
     DisplayLockGuard lock(this);
+    CancelCameraAttentionLocked();
     HideDeskModeLocked();
     CancelAmbientAnimations();
     FaceState state = FaceState::kIdle;
@@ -670,6 +679,7 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     content = visible_text.c_str();
     DisplayLockGuard lock(this);
     if (content[0] != '\0') {
+        CancelCameraAttentionLocked();
         HideDeskModeLocked();
         FreezeMouthForExit();
     }
@@ -704,6 +714,7 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     }
     DisplayLockGuard lock(this);
     if (image != nullptr) {
+        CancelCameraAttentionLocked();
         HideDeskModeLocked();
         FreezeMouthForExit();
     }
@@ -768,6 +779,7 @@ void MochanDisplay::ShowBootSplash() {
         return;
     }
     DisplayLockGuard lock(this);
+    CancelCameraAttentionLocked();
     HideDeskModeLocked();
     CancelAmbientAnimations();
     SetFaceLayoutTarget(0, esp_timer_get_time());

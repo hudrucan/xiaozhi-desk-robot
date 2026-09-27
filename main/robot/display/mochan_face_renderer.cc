@@ -13,6 +13,22 @@
 namespace {
 
 constexpr int kEyeLayoutOffsetY = 10;
+constexpr float kAttentionPanelHalfExtent = 120.0f;
+constexpr float kAttentionHorizontalMargin = 14.0f;
+constexpr float kAttentionTopProtectedExtent = 26.0f;
+constexpr float kAttentionTopSafetyGap = 4.0f;
+constexpr float kAttentionBottomMargin =
+    kAttentionTopProtectedExtent + kAttentionTopSafetyGap;
+constexpr float kAttentionEyeVerticalScale = 0.17f;
+constexpr float kAttentionNearEyeScale = 0.03f;
+constexpr float kAttentionFarEyeWidthReduction = 0.13f;
+constexpr float kAttentionFarEyeHeightReduction = 0.08f;
+constexpr float kAttentionFarEyeInwardShift = 5.0f;
+constexpr float kAttentionNearEyeOutwardShift = 1.5f;
+constexpr float kAttentionMouthVerticalScale = 0.17f;
+constexpr float kAttentionMouthYawForeshortening = 0.06f;
+constexpr float kAttentionMouthYawOffset = 4.0f;
+constexpr float kAttentionMouthPitchGap = 6.0f;
 constexpr char kTag[] = "MochanDisplay";
 
 struct MouthGeometry {
@@ -365,7 +381,9 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
     if (mouth_ == nullptr || mouth_raster_.pixels == nullptr) {
         return;
     }
-    std::string emotion = current_emotion;
+    const bool camera_attention =
+        camera_attention_active_.load(std::memory_order_acquire);
+    std::string emotion = camera_attention ? "neutral" : current_emotion;
     if (face_layout_target_ == 0 && !exiting_mouth_emotion_.empty()) {
         emotion = exiting_mouth_emotion_;
     }
@@ -459,14 +477,25 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
         expression_scale_x -= tension * 3;
         expression_deformation_y += tension * 3;
     }
+    const float attention_x = camera_attention ? camera_attention_mouth_pose_x_ : 0.0f;
+    const float attention_y = camera_attention ? camera_attention_mouth_pose_y_ : 0.0f;
+    const int attention_scale_x =
+        camera_attention ? static_cast<int>(
+                               256.0f * (1.0f - kAttentionMouthYawForeshortening *
+                                                   std::fabs(attention_x)))
+                         : 256;
     const int scale_x =
-        (256 - yawn_amount_ * 48 / 256) * expression_scale_x / 256;
+        (256 - yawn_amount_ * 48 / 256) * expression_scale_x / 256 * attention_scale_x / 256;
     const int deformation_y = geometry->base_scale_y + expression_deformation_y +
                               yawn_amount_ * (emotion == "sleepy" ? 112 : 160) / 256 +
                               mouth_motion_amount_ * geometry->idle_open_scale_y / 256 +
                               blink_amount * geometry->blink_scale_y / 100;
 
-    const int scale_y = std::max(150, deformation_y);
+    const int attention_scale_y =
+        camera_attention ? static_cast<int>(
+                               256.0f * (1.0f - kAttentionMouthVerticalScale * attention_y))
+                         : 256;
+    const int scale_y = std::max(150, deformation_y * attention_scale_y / 256);
     if (mouth_raster_.previous_scale_x != scale_x) {
         mouth_raster_.previous_scale_x = scale_x;
         lv_image_set_scale_x(mouth_, scale_x);
@@ -482,9 +511,12 @@ void MochanDisplay::UpdateMouth(uint8_t blink_amount, const std::string& current
     }
 
     // Follow the natural eye center including gaze micro-movements
-    const int mouth_x = (left_eye_geometry_.x + right_eye_geometry_.x) / 2;
+    const int mouth_x = (left_eye_geometry_.x + right_eye_geometry_.x) / 2 +
+                        static_cast<int>(std::round(
+                            attention_x * kAttentionMouthYawOffset));
     const int eye_center_y = (left_eye_geometry_.y + right_eye_geometry_.y) / 2;
-    const int mouth_gap = std::round(state.gap);
+    const int mouth_gap = static_cast<int>(std::round(
+        state.gap - attention_y * kAttentionMouthPitchGap));
     const int mouth_y = eye_center_y + face_layout_offset_y_ + mouth_gap;
     if (mouth_raster_.previous_x != mouth_x || mouth_raster_.previous_y != mouth_y) {
         mouth_raster_.previous_x = mouth_x;
@@ -705,7 +737,10 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
 
     const int gentle = TriangleWave(animation_phase_, 32, 2);
 
-    switch (face_state_) {
+    const bool camera_attention =
+        camera_attention_active_.load(std::memory_order_acquire);
+    if (!camera_attention) {
+        switch (face_state_) {
         case FaceState::kListening:
             left.geometry = {78, 54 + gentle, -48, -59, 0};
             right.geometry = {78, 54 + gentle, 48, -59, 0};
@@ -865,9 +900,221 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
             break;
         case FaceState::kIdle:
             break;
+        }
     }
 
-    const bool gaze_eligible = ambient_visual_eligible && AllowsAmbientGaze(face_state_);
+    if (camera_attention) {
+        camera_attention_render_x_ = std::clamp(
+            camera_attention_target_x_.load(std::memory_order_acquire), -1.0f, 1.0f);
+        camera_attention_render_y_ = std::clamp(
+            camera_attention_target_y_.load(std::memory_order_acquire), -1.0f, 1.0f);
+
+        const auto apply_deformation = [](EyeTarget& projected_left,
+                                          EyeTarget& projected_right,
+                                          float x, float y) {
+            const float yaw = std::clamp(x, -1.0f, 1.0f);
+            const float yaw_amount = std::fabs(yaw);
+            const float vertical_scale = 1.0f + y * kAttentionEyeVerticalScale;
+            const float near_scale = 1.0f + kAttentionNearEyeScale * yaw_amount;
+            const float far_width_scale =
+                1.0f - kAttentionFarEyeWidthReduction * yaw_amount;
+            const float far_height_scale =
+                1.0f - kAttentionFarEyeHeightReduction * yaw_amount;
+            EyeGeometry* near_eye = yaw > 0.0f ? &projected_left.geometry
+                                                : &projected_right.geometry;
+            EyeGeometry* far_eye = yaw > 0.0f ? &projected_right.geometry
+                                               : &projected_left.geometry;
+            near_eye->width = static_cast<int>(std::round(near_eye->width * near_scale));
+            near_eye->height = static_cast<int>(
+                std::round(near_eye->height * vertical_scale * near_scale));
+            far_eye->width = static_cast<int>(
+                std::round(far_eye->width * far_width_scale));
+            far_eye->height = static_cast<int>(
+                std::round(far_eye->height * vertical_scale * far_height_scale));
+            if (yaw > 0.0f) {
+                projected_right.geometry.x -= static_cast<int>(std::round(
+                    kAttentionFarEyeInwardShift * yaw_amount));
+                projected_left.geometry.x -= static_cast<int>(std::round(
+                    kAttentionNearEyeOutwardShift * yaw_amount));
+            } else if (yaw < 0.0f) {
+                projected_left.geometry.x += static_cast<int>(std::round(
+                    kAttentionFarEyeInwardShift * yaw_amount));
+                projected_right.geometry.x += static_cast<int>(std::round(
+                    kAttentionNearEyeOutwardShift * yaw_amount));
+            }
+        };
+        struct VisibleBounds {
+            float left;
+            float right;
+            float top;
+            float bottom;
+        };
+        const auto projected_bounds = [&](float deform_x, float deform_y,
+                                          float mouth_pose_x, float mouth_pose_y) {
+            EyeTarget projected_left = left;
+            EyeTarget projected_right = right;
+            apply_deformation(projected_left, projected_right, deform_x, deform_y);
+            projected_left.geometry.y += kEyeLayoutOffsetY;
+            projected_right.geometry.y += kEyeLayoutOffsetY;
+
+            const float left_edge = std::min(
+                projected_left.geometry.x - projected_left.geometry.width * 0.5f,
+                projected_right.geometry.x - projected_right.geometry.width * 0.5f);
+            const float right_edge = std::max(
+                projected_left.geometry.x + projected_left.geometry.width * 0.5f,
+                projected_right.geometry.x + projected_right.geometry.width * 0.5f);
+            const float eye_top = std::min(
+                projected_left.geometry.y - projected_left.geometry.height * 0.5f,
+                projected_right.geometry.y - projected_right.geometry.height * 0.5f) +
+                face_layout_offset_y_;
+            const float eye_bottom = std::max(
+                projected_left.geometry.y + projected_left.geometry.height * 0.5f,
+                projected_right.geometry.y + projected_right.geometry.height * 0.5f) +
+                face_layout_offset_y_;
+
+            // Bound the visible mouth shape rather than its transparent 120x80 raster.
+            // Include the current morph while it converges back to neutral.
+            const float mouth_width = std::max(
+                72.0f, mouth_morph_state_.initialized ? mouth_morph_state_.width : 72.0f);
+            const float mouth_height = std::max(
+                24.0f, mouth_morph_state_.initialized ? mouth_morph_state_.height : 24.0f);
+            const float mouth_top_curve = std::min(
+                2.0f, mouth_morph_state_.initialized ? mouth_morph_state_.top_curve : 2.0f);
+            const float mouth_bottom_curve = std::max(
+                2.0f, mouth_morph_state_.initialized ? mouth_morph_state_.bottom_curve : 2.0f);
+            const float mouth_slope =
+                mouth_morph_state_.initialized ? std::fabs(mouth_morph_state_.slope) : 0.0f;
+            const float mouth_top_gap = std::min(
+                74.0f, mouth_morph_state_.initialized ? mouth_morph_state_.gap : 74.0f);
+            const float mouth_bottom_gap = std::max(
+                74.0f, mouth_morph_state_.initialized ? mouth_morph_state_.gap : 74.0f);
+            const float mouth_scale_x =
+                1.0f - kAttentionMouthYawForeshortening * std::fabs(mouth_pose_x);
+            const float mouth_deformation =
+                256.0f + yawn_amount_ * 160.0f / 256.0f +
+                std::max<int>(0, mouth_motion_amount_) * 24.0f / 256.0f;
+            const float mouth_scale_y =
+                std::max(150.0f,
+                         mouth_deformation *
+                             (1.0f - kAttentionMouthVerticalScale * mouth_pose_y)) /
+                256.0f;
+            const float mouth_center_x =
+                (projected_left.geometry.x + projected_right.geometry.x) * 0.5f +
+                mouth_pose_x * kAttentionMouthYawOffset;
+            const float eye_center_y =
+                (projected_left.geometry.y + projected_right.geometry.y) * 0.5f +
+                face_layout_offset_y_;
+            const float pitch_gap = -mouth_pose_y * kAttentionMouthPitchGap;
+            const float mouth_pivot_y = MouthRaster::kHeight * 2.0f / 5.0f -
+                                        MouthRaster::kHeight * 0.5f;
+            const float mouth_top_local =
+                -mouth_height * 0.5f + std::min(0.0f, mouth_top_curve) - mouth_slope;
+            const float mouth_bottom_local =
+                mouth_height * 0.5f + std::max(0.0f, mouth_bottom_curve);
+            const float mouth_top = eye_center_y + mouth_top_gap + pitch_gap + mouth_pivot_y +
+                                    (mouth_top_local - mouth_pivot_y) * mouth_scale_y;
+            const float mouth_bottom = eye_center_y + mouth_bottom_gap + pitch_gap +
+                                       mouth_pivot_y +
+                                       (mouth_bottom_local - mouth_pivot_y) * mouth_scale_y;
+            const float mouth_left = mouth_center_x - mouth_width * mouth_scale_x * 0.5f;
+            const float mouth_right = mouth_center_x + mouth_width * mouth_scale_x * 0.5f;
+
+            return VisibleBounds{
+                .left = std::min(left_edge, mouth_left),
+                .right = std::max(right_edge, mouth_right),
+                .top = std::min(eye_top, mouth_top),
+                .bottom = std::max(eye_bottom, mouth_bottom),
+            };
+        };
+        const float safe_left = -kAttentionPanelHalfExtent + kAttentionHorizontalMargin;
+        const float safe_right = kAttentionPanelHalfExtent - kAttentionHorizontalMargin;
+        const float safe_top = -kAttentionPanelHalfExtent +
+                               kAttentionTopProtectedExtent + kAttentionTopSafetyGap;
+        const float safe_bottom = kAttentionPanelHalfExtent - kAttentionBottomMargin;
+        const auto deformation_fits = [&](float x, float y) {
+            const VisibleBounds bounds = projected_bounds(x, y, x, y);
+            return bounds.left >= safe_left && bounds.right <= safe_right &&
+                   bounds.top >= safe_top && bounds.bottom <= safe_bottom;
+        };
+
+        float deformation_strength = 1.0f;
+        if (!deformation_fits(camera_attention_render_x_, camera_attention_render_y_)) {
+            float lower = 0.0f;
+            float upper = 1.0f;
+            for (int iteration = 0; iteration < 10; ++iteration) {
+                const float candidate = (lower + upper) * 0.5f;
+                if (deformation_fits(camera_attention_render_x_ * candidate,
+                                     camera_attention_render_y_ * candidate)) {
+                    lower = candidate;
+                } else {
+                    upper = candidate;
+                }
+            }
+            deformation_strength = lower;
+        }
+        camera_attention_deform_x_ = camera_attention_render_x_ * deformation_strength;
+        camera_attention_deform_y_ = camera_attention_render_y_ * deformation_strength;
+        // Keep mouth perspective in phase with the EyeGeometry one-third approach
+        // without adding latency to the camera target or eye target geometry.
+        const auto smooth_mouth_pose = [](float current, float target) {
+            const float delta = target - current;
+            return std::fabs(delta) <= 0.01f ? target : current + delta / 3.0f;
+        };
+        camera_attention_mouth_pose_x_ = smooth_mouth_pose(
+            camera_attention_mouth_pose_x_, camera_attention_deform_x_);
+        camera_attention_mouth_pose_y_ = smooth_mouth_pose(
+            camera_attention_mouth_pose_y_, camera_attention_deform_y_);
+        const VisibleBounds deformed_bounds =
+            projected_bounds(camera_attention_deform_x_, camera_attention_deform_y_,
+                             camera_attention_mouth_pose_x_,
+                             camera_attention_mouth_pose_y_);
+        const float usable_left = std::max(0.0f, deformed_bounds.left - safe_left);
+        const float usable_right = std::max(0.0f, safe_right - deformed_bounds.right);
+        const float usable_up = std::max(0.0f, deformed_bounds.top - safe_top);
+        const float usable_down = std::max(0.0f, safe_bottom - deformed_bounds.bottom);
+        const float desired_x = camera_attention_render_x_ < 0.0f
+                                    ? camera_attention_render_x_ * usable_left
+                                    : camera_attention_render_x_ * usable_right;
+        const float desired_y = camera_attention_render_y_ < 0.0f
+                                    ? camera_attention_render_y_ * usable_up
+                                    : camera_attention_render_y_ * usable_down;
+        const int applied_x = std::clamp(
+            static_cast<int>(std::round(desired_x)),
+            -static_cast<int>(std::floor(usable_left)),
+            static_cast<int>(std::floor(usable_right)));
+        const int applied_y = std::clamp(
+            static_cast<int>(std::round(desired_y)),
+            -static_cast<int>(std::floor(usable_up)),
+            static_cast<int>(std::floor(usable_down)));
+
+        apply_deformation(left, right, camera_attention_deform_x_,
+                          camera_attention_deform_y_);
+        left.geometry.x += applied_x;
+        right.geometry.x += applied_x;
+        left.geometry.y += applied_y;
+        right.geometry.y += applied_y;
+        // Normalized applied telemetry reports the fraction of available directional
+        // travel used after deformation. Pixel telemetry carries the exact translation.
+        const float applied_normalized_x = applied_x < 0 && usable_left > 0.0f
+                                               ? applied_x / usable_left
+                                           : applied_x > 0 && usable_right > 0.0f
+                                               ? applied_x / usable_right
+                                               : 0.0f;
+        const float applied_normalized_y = applied_y < 0 && usable_up > 0.0f
+                                               ? applied_y / usable_up
+                                           : applied_y > 0 && usable_down > 0.0f
+                                               ? applied_y / usable_down
+                                               : 0.0f;
+        camera_attention_applied_x_.store(applied_normalized_x,
+                                           std::memory_order_release);
+        camera_attention_applied_y_.store(applied_normalized_y,
+                                           std::memory_order_release);
+        camera_attention_applied_px_x_.store(applied_x, std::memory_order_release);
+        camera_attention_applied_px_y_.store(applied_y, std::memory_order_release);
+    }
+
+    const bool gaze_eligible = !camera_attention && ambient_visual_eligible &&
+                               AllowsAmbientGaze(face_state_);
     if (!gaze_eligible) {
         ambient_gaze_x_ = 0;
         ambient_gaze_y_ = 0;
@@ -925,6 +1172,23 @@ void MochanDisplay::UpdateEyes(uint8_t blink_amount, bool ambient_visual_eligibl
     } else {
         approach(left_eye_geometry_, left.geometry);
         approach(right_eye_geometry_, right.geometry);
+    }
+    if (camera_attention) {
+        const bool projection_centered = std::fabs(camera_attention_render_x_) < 0.03f &&
+                                         std::fabs(camera_attention_render_y_) < 0.03f &&
+                                         std::fabs(camera_attention_mouth_pose_x_) < 0.03f &&
+                                         std::fabs(camera_attention_mouth_pose_y_) < 0.03f;
+        const bool geometry_centered =
+            std::abs(left_eye_geometry_.x - left.geometry.x) <= 1 &&
+            std::abs(left_eye_geometry_.y - left.geometry.y) <= 1 &&
+            std::abs(left_eye_geometry_.width - left.geometry.width) <= 1 &&
+            std::abs(left_eye_geometry_.height - left.geometry.height) <= 1 &&
+            std::abs(right_eye_geometry_.x - right.geometry.x) <= 1 &&
+            std::abs(right_eye_geometry_.y - right.geometry.y) <= 1 &&
+            std::abs(right_eye_geometry_.width - right.geometry.width) <= 1 &&
+            std::abs(right_eye_geometry_.height - right.geometry.height) <= 1;
+        camera_attention_centered_.store(projection_centered && geometry_centered,
+                                         std::memory_order_release);
     }
 
     EyeGeometry displayed_left = left_eye_geometry_;

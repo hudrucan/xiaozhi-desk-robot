@@ -1110,6 +1110,18 @@
                     <label class="toggle"><input id="cameraObserverEnabled" type="checkbox" /><span>Enabled</span></label>
                   </div>
                   <div class="audio-row microphone-toggle-row camera-observer-config-row">
+                    <span class="audio-name"><b>Camera attention</b><small>Neutral face follows visual motion while Idle. Requires Vision observer.</small></span>
+                    <label class="toggle"><input id="cameraAttentionEnabled" type="checkbox" /><span>Enabled</span></label>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Motion-loss timeout</b><small>Hold the last target through brief motion gaps</small></span>
+                    <div class="camera-observer-number"><input id="cameraAttentionTimeout" type="number" min="0" max="3000" step="50" value="750" /><span>ms</span></div>
+                  </div>
+                  <div class="audio-row camera-observer-config-row">
+                    <span class="audio-name"><b>Tracking gain</b><small>Amplify current motion-centroid displacement</small></span>
+                    <div class="camera-observer-number"><input id="cameraAttentionGain" type="number" min="0.5" max="3" step="0.1" value="1.8" /><span>x</span></div>
+                  </div>
+                  <div class="audio-row microphone-toggle-row camera-observer-config-row">
                     <span class="audio-name"><b>Motion event preview</b><small>Latest volatile frame from activity, motion, or manual capture</small></span>
                     <div class="camera-event-frame-actions">
                       <button id="cameraEventFrameCapture" class="mini-button" type="button" disabled>Capture now</button>
@@ -1191,6 +1203,19 @@
                     <div><dt>Scratch PSRAM</dt><dd id="cameraObserverScratch">0 B</dd></div>
                   </dl>
                 </section>
+                <section class="camera-diag-group">
+                  <h3>Camera attention</h3>
+                  <dl>
+                    <div><dt>State</dt><dd id="cameraAttentionState">Disabled</dd></div>
+                    <div><dt>Origin</dt><dd id="cameraAttentionOrigin">None</dd></div>
+                    <div class="wide"><dt>Desired target X/Y</dt><dd id="cameraAttentionTarget">0.00 / 0.00</dd></div>
+                    <div class="wide"><dt>Applied translation X/Y</dt><dd id="cameraAttentionApplied">0 / 0 px</dd></div>
+                    <div><dt>Wake stage</dt><dd id="cameraAttentionWakeStage">Armed</dd></div>
+                    <div><dt>Wake stage age</dt><dd id="cameraAttentionWakeAge">—</dd></div>
+                    <div><dt>Visual wakes</dt><dd id="cameraAttentionWakeCount">0</dd></div>
+                    <div><dt>Loss grace</dt><dd id="cameraAttentionLossGrace">—</dd></div>
+                  </dl>
+                </section>
                 </div>
                 <div class="camera-observer-details-column">
                 <section class="camera-diag-group">
@@ -1224,10 +1249,19 @@
                 </div>
                 </div>
                 <section id="cameraEventFrameSection" class="camera-diag-group camera-event-frame-group" hidden>
-                  <h3>Event frame</h3>
-                  <div class="camera-event-frame-preview">
-                    <canvas id="cameraEventFrameCanvas" width="160" height="120" aria-label="Vision motion event frame"></canvas>
-                    <span id="cameraEventFramePlaceholder">Motion event preview is off</span>
+                  <h3>Motion preview debug</h3>
+                  <div class="camera-event-frame-visuals">
+                    <div class="camera-event-frame-visual">
+                      <h4>Event frame</h4>
+                      <div class="camera-event-frame-preview">
+                        <canvas id="cameraEventFrameCanvas" width="160" height="120" aria-label="Vision motion event frame"></canvas>
+                        <span id="cameraEventFramePlaceholder">Motion event preview is off</span>
+                      </div>
+                    </div>
+                    <div class="camera-motion-coordinate-visual">
+                      <h4>Live motion position</h4>
+                      <canvas id="cameraMotionCoordinateCanvas" width="320" height="240" aria-label="Current camera attention input coordinates"></canvas>
+                    </div>
                   </div>
                   <dl>
                     <div><dt>Format</dt><dd>160 × 120 RGB565LE</dd></div>

@@ -39,4 +39,10 @@ public:
     void SetDeskModeDelaySeconds(int seconds) const;
     bool GetDeskModeUse24Hour() const;
     void SetDeskModeUse24Hour(bool use_24_hour) const;
+    bool GetCameraAttentionEnabled() const;
+    void SetCameraAttentionEnabled(bool enabled) const;
+    int GetCameraAttentionMotionLossTimeoutMs() const;
+    void SetCameraAttentionMotionLossTimeoutMs(int timeout_ms) const;
+    int GetCameraAttentionTrackingGainPercent() const;
+    void SetCameraAttentionTrackingGainPercent(int gain_percent) const;
 };

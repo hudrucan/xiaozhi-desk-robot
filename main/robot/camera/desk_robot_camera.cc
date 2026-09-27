@@ -504,6 +504,13 @@ CameraObserverStatus DeskRobotCamera::GetObserverStatus() const {
     return observer_.GetStatus();
 }
 
+void DeskRobotCamera::ResetObserverContinuity() {
+    std::lock_guard<std::mutex> observer_gate(observer_sample_gate_);
+    observer_.ResetBaseline();
+    observer_baseline_reset_pending_ = false;
+    WakeBackgroundWorker();
+}
+
 int DeskRobotCamera::GetObserverRecommendedIntervalMs() const {
     return observer_.GetRecommendedIntervalMs();
 }

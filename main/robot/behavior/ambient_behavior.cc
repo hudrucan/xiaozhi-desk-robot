@@ -934,7 +934,8 @@ void AmbientBehavior::Tick(const Context& context, int64_t now_us) {
         reaction_overlay_active_ = reaction.active;
         foreign_reaction_active_ = foreign_reaction;
 
-        if (!hard_suppressed && context.activity != Activity::kSuppressed) {
+        if (!hard_suppressed && !context.camera_attention_active &&
+            context.activity != Activity::kSuppressed) {
             IdleStage stage = IdleStage::kAwake;
             if (context.activity == Activity::kIdle) {
                 if (!idle_session_active_) {

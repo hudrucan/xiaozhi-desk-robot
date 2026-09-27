@@ -213,6 +213,26 @@ bool RobotWebAdapter::ExecuteAction(const std::string& action, int value,
         message = enabled ? "Ambient sounds enabled" : "Ambient sounds disabled";
         return true;
     }
+    if (action == "camera_attention") {
+        const bool enabled = value != 0;
+        controller_.SetCameraAttentionEnabled(enabled);
+        message = enabled ? "Camera attention enabled" : "Camera attention disabled";
+        return true;
+    }
+    if (action == "camera_attention_timeout") {
+        const int timeout_ms = std::clamp(value, 0, 3000);
+        controller_.SetCameraAttentionMotionLossTimeoutMs(timeout_ms);
+        message = "Camera attention motion-loss timeout " +
+                  std::to_string(timeout_ms) + " ms";
+        return true;
+    }
+    if (action == "camera_attention_gain") {
+        const int gain_percent = std::clamp(value, 50, 300);
+        controller_.SetCameraAttentionTrackingGainPercent(gain_percent);
+        message = "Camera attention tracking gain " +
+                  std::to_string(gain_percent) + "%";
+        return true;
+    }
     if (action == "microphone_profile") {
         const bool accepted = controller_.SetMicrophoneProfile(text);
         message = accepted ? "Microphone profile " + text : "Unsupported microphone profile";

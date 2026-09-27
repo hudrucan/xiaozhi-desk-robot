@@ -9,6 +9,10 @@
 namespace {
 constexpr int kDefaultMotorSpeedPercent = 70;
 constexpr int kDefaultDriveDurationMs = 250;
+// NVS keys are limited to 15 characters.
+constexpr char kCameraAttentionKey[] = "cam_attention";
+constexpr char kCameraAttentionTimeoutKey[] = "cam_att_to";
+constexpr char kCameraAttentionGainKey[] = "cam_att_gain";
 }  // namespace
 
 int RobotSettings::GetSpeakerVolume() const {
@@ -205,4 +209,36 @@ bool RobotSettings::GetDeskModeUse24Hour() const {
 void RobotSettings::SetDeskModeUse24Hour(bool use_24_hour) const {
     Settings settings("desk_robot", true);
     settings.SetBool("desk_24h", use_24_hour);
+}
+
+bool RobotSettings::GetCameraAttentionEnabled() const {
+    Settings settings("desk_robot", false);
+    return settings.GetBool(kCameraAttentionKey, false);
+}
+
+void RobotSettings::SetCameraAttentionEnabled(bool enabled) const {
+    Settings settings("desk_robot", true);
+    settings.SetBool(kCameraAttentionKey, enabled);
+}
+
+int RobotSettings::GetCameraAttentionMotionLossTimeoutMs() const {
+    Settings settings("desk_robot", false);
+    return std::clamp(
+        static_cast<int>(settings.GetInt(kCameraAttentionTimeoutKey, 750)), 0, 3000);
+}
+
+void RobotSettings::SetCameraAttentionMotionLossTimeoutMs(int timeout_ms) const {
+    Settings settings("desk_robot", true);
+    settings.SetInt(kCameraAttentionTimeoutKey, std::clamp(timeout_ms, 0, 3000));
+}
+
+int RobotSettings::GetCameraAttentionTrackingGainPercent() const {
+    Settings settings("desk_robot", false);
+    return std::clamp(
+        static_cast<int>(settings.GetInt(kCameraAttentionGainKey, 180)), 50, 300);
+}
+
+void RobotSettings::SetCameraAttentionTrackingGainPercent(int gain_percent) const {
+    Settings settings("desk_robot", true);
+    settings.SetInt(kCameraAttentionGainKey, std::clamp(gain_percent, 50, 300));
 }

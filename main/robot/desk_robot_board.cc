@@ -4,6 +4,7 @@
 #include "assets/lang_config.h"
 #include "button.h"
 #include "behavior/ambient_behavior.h"
+#include "behavior/camera_attention_controller.h"
 #include "behavior/proactive_events.h"
 #include "behavior/reaction_engine.h"
 #include "camera/camera_settings.h"
@@ -112,6 +113,7 @@ private:
     ExpressiveMotionPlanner expressive_motion_planner_;
     ReactionEngine reaction_engine_;
     AmbientBehavior ambient_behavior_;
+    CameraAttentionController camera_attention_;
     ProactiveEvents proactive_events_;
     RobotSettings robot_settings_;
     CameraSettingsStore camera_settings_;
@@ -127,6 +129,9 @@ private:
     std::atomic_bool desk_mode_enabled_{true};
     std::atomic_int desk_mode_delay_seconds_{180};
     std::atomic_bool desk_mode_use_24_hour_{true};
+    std::atomic_bool camera_attention_enabled_{false};
+    bool camera_attention_self_motion_latched_ = false;
+    int64_t camera_attention_settle_until_us_ = 0;
     std::atomic_bool motor_activity_active_{false};
     std::atomic_int drive_duration_ms_{kDefaultDriveDurationMs};
     std::atomic_uint32_t live_drive_command_{100u | (100u << 8)};
@@ -300,6 +305,7 @@ private:
         context.camera_active = camera_ != nullptr &&
                                 (camera_->IsMcpOperationActive() ||
                                  camera_->preview_mode() != DeskRobotCamera::PreviewMode::kOff);
+        context.camera_attention_active = display_->IsCameraAttentionActive();
         context.tool_active =
             now_us < ambient_tool_active_until_us_.load(std::memory_order_acquire);
         context.manual_control_active =
@@ -332,7 +338,96 @@ private:
         ambient_behavior_.Tick(context, now_us);
     }
 
+    void TickCameraAttention(DeviceState state, int64_t now_us) {
+        if (camera_ == nullptr || display_ == nullptr) {
+            return;
+        }
+        const bool attention_enabled =
+            camera_attention_enabled_.load(std::memory_order_acquire);
+        if (!attention_enabled) {
+            camera_attention_self_motion_latched_ = false;
+            return;
+        }
+        const CameraObserverStatus observer = camera_->GetObserverStatus();
+        if (state != kDeviceStateIdle) {
+            camera_attention_self_motion_latched_ = false;
+            if (display_->IsCameraAttentionActive()) {
+                display_->EndCameraAttention(false);
+            }
+            camera_attention_.ResetContinuity(observer.normal_sample_count);
+            return;
+        }
+        if (!observer.enabled) {
+            camera_attention_self_motion_latched_ = false;
+            if (display_->IsCameraAttentionActive()) {
+                display_->EndCameraAttention(false);
+            }
+            camera_attention_.ResetContinuity(observer.normal_sample_count);
+            return;
+        }
+        bool gyro_busy = false;
+#ifdef MPU6050_I2C_ADDRESS
+        const GyroTurnController::Status gyro = gyro_turn_controller_.GetStatus();
+        gyro_busy = gyro.pending || gyro.active;
+#endif
+        const bool self_motion = motors_.IsActive() ||
+                                 motor_activity_active_.load(std::memory_order_relaxed) ||
+                                 gyro_busy ||
+                                 reaction_motion_generation_.load(std::memory_order_acquire) != 0;
+        if (self_motion) {
+            camera_attention_self_motion_latched_ = true;
+            camera_attention_settle_until_us_ = now_us + 750 * 1000LL;
+        } else if (camera_attention_self_motion_latched_ &&
+                   now_us >= camera_attention_settle_until_us_) {
+            camera_->ResetObserverContinuity();
+            const CameraObserverStatus reset_status = camera_->GetObserverStatus();
+            camera_attention_.ResetContinuity(reset_status.normal_sample_count);
+            camera_attention_self_motion_latched_ = false;
+        }
+        const bool settling = self_motion || camera_attention_self_motion_latched_;
+        const bool higher_priority = reaction_engine_.IsActive() ||
+                                     temporary_emotion_expires_at_us_.load(
+                                         std::memory_order_acquire) != 0;
+        CameraAttentionController::Input input;
+        input.enabled = attention_enabled;
+        input.vision_enabled = observer.enabled;
+        input.idle = state == kDeviceStateIdle;
+        input.observer_usable = observer.state == CameraObserverState::kActive;
+        input.desk_mode_active = display_->IsDeskModeActive();
+        input.visual_owned = display_->IsCameraAttentionActive();
+        input.visual_centered = display_->IsCameraAttentionCentered();
+        input.visual_eligible = !higher_priority && display_->CanCameraAttentionOwnFace();
+        input.self_motion_suppressed = settling;
+        input.normal_sample_count = observer.normal_sample_count;
+        input.now_ms = now_us / 1000;
+        input.sample_ms = observer.last_sample_ms;
+        input.spatial_valid = observer.spatial.valid;
+        input.activity_active = observer.activity_active;
+        input.centroid_x = observer.spatial.centroid_x;
+        input.centroid_y = observer.spatial.centroid_y;
+        input.attention_centroid_x = camera_mirrored_.load(std::memory_order_acquire)
+                                         ? observer.spatial.centroid_x
+                                         : 1.0f - observer.spatial.centroid_x;
+
+        const CameraAttentionController::Action action = camera_attention_.Tick(input);
+        bool owns_face = input.visual_owned;
+        if (action.start) {
+            const CameraAttentionController::Status attention = camera_attention_.GetStatus();
+            owns_face = display_->StartCameraAttention(
+                attention.origin == CameraAttentionController::Origin::kDeskMode);
+        }
+        if (action.update_target && owns_face) {
+            display_->SetCameraAttentionTarget(action.target_x, action.target_y);
+        }
+        if (action.release) {
+            display_->EndCameraAttention(action.return_to_desk);
+        }
+    }
+
     void TickDeskMode(DeviceState state, int64_t now_us) {
+        if (display_->IsCameraAttentionActive()) {
+            return;
+        }
         if (last_desk_mode_update_us_ != 0 &&
             now_us - last_desk_mode_update_us_ < 1000 * 1000LL) {
             return;
@@ -556,6 +651,7 @@ private:
 #endif
             const DeviceState state = Application::GetInstance().GetDeviceState();
             proactive_events_.Tick(now_us, IsConversationActive());
+            TickCameraAttention(state, now_us);
             TickAmbientBehavior(state, now_us);
             TickDeskMode(state, now_us);
             vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(MPU6050_SAMPLE_PERIOD_MS));
@@ -741,6 +837,13 @@ private:
         desk_mode_enabled_.store(robot_settings_.GetDeskModeEnabled());
         desk_mode_delay_seconds_.store(robot_settings_.GetDeskModeDelaySeconds());
         desk_mode_use_24_hour_.store(robot_settings_.GetDeskModeUse24Hour());
+        camera_attention_enabled_.store(robot_settings_.GetCameraAttentionEnabled());
+        CameraAttentionController::Config attention_config;
+        attention_config.motion_loss_timeout_ms =
+            robot_settings_.GetCameraAttentionMotionLossTimeoutMs();
+        attention_config.tracking_gain_percent =
+            robot_settings_.GetCameraAttentionTrackingGainPercent();
+        camera_attention_.Configure(attention_config);
         display_->SetDeskModeUse24Hour(desk_mode_use_24_hour_.load());
 #if defined(DISPLAY_PANEL_GAP_X) && defined(DISPLAY_PANEL_GAP_Y)
         // A 240x240 ST7789 panel addresses a 240x320 controller RAM. After swapping X/Y,
@@ -1324,6 +1427,7 @@ private:
                 const bool ambient_idle_current =
                     Application::GetInstance().GetDeviceState() == kDeviceStateIdle &&
                     display_->GetAmbientActivity() == MochanDisplay::AmbientActivity::kIdle &&
+                    !display_->IsCameraAttentionActive() &&
                     !reaction_engine_.IsActive() &&
                     now_us >=
                         ambient_manual_control_until_us_.load(std::memory_order_acquire) &&
@@ -1678,6 +1782,7 @@ private:
             if (!ambient_sound_enabled_.load(std::memory_order_acquire) ||
                 app.GetDeviceState() != kDeviceStateIdle ||
                 display_->GetAmbientActivity() != MochanDisplay::AmbientActivity::kIdle ||
+                display_->IsCameraAttentionActive() ||
                 reaction_engine_.IsActive() ||
                 now_us < ambient_manual_control_until_us_.load(std::memory_order_acquire) ||
                 now_us < ambient_tool_active_until_us_.load(std::memory_order_acquire) ||
@@ -2120,6 +2225,56 @@ private:
         });
     }
 
+    void QueueCameraAttentionEnabled(bool enabled) {
+        Application::GetInstance().Schedule([this, enabled]() {
+            const CameraObserverStatus observer =
+                camera_ != nullptr ? camera_->GetObserverStatus() : CameraObserverStatus{};
+            if (enabled) {
+                if (!camera_attention_enabled_.load(std::memory_order_acquire)) {
+                    if (display_->IsCameraAttentionActive()) {
+                        const CameraAttentionController::Status attention =
+                            camera_attention_.GetStatus();
+                        display_->EndCameraAttention(
+                            attention.origin == CameraAttentionController::Origin::kDeskMode);
+                    }
+                    camera_attention_.ResetContinuity(observer.normal_sample_count);
+                    camera_attention_enabled_.store(true, std::memory_order_release);
+                }
+            } else {
+                camera_attention_enabled_.store(false, std::memory_order_release);
+                const CameraAttentionController::Status attention =
+                    camera_attention_.GetStatus();
+                const bool attention_active = display_->IsCameraAttentionActive();
+                const bool return_to_desk = attention_active &&
+                                            attention.origin ==
+                                                CameraAttentionController::Origin::kDeskMode;
+                if (attention_active) {
+                    display_->EndCameraAttention(return_to_desk);
+                }
+                camera_attention_.ResetContinuity(observer.normal_sample_count);
+            }
+            robot_settings_.SetCameraAttentionEnabled(enabled);
+        });
+    }
+
+    void QueueCameraAttentionMotionLossTimeoutMs(int timeout_ms) {
+        const int safe_timeout_ms = std::clamp(timeout_ms, 0, 3000);
+        camera_attention_.SetMotionLossTimeoutMs(safe_timeout_ms);
+        Application::GetInstance().Schedule(
+            [this, safe_timeout_ms]() {
+                robot_settings_.SetCameraAttentionMotionLossTimeoutMs(safe_timeout_ms);
+            });
+    }
+
+    void QueueCameraAttentionTrackingGainPercent(int gain_percent) {
+        const int safe_gain_percent = std::clamp(gain_percent, 50, 300);
+        camera_attention_.SetTrackingGainPercent(safe_gain_percent);
+        Application::GetInstance().Schedule(
+            [this, safe_gain_percent]() {
+                robot_settings_.SetCameraAttentionTrackingGainPercent(safe_gain_percent);
+            });
+    }
+
     void QueueStatusLightBrightness(int brightness) {
         const int safe_brightness = std::clamp(brightness, 0, 100);
         status_light_brightness_.store(safe_brightness);
@@ -2479,6 +2634,34 @@ private:
     bool QueueCameraVisionEventFrameCapture() override {
         return live_camera_task_ != nullptr && camera_ != nullptr &&
                camera_->QueueVisionEventFrameCapture();
+    }
+
+    CameraAttentionController::Status GetCameraAttentionStatus() const override {
+        CameraAttentionController::Status status = camera_attention_.GetStatus();
+        const CameraObserverStatus observer =
+            camera_ != nullptr ? camera_->GetObserverStatus() : CameraObserverStatus{};
+        status.enabled = camera_attention_enabled_.load(std::memory_order_acquire);
+        status.input_x = camera_mirrored_.load(std::memory_order_acquire)
+                             ? observer.spatial.centroid_x
+                             : 1.0f - observer.spatial.centroid_x;
+        status.input_y = observer.spatial.centroid_y;
+        status.applied_x = display_->GetCameraAttentionAppliedX();
+        status.applied_y = display_->GetCameraAttentionAppliedY();
+        status.applied_px_x = display_->GetCameraAttentionAppliedPxX();
+        status.applied_px_y = display_->GetCameraAttentionAppliedPxY();
+        return status;
+    }
+
+    void SetCameraAttentionEnabled(bool enabled) override {
+        QueueCameraAttentionEnabled(enabled);
+    }
+
+    void SetCameraAttentionMotionLossTimeoutMs(int timeout_ms) override {
+        QueueCameraAttentionMotionLossTimeoutMs(timeout_ms);
+    }
+
+    void SetCameraAttentionTrackingGainPercent(int gain_percent) override {
+        QueueCameraAttentionTrackingGainPercent(gain_percent);
     }
 
     SecondaryOled::Config GetSecondaryDisplayConfig() const override {

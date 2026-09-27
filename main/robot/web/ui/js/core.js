@@ -96,7 +96,10 @@ function domainsForAction(name) {
     "microphone_mute", "audio_test"].includes(name)) {
     return ["audio"];
   }
-  if (["camera_mirror", "camera_flip", "live_camera"].includes(name)) return ["camera"];
+  if (["camera_mirror", "camera_flip", "live_camera", "camera_attention",
+    "camera_attention_timeout", "camera_attention_gain"].includes(name)) {
+    return ["camera"];
+  }
   if (name.startsWith("battery_")) return ["battery"];
   return ["core"];
 }

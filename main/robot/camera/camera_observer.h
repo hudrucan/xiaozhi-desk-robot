@@ -53,6 +53,7 @@ struct CameraObserverStatus {
     float motion_score = 0.0f;
     float center_activity_score = 0.0f;
     float changed_pixel_ratio = 0.0f;
+    bool activity_active = false;
     CameraMotionSpatialMetrics spatial;
     CameraMotionTemporalResult temporal;
     bool motion_active = false;
@@ -63,6 +64,7 @@ struct CameraObserverStatus {
     uint32_t analyze_ms = 0;
     uint32_t total_ms = 0;
     uint32_t sample_count = 0;
+    uint32_t normal_sample_count = 0;
     uint32_t skipped_count = 0;
     uint32_t failure_count = 0;
     size_t scratch_psram_bytes = 0;

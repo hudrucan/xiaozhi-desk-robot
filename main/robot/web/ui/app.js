@@ -276,6 +276,14 @@ function bindCameraAndLogControls() {
   };
   $("#cameraSettingsApply").onclick = () => saveCameraSettings(false);
   $("#cameraObserverEnabled").onchange = () => saveCameraSettings(false, true);
+  $("#cameraAttentionEnabled").onchange = (event) =>
+    action("camera_attention", { value: event.target.checked ? 1 : 0 });
+  $("#cameraAttentionTimeout").onchange = (event) =>
+    action("camera_attention_timeout", { value: Math.round(Number(event.target.value)) });
+  $("#cameraAttentionGain").onchange = (event) =>
+    action("camera_attention_gain", {
+      value: Math.round(Number(event.target.value) * 100),
+    });
   bindCameraMotionSettings(() => saveCameraSettings(false, true));
   $("#cameraEventFrameEnabled").onchange = (event) =>
     setCameraEventFrameEnabled(event.target.checked);

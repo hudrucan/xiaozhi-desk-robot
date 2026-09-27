@@ -43,6 +43,16 @@ public:
     void SetDeskModeUse24Hour(bool use_24_hour);
     void SetDeskModeEnvironment(bool temperature_valid, float temperature_c,
                                 bool humidity_valid, float humidity_percent);
+    bool StartCameraAttention(bool from_desk_mode);
+    bool SetCameraAttentionTarget(float x, float y);
+    void EndCameraAttention(bool return_to_desk_mode);
+    bool IsCameraAttentionActive() const;
+    bool IsCameraAttentionCentered() const;
+    bool CanCameraAttentionOwnFace() const;
+    float GetCameraAttentionAppliedX() const;
+    float GetCameraAttentionAppliedY() const;
+    int GetCameraAttentionAppliedPxX() const;
+    int GetCameraAttentionAppliedPxY() const;
     void SetFaceOverrideActive(bool active);
     void RestoreActivityFace();
     bool SetPanelMirror(bool mirror_x, bool mirror_y);
@@ -232,6 +242,8 @@ private:
     void RenderTypingText();
     bool CanShowDeskModeLocked() const;
     void HideDeskModeLocked();
+    bool CanCameraAttentionOwnFaceLocked() const;
+    void CancelCameraAttentionLocked();
 
     lv_obj_t* face_ = nullptr;
     std::unique_ptr<DeskModeView> desk_mode_;
@@ -277,6 +289,20 @@ private:
     std::atomic_bool desk_mode_active_{false};
     std::atomic_bool desk_mode_use_24_hour_{true};
     std::atomic_bool face_override_active_{false};
+    std::atomic_bool camera_attention_active_{false};
+    std::atomic<float> camera_attention_target_x_{0.0f};
+    std::atomic<float> camera_attention_target_y_{0.0f};
+    std::atomic<float> camera_attention_applied_x_{0.0f};
+    std::atomic<float> camera_attention_applied_y_{0.0f};
+    std::atomic_int camera_attention_applied_px_x_{0};
+    std::atomic_int camera_attention_applied_px_y_{0};
+    std::atomic_bool camera_attention_centered_{true};
+    float camera_attention_render_x_ = 0.0f;
+    float camera_attention_render_y_ = 0.0f;
+    float camera_attention_deform_x_ = 0.0f;
+    float camera_attention_deform_y_ = 0.0f;
+    float camera_attention_mouth_pose_x_ = 0.0f;
+    float camera_attention_mouth_pose_y_ = 0.0f;
     uint16_t animation_phase_ = 0;
     uint16_t blink_countdown_ = 90;
     uint8_t blink_step_ = 0;

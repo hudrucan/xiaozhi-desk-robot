@@ -80,6 +80,8 @@ list(APPEND SOURCES
     "robot/camera/camera_vision_event_frame.cc"
     "robot/camera/desk_robot_camera.cc"
     "robot/behavior/ambient_behavior.cc"
+    "robot/behavior/camera_attention_controller.cc"
+    "robot/behavior/camera_visual_wake_detector.cc"
     "robot/behavior/proactive_events.cc"
     "robot/behavior/reaction_engine.cc"
     "robot/control/robot_controller.cc"

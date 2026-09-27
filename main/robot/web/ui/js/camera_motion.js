@@ -162,6 +162,61 @@ function drawCameraMotionOverlay(context, canvas, motion) {
   context.restore();
 }
 
+function drawCameraMotionCoordinate(status, hasSample) {
+  const canvas = $("#cameraMotionCoordinateCanvas");
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  const inset = 8.5;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#080704";
+  context.fillRect(0, 0, width, height);
+
+  context.save();
+  context.lineWidth = 1;
+  context.strokeStyle = "rgba(198, 161, 91, 0.18)";
+  for (const ratio of [0.25, 0.75]) {
+    const x = inset + ratio * (width - inset * 2);
+    const y = inset + ratio * (height - inset * 2);
+    context.beginPath();
+    context.moveTo(x, inset);
+    context.lineTo(x, height - inset);
+    context.moveTo(inset, y);
+    context.lineTo(width - inset, y);
+    context.stroke();
+  }
+  context.strokeStyle = "rgba(240, 199, 106, 0.48)";
+  context.beginPath();
+  context.moveTo(width / 2 + 0.5, inset);
+  context.lineTo(width / 2 + 0.5, height - inset);
+  context.moveTo(inset, height / 2 + 0.5);
+  context.lineTo(width - inset, height / 2 + 0.5);
+  context.stroke();
+  context.strokeStyle = "rgba(198, 161, 91, 0.75)";
+  context.strokeRect(inset, inset, width - inset * 2, height - inset * 2);
+  context.fillStyle = "rgba(240, 199, 106, 0.62)";
+  context.font = "9px monospace";
+  context.fillText("Y", inset + 4, inset + 11);
+  context.fillText("X", width - inset - 11, height / 2 - 5);
+
+  const active = hasSample && !!status.camera_motion_spatial_valid &&
+    !!status.camera_vision_observer_activity_active;
+  const attentionInputX = Number(status.camera_attention_input_x);
+  const attentionInputY = Number(status.camera_attention_input_y);
+  if (active && Number.isFinite(attentionInputX) && Number.isFinite(attentionInputY)) {
+    const x = inset + cameraMotionClamp(attentionInputX) * (width - inset * 2);
+    const y = inset + cameraMotionClamp(attentionInputY) * (height - inset * 2);
+    context.fillStyle = "#f0c76a";
+    context.shadowColor = "rgba(240, 199, 106, 0.65)";
+    context.shadowBlur = 7;
+    context.beginPath();
+    context.arc(x, y, 4.5, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+}
+
 function renderCameraMotionTelemetry(status, hasSample) {
   const valid = hasSample && !!status.camera_motion_spatial_valid;
   const set = (id, value) => { $("#" + id).textContent = value; };
@@ -169,6 +224,19 @@ function renderCameraMotionTelemetry(status, hasSample) {
     const text = String(value || "none").replaceAll("_", " ");
     return text.charAt(0).toUpperCase() + text.slice(1);
   };
+  if (document.activeElement !== $("#cameraAttentionEnabled")) {
+    $("#cameraAttentionEnabled").checked = !!status.camera_attention_enabled;
+  }
+  const attentionTimeout = Number(status.camera_attention_motion_loss_timeout_ms);
+  if (document.activeElement !== $("#cameraAttentionTimeout") &&
+      Number.isFinite(attentionTimeout)) {
+    $("#cameraAttentionTimeout").value = attentionTimeout;
+  }
+  const attentionGain = Number(status.camera_attention_tracking_gain);
+  if (document.activeElement !== $("#cameraAttentionGain") &&
+      Number.isFinite(attentionGain)) {
+    $("#cameraAttentionGain").value = attentionGain.toFixed(1);
+  }
   const samplingState = String(
     status.camera_vision_observer_sampling_state || "quiet").replaceAll("_", " ");
   set("cameraObserverSamplingState",
@@ -191,6 +259,25 @@ function renderCameraMotionTelemetry(status, hasSample) {
       fmtMs(Number(status.camera_motion_last_crossing_age_ms) || 0) + " ago"
     : "—");
   set("cameraMotionCrossingCount", Number(status.camera_motion_crossing_count) || 0);
+  set("cameraAttentionState", title(status.camera_attention_state));
+  set("cameraAttentionOrigin", title(status.camera_attention_origin));
+  const attentionFixed = (value) => Number.isFinite(Number(value))
+    ? Number(value).toFixed(2) : "—";
+  set("cameraAttentionTarget", attentionFixed(status.camera_attention_target_x) + " / " +
+    attentionFixed(status.camera_attention_target_y));
+  const appliedPxX = Number(status.camera_attention_applied_px_x);
+  const appliedPxY = Number(status.camera_attention_applied_px_y);
+  set("cameraAttentionApplied", Number.isFinite(appliedPxX) && Number.isFinite(appliedPxY)
+    ? Math.round(appliedPxX) + " / " + Math.round(appliedPxY) + " px"
+    : "—");
+  set("cameraAttentionWakeStage", title(status.camera_attention_wake_stage));
+  set("cameraAttentionWakeAge", Number(status.camera_attention_wake_age_ms) > 0
+    ? fmtMs(Number(status.camera_attention_wake_age_ms)) : "—");
+  set("cameraAttentionWakeCount", Number(status.camera_attention_wake_count) || 0);
+  set("cameraAttentionLossGrace", status.camera_attention_state === "loss_grace"
+    ? fmtMs(Number(status.camera_attention_loss_grace_remaining_ms) || 0)
+    : "—");
+  drawCameraMotionCoordinate(status, hasSample);
   if (!valid) {
     ["cameraMotionActiveCells", "cameraMotionCentroid", "cameraMotionRegion",
       "cameraMotionBbox", "cameraMotionBboxArea"].forEach((id) => set(id, "—"));

@@ -22,6 +22,7 @@ public:
     struct Context {
         Activity activity = Activity::kSuppressed;
         bool camera_active = false;
+        bool camera_attention_active = false;
         bool tool_active = false;
         bool manual_control_active = false;
         bool motor_busy = false;

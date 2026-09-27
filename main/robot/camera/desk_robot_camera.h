@@ -74,6 +74,7 @@ public:
     McpRequestHealth GetMcpRequestHealth() const;
     CameraDiagnostics GetDiagnostics();
     CameraObserverStatus GetObserverStatus() const;
+    void ResetObserverContinuity();
     int GetObserverRecommendedIntervalMs() const;
     CameraVisionEventFrameStatus GetVisionEventFrameStatus() const;
     bool SetVisionEventFrameEnabled(bool enabled);

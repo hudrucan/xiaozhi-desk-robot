@@ -41,7 +41,9 @@ function domainInterval(name) {
   }
   if (name === "battery") return activeTab === "control" ? 3000
     : activeTab === "overview" ? 10000 : 2000;
-  if (name === "camera") return activeTab === "camera" ? 1000 : 2500;
+  if (name === "camera") {
+    return activeTab === "camera" ? (cameraEventFrameEnabled ? 250 : 1000) : 2500;
+  }
   if (name === "audio") return 1000;
   if (name === "display") {
     return statusCache.auto_brightness_enabled || statusCache.oled_auto_contrast_enabled ||
