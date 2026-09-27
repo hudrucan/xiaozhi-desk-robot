@@ -2161,7 +2161,8 @@ private:
             }
 
             const CameraSettingsConfig settings = camera_->GetSettings();
-            if (!settings.vision.enabled) {
+            if (!settings.vision.enabled &&
+                !camera_->IsVisionEventFrameCapturePending()) {
                 camera_->SetObserverWorkerState(CameraObserverState::kDisabled,
                                                 CameraObserverSuspendReason::kDisabled);
                 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -2187,7 +2188,11 @@ private:
                 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 continue;
             }
-            camera_->CaptureObserverSample();
+            if (camera_->IsVisionEventFrameCapturePending()) {
+                camera_->CaptureObserverSample(true);
+            } else {
+                camera_->CaptureObserverSample();
+            }
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(settings.vision.interval_ms));
         }
     }
@@ -2456,9 +2461,22 @@ private:
         return camera_ != nullptr ? camera_->GetObserverStatus() : CameraObserverStatus{};
     }
 
-    CameraVisionInferenceStatus GetCameraVisionInferenceStatus() const override {
-        return camera_ != nullptr ? camera_->GetVisionInferenceStatus()
-                                  : CameraVisionInferenceStatus{};
+    CameraVisionEventFrameStatus GetCameraVisionEventFrameStatus() const override {
+        return camera_ != nullptr ? camera_->GetVisionEventFrameStatus()
+                                  : CameraVisionEventFrameStatus{};
+    }
+
+    bool SetCameraVisionEventFrameEnabled(bool enabled) override {
+        return camera_ != nullptr && camera_->SetVisionEventFrameEnabled(enabled);
+    }
+
+    bool SendCameraVisionEventFrame(const SnapshotSender& sender) const override {
+        return camera_ != nullptr && camera_->SendVisionEventFrame(sender);
+    }
+
+    bool QueueCameraVisionEventFrameCapture() override {
+        return live_camera_task_ != nullptr && camera_ != nullptr &&
+               camera_->QueueVisionEventFrameCapture();
     }
 
     SecondaryOled::Config GetSecondaryDisplayConfig() const override {

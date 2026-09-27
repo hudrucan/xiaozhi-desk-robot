@@ -3,7 +3,7 @@
 #include "camera_image_policy.h"
 #include "camera_observer.h"
 #include "camera_settings.h"
-#include "camera_vision_inference.h"
+#include "camera_vision_event_frame.h"
 #include "esp32_camera.h"
 
 #include <atomic>
@@ -74,8 +74,14 @@ public:
     McpRequestHealth GetMcpRequestHealth() const;
     CameraDiagnostics GetDiagnostics();
     CameraObserverStatus GetObserverStatus() const;
-    CameraVisionInferenceStatus GetVisionInferenceStatus() const;
-    bool CaptureObserverSample();
+    CameraVisionEventFrameStatus GetVisionEventFrameStatus() const;
+    bool SetVisionEventFrameEnabled(bool enabled);
+    bool SendVisionEventFrame(const CameraVisionEventFrame::FrameSender& sender) const;
+    bool QueueVisionEventFrameCapture();
+    bool IsVisionEventFrameCapturePending() const {
+        return vision_event_frame_capture_pending_.load(std::memory_order_acquire);
+    }
+    bool CaptureObserverSample(bool manual_event_frame = false);
     void SetObserverWorkerState(CameraObserverState state,
                                 CameraObserverSuspendReason reason,
                                 bool count_skip = false);
@@ -117,8 +123,10 @@ private:
     std::atomic_bool observer_mode_configured_{false};
     CameraSensorSettings observer_applied_sensor_settings_;
     bool observer_applied_sensor_settings_valid_ = false;
+    bool observer_baseline_reset_pending_ = false;
     CameraObserver observer_;
-    CameraVisionInference vision_inference_;
+    CameraVisionEventFrame vision_event_frame_;
+    std::atomic_bool vision_event_frame_capture_pending_{false};
     CameraImagePolicy& image_policy_;
     McpStateCallback mcp_state_callback_;
     BackgroundWakeCallback background_wake_callback_;

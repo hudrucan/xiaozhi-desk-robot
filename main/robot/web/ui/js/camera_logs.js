@@ -1,6 +1,11 @@
 let cameraSettingsData = null;
 let cameraSettingsSaving = false;
 let cameraNavigationStopPending = false;
+let cameraEventFrameRequestPending = false;
+let cameraEventFrameEnabled = false;
+let cameraEventFrameAvailable = false;
+let cameraEventFrameTimer = 0;
+let cameraEventFrameFetchPending = false;
 
 function cameraObserverIntervalValue() {
   const selected = $('input[name="cameraObserverInterval"]:checked');
@@ -13,7 +18,6 @@ function cameraObserverIntervalValue() {
 
 function setCameraObserverControlsDisabled(disabled) {
   $("#cameraObserverEnabled").disabled = disabled;
-  $("#cameraFaceDetectionEnabled").disabled = disabled;
   $all('input[name="cameraObserverInterval"]').forEach((input) => {
     input.disabled = disabled;
   });
@@ -71,7 +75,6 @@ function populateCameraSettings(data) {
     ? Number(vision.interval_ms) : 1000;
   const intervalControl = $(`input[name="cameraObserverInterval"][value="${interval}"]`);
   if (intervalControl) intervalControl.checked = true;
-  $("#cameraFaceDetectionEnabled").checked = !!vision.face_detection_enabled;
   $("#cameraSettingsApply").disabled = false;
   $("#cameraSettingsReset").disabled = false;
   setCameraObserverControlsDisabled(false);
@@ -125,8 +128,7 @@ function collectCameraSettings() {
       jpeg_quality: boundedInteger("cameraMcpQuality", "MCP JPEG quality", 4, 63),
       freshness: checked("cameraMcpFresh") ? "fresh" : "latest" },
     vision: { enabled: checked("cameraObserverEnabled"),
-      interval_ms: cameraObserverIntervalValue(),
-      face_detection_enabled: checked("cameraFaceDetectionEnabled") },
+      interval_ms: cameraObserverIntervalValue() },
   };
 }
 
@@ -142,9 +144,137 @@ async function collectCameraVisionSettings() {
     web: { ...current.web },
     mochan: { ...current.mochan },
     mcp: { ...current.mcp },
-    vision: { enabled: $("#cameraObserverEnabled").checked, interval_ms: interval,
-      face_detection_enabled: $("#cameraFaceDetectionEnabled").checked },
+    vision: { enabled: $("#cameraObserverEnabled").checked, interval_ms: interval },
   };
+}
+
+function clearCameraEventFrame(message) {
+  const frame = $(".camera-event-frame-preview");
+  frame.classList.remove("has-frame");
+  $("#cameraEventFramePlaceholder").textContent = message;
+  const canvas = $("#cameraEventFrameCanvas");
+  canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function renderCameraEventFrame(buffer) {
+  if (buffer.byteLength !== 160 * 120 * 2) {
+    throw Error("Unexpected event frame size");
+  }
+  const pixels = new DataView(buffer);
+  const canvas = $("#cameraEventFrameCanvas");
+  const context = canvas.getContext("2d");
+  const image = context.createImageData(160, 120);
+  for (let index = 0, output = 0; index < buffer.byteLength; index += 2) {
+    const pixel = pixels.getUint16(index, true);
+    image.data[output++] = Math.round(((pixel >> 11) & 0x1f) * 255 / 31);
+    image.data[output++] = Math.round(((pixel >> 5) & 0x3f) * 255 / 63);
+    image.data[output++] = Math.round((pixel & 0x1f) * 255 / 31);
+    image.data[output++] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  $(".camera-event-frame-preview").classList.add("has-frame");
+}
+
+function scheduleCameraEventFrame(delay = 1000) {
+  if (cameraEventFrameTimer || cameraEventFrameFetchPending || !cameraEventFrameEnabled ||
+      !cameraEventFrameAvailable || document.hidden || activeTab !== "camera") return;
+  cameraEventFrameTimer = window.setTimeout(refreshCameraEventFrame, delay);
+}
+
+async function refreshCameraEventFrame() {
+  cameraEventFrameTimer = 0;
+  if (!cameraEventFrameEnabled || !cameraEventFrameAvailable ||
+      document.hidden || activeTab !== "camera") return;
+  cameraEventFrameFetchPending = true;
+  try {
+    const response = await fetch("/api/camera/vision/event-frame?ts=" + Date.now(), {
+      cache: "no-store",
+    });
+    if (!response.ok) throw Error("Event frame is not available yet");
+    const buffer = await response.arrayBuffer();
+    if (cameraEventFrameEnabled && !document.hidden && activeTab === "camera") {
+      renderCameraEventFrame(buffer);
+    }
+  } catch (error) {
+    clearCameraEventFrame(error.message || "Event frame is unavailable");
+  } finally {
+    cameraEventFrameFetchPending = false;
+    scheduleCameraEventFrame(1000);
+  }
+}
+
+function updateCameraEventFrameStatus(status) {
+  cameraEventFrameEnabled = !!status.camera_vision_event_frame_enabled;
+  cameraEventFrameAvailable = !!status.camera_vision_event_frame_available;
+  const pending = !!status.camera_vision_event_frame_capture_pending;
+  const bytes = Number(status.camera_vision_event_frame_psram_bytes) || 0;
+  $("#cameraEventFrameSection").hidden = !cameraEventFrameEnabled;
+  $("#cameraEventFrameCapture").disabled = !cameraEventFrameEnabled || bytes === 0 || pending;
+  $("#cameraEventFrameCapture").textContent = pending ? "Pending…" : "Capture now";
+  if (!cameraEventFrameRequestPending) {
+    $("#cameraEventFrameEnabled").checked = cameraEventFrameEnabled;
+  }
+  if (!cameraEventFrameEnabled) {
+    if (cameraEventFrameTimer) window.clearTimeout(cameraEventFrameTimer);
+    cameraEventFrameTimer = 0;
+    clearCameraEventFrame("Motion event preview is off");
+  } else if (!cameraEventFrameAvailable) {
+    clearCameraEventFrame(bytes > 0
+      ? "Waiting for a motion event or manual capture"
+      : "Debug buffer unavailable");
+  } else {
+    scheduleCameraEventFrame(0);
+  }
+}
+
+async function setCameraEventFrameEnabled(enabled) {
+  if (cameraEventFrameRequestPending) return;
+  cameraEventFrameRequestPending = true;
+  $("#cameraEventFrameSection").hidden = !enabled;
+  $("#cameraEventFrameEnabled").disabled = true;
+  try {
+    const response = await fetch("/api/camera/vision/event-frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw Error(result.message || "Event preview update failed");
+    cameraEventFrameEnabled = !!result.enabled;
+    $("#cameraEventFrameSection").hidden = !cameraEventFrameEnabled;
+    if (!cameraEventFrameEnabled) {
+      cameraEventFrameAvailable = false;
+      clearCameraEventFrame("Motion event preview is off");
+    }
+    queueDomains(["camera"], 120);
+  } catch (error) {
+    $("#cameraEventFrameEnabled").checked = cameraEventFrameEnabled;
+    $("#cameraEventFrameSection").hidden = !cameraEventFrameEnabled;
+    notify(error.message || "Event preview update failed");
+  } finally {
+    cameraEventFrameRequestPending = false;
+    $("#cameraEventFrameEnabled").disabled = false;
+  }
+}
+
+async function captureCameraEventFrame() {
+  const button = $("#cameraEventFrameCapture");
+  if (button.disabled || !cameraEventFrameEnabled) return;
+  button.disabled = true;
+  button.textContent = "Queueing…";
+  try {
+    const response = await fetch("/api/camera/vision/event-frame/capture", {
+      method: "POST",
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw Error(result.message || "Unable to queue capture");
+    button.textContent = "Pending…";
+    queueDomains(["camera"], 120);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Capture now";
+    notify(error.message || "Unable to queue capture");
+  }
 }
 
 async function saveCameraSettings(reset = false, visionOnly = false) {

@@ -2,7 +2,7 @@
 
 #include "camera/camera_observer.h"
 #include "camera/camera_settings.h"
-#include "camera/camera_vision_inference.h"
+#include "camera/camera_vision_event_frame.h"
 #include "platform/camera_diagnostics.h"
 #include "robot_status.h"
 
@@ -49,7 +49,10 @@ public:
     virtual std::string GetCameraSensorName() const = 0;
     virtual CameraDiagnostics GetCameraDiagnostics() = 0;
     virtual CameraObserverStatus GetCameraObserverStatus() const = 0;
-    virtual CameraVisionInferenceStatus GetCameraVisionInferenceStatus() const = 0;
+    virtual CameraVisionEventFrameStatus GetCameraVisionEventFrameStatus() const = 0;
+    virtual bool SetCameraVisionEventFrameEnabled(bool enabled) = 0;
+    virtual bool SendCameraVisionEventFrame(const SnapshotSender& sender) const = 0;
+    virtual bool QueueCameraVisionEventFrameCapture() = 0;
 
     virtual SecondaryOled::Config GetSecondaryDisplayConfig() const = 0;
     virtual void SetSecondaryDisplayConfig(const SecondaryOled::Config& config) = 0;

@@ -1118,8 +1118,11 @@
                     </div>
                   </div>
                   <div class="audio-row microphone-toggle-row camera-observer-config-row">
-                    <span class="audio-name"><b>Local face detection</b><small>Run once on each new motion event</small></span>
-                    <label class="toggle"><input id="cameraFaceDetectionEnabled" type="checkbox" /><span>Enabled</span></label>
+                    <span class="audio-name"><b>Motion event preview</b><small>Latest volatile 160x120 RGB565 frame captured on Quiet → Motion</small></span>
+                    <div class="camera-event-frame-actions">
+                      <button id="cameraEventFrameCapture" class="mini-button" type="button" disabled>Capture now</button>
+                      <label class="toggle"><input id="cameraEventFrameEnabled" type="checkbox" /><span>Enabled</span></label>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1150,35 +1153,30 @@
                   </dl>
                 </section>
                 <section class="camera-diag-group">
-                  <h3>Face detection</h3>
-                  <dl>
-                    <div><dt>Inference state</dt><dd id="cameraFaceState">Disabled</dd></div>
-                    <div><dt>Model loaded</dt><dd id="cameraFaceModelLoaded">No</dd></div>
-                    <div><dt>Face present</dt><dd id="cameraFacePresent">—</dd></div>
-                    <div><dt>Face count</dt><dd id="cameraFaceCount">—</dd></div>
-                    <div><dt>Best confidence</dt><dd id="cameraFaceConfidence">—</dd></div>
-                    <div><dt>Face region</dt><dd id="cameraFaceRegion">—</dd></div>
-                    <div class="wide"><dt>Last inference</dt><dd id="cameraFaceLastInference">Never</dd></div>
-                    <div><dt>Inferences</dt><dd id="cameraFaceInferences">0</dd></div>
-                    <div><dt>Inference failures</dt><dd id="cameraFaceFailures">0</dd></div>
-                  </dl>
-                </section>
-                <section class="camera-diag-group">
                   <h3>Performance / memory</h3>
                   <dl>
                     <div><dt>Capture</dt><dd id="cameraObserverCapture">—</dd></div>
                     <div><dt>Decode</dt><dd id="cameraObserverDecode">—</dd></div>
                     <div><dt>Analyze</dt><dd id="cameraObserverAnalyze">—</dd></div>
                     <div><dt>Observer total</dt><dd id="cameraObserverTotal">—</dd></div>
-                    <div><dt>Model init</dt><dd id="cameraFaceInit">—</dd></div>
-                    <div><dt>Inference</dt><dd id="cameraFaceInference">—</dd></div>
                     <div><dt>Scratch PSRAM</dt><dd id="cameraObserverScratch">0 B</dd></div>
-                    <div><dt>Internal RAM init delta</dt><dd id="cameraFaceInternalDelta">—</dd></div>
-                    <div class="wide"><dt>Largest internal block</dt><dd id="cameraFaceLargest">—</dd></div>
-                    <div class="wide"><dt>PSRAM init delta</dt><dd id="cameraFacePsramDelta">—</dd></div>
                   </dl>
                 </section>
                 </div>
+                <section id="cameraEventFrameSection" class="camera-diag-group camera-event-frame-group" hidden>
+                  <h3>Event frame</h3>
+                  <div class="camera-event-frame-preview">
+                    <canvas id="cameraEventFrameCanvas" width="160" height="120" aria-label="Vision motion event frame"></canvas>
+                    <span id="cameraEventFramePlaceholder">Motion event preview is off</span>
+                  </div>
+                  <dl>
+                    <div><dt>Format</dt><dd>160 × 120 RGB565LE</dd></div>
+                    <div><dt>Available</dt><dd id="cameraEventFrameAvailable">No</dd></div>
+                    <div><dt>Frame source</dt><dd id="cameraEventFrameSource">None</dd></div>
+                    <div><dt>Frame age</dt><dd id="cameraEventFrameAge">—</dd></div>
+                    <div><dt>Debug PSRAM</dt><dd id="cameraEventFramePsram">0 B</dd></div>
+                  </dl>
+                </section>
               </section>
             </section>
             <section class="card camera-diagnostics" data-tabs="camera">

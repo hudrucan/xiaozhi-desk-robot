@@ -83,7 +83,8 @@ public:
     void ResetBaseline();
     CameraObserverAnalysisResult ProcessRgb565(
         size_t width, size_t height, size_t stride, uint32_t capture_ms,
-        uint32_t decode_ms, int64_t sample_start_us);
+        uint32_t decode_ms, int64_t sample_start_us,
+        bool update_motion_state = true);
     CameraObserverStatus GetStatus() const;
 
     static const char* StateName(CameraObserverState state);

@@ -394,8 +394,6 @@ function renderCameraObserver(status) {
   const enabled = !!status.camera_vision_observer_enabled;
   const samples = Number(status.camera_vision_observer_sample_count) || 0;
   const events = Number(status.camera_vision_observer_event_count) || 0;
-  const faceEnabled = !!status.camera_face_detection_enabled;
-  const faceInferences = Number(status.camera_face_inference_count) || 0;
   const label = (value, fallback) => String(value || fallback).replaceAll("_", " ");
   const state = label(status.camera_vision_observer_state,
     enabled ? "waiting" : "disabled");
@@ -403,12 +401,6 @@ function renderCameraObserver(status) {
     enabled ? "waiting first sample" : "disabled");
   const set = (id, value) => { $("#" + id).textContent = value; };
   const fixed = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(1) : "—";
-  const signedBytes = (value) => {
-    const bytes = Number(value);
-    if (!Number.isFinite(bytes)) return "—";
-    return (bytes > 0 ? "+" : bytes < 0 ? "−" : "") +
-      fmtBytes(Math.abs(bytes));
-  };
 
   set("cameraObserverHeaderState", enabled ? state : "disabled");
   set("cameraObserverState", state);
@@ -441,35 +433,16 @@ function renderCameraObserver(status) {
     ? fmtMs(Number(status.camera_vision_observer_event_age_ms) || 0) + " ago" : "Never");
   set("cameraObserverScratch",
     fmtBytes(Number(status.camera_vision_observer_scratch_psram_bytes) || 0));
-  set("cameraFaceState", label(status.camera_face_state,
-    faceEnabled ? "idle" : "disabled"));
-  set("cameraFaceModelLoaded", status.camera_face_model_loaded ? "Yes" : "No");
-  set("cameraFacePresent", !faceEnabled || faceInferences === 0 ? "—"
-    : status.camera_face_present ? "Yes" : "No");
-  set("cameraFaceCount", faceEnabled && faceInferences > 0
-    ? Number(status.camera_face_count) || 0 : "—");
-  set("cameraFaceConfidence",
-    faceEnabled && faceInferences > 0 && status.camera_face_present
-      ? (Number(status.camera_face_confidence) * 100).toFixed(1) + "%" : "—");
-  set("cameraFaceRegion",
-    faceEnabled && faceInferences > 0 && status.camera_face_present
-      ? label(status.camera_face_region, "none") : "—");
-  set("cameraFaceLastInference", faceInferences > 0
-    ? fmtMs(Number(status.camera_face_last_inference_age_ms) || 0) + " ago" : "Never");
-  set("cameraFaceInit", Number(status.camera_face_init_ms) > 0
-    ? fmtMs(Number(status.camera_face_init_ms)) : "—");
-  set("cameraFaceInference", faceInferences > 0
-    ? fmtMs(Number(status.camera_face_inference_ms) || 0) : "—");
-  const hasInitTelemetry = Number(status.camera_face_internal_before) > 0;
-  set("cameraFaceInternalDelta", hasInitTelemetry
-    ? signedBytes(status.camera_face_internal_delta) : "—");
-  set("cameraFaceLargest", hasInitTelemetry
-    ? fmtBytes(Number(status.camera_face_largest_before)) + " → " +
-      fmtBytes(Number(status.camera_face_largest_after)) : "—");
-  set("cameraFacePsramDelta", hasInitTelemetry
-    ? signedBytes(status.camera_face_psram_delta) : "—");
-  set("cameraFaceInferences", faceInferences);
-  set("cameraFaceFailures", Number(status.camera_face_failure_count) || 0);
+  set("cameraEventFrameAvailable",
+    status.camera_vision_event_frame_available ? "Yes" : "No");
+  set("cameraEventFrameSource",
+    status.camera_vision_event_frame_source === "motion" ? "Motion event"
+      : status.camera_vision_event_frame_source === "manual" ? "Manual capture" : "None");
+  set("cameraEventFrameAge", status.camera_vision_event_frame_available
+    ? fmtMs(Number(status.camera_vision_event_frame_age_ms) || 0) + " ago" : "—");
+  set("cameraEventFramePsram",
+    fmtBytes(Number(status.camera_vision_event_frame_psram_bytes) || 0));
+  updateCameraEventFrameStatus(status);
 }
 
 function renderCameraStatus(status) {

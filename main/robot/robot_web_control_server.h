@@ -46,6 +46,9 @@ private:
     static esp_err_t HandleGetCameraSettings(httpd_req_t* request);
     static esp_err_t HandleSaveCameraSettings(httpd_req_t* request);
     static esp_err_t HandleResetCameraSettings(httpd_req_t* request);
+    static esp_err_t HandleGetCameraVisionEventFrame(httpd_req_t* request);
+    static esp_err_t HandleSetCameraVisionEventFrame(httpd_req_t* request);
+    static esp_err_t HandleCaptureCameraVisionEventFrame(httpd_req_t* request);
     static esp_err_t HandleChatProbe(httpd_req_t* request);
     static esp_err_t HandleClearConversation(httpd_req_t* request);
     static esp_err_t HandleSaveAsrConfig(httpd_req_t* request);

@@ -279,7 +279,9 @@ function bindCameraAndLogControls() {
   $all('input[name="cameraObserverInterval"]').forEach((input) => {
     input.onchange = () => saveCameraSettings(false, true);
   });
-  $("#cameraFaceDetectionEnabled").onchange = () => saveCameraSettings(false, true);
+  $("#cameraEventFrameEnabled").onchange = (event) =>
+    setCameraEventFrameEnabled(event.target.checked);
+  $("#cameraEventFrameCapture").onclick = captureCameraEventFrame;
   $("#cameraSettingsReset").onclick = () => {
     if (confirm("Reset all camera settings to safe defaults?")) saveCameraSettings(true);
   };

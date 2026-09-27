@@ -87,7 +87,7 @@ uint8_t CameraObserver::Rgb565Luma(uint16_t pixel) {
 
 CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
     size_t width, size_t height, size_t stride, uint32_t capture_ms,
-    uint32_t decode_ms, int64_t sample_start_us) {
+    uint32_t decode_ms, int64_t sample_start_us, bool update_motion_state) {
     CameraObserverAnalysisResult result;
     if (scratch_ == nullptr || width != kDecodeWidth || height != kDecodeHeight ||
         stride < kDecodeStride) {
@@ -150,40 +150,46 @@ CameraObserverAnalysisResult CameraObserver::ProcessRgb565(
         changed_ratio = static_cast<float>(changed_cells) / kGridCells;
     }
 
-    previous_luma_ = current_luma_;
+    if (update_motion_state) {
+        previous_luma_ = current_luma_;
+    }
     const int64_t analyze_end_us = esp_timer_get_time();
     std::lock_guard<std::mutex> lock(status_mutex_);
-    have_previous_ = true;
-    if (status_.motion_active) {
-        high_motion_samples_ = 0;
-        if (changed_ratio <= CAMERA_OBSERVER_MOTION_EXIT_RATIO) {
-            ++low_motion_samples_;
-            if (low_motion_samples_ >= CAMERA_OBSERVER_MOTION_EXIT_SAMPLES) {
-                status_.motion_active = false;
+    if (update_motion_state) {
+        have_previous_ = true;
+        if (status_.motion_active) {
+            high_motion_samples_ = 0;
+            if (changed_ratio <= CAMERA_OBSERVER_MOTION_EXIT_RATIO) {
+                ++low_motion_samples_;
+                if (low_motion_samples_ >= CAMERA_OBSERVER_MOTION_EXIT_SAMPLES) {
+                    status_.motion_active = false;
+                    low_motion_samples_ = 0;
+                    result.motion_exited = true;
+                }
+            } else {
                 low_motion_samples_ = 0;
-                result.motion_exited = true;
             }
         } else {
             low_motion_samples_ = 0;
-        }
-    } else {
-        low_motion_samples_ = 0;
-        if (changed_ratio >= CAMERA_OBSERVER_MOTION_ENTER_RATIO) {
-            ++high_motion_samples_;
-            if (high_motion_samples_ >= CAMERA_OBSERVER_MOTION_ENTER_SAMPLES) {
-                status_.motion_active = true;
-                ++status_.motion_event_count;
-                status_.last_motion_event_ms = analyze_end_us / 1000;
+            if (changed_ratio >= CAMERA_OBSERVER_MOTION_ENTER_RATIO) {
+                ++high_motion_samples_;
+                if (high_motion_samples_ >= CAMERA_OBSERVER_MOTION_ENTER_SAMPLES) {
+                    status_.motion_active = true;
+                    ++status_.motion_event_count;
+                    status_.last_motion_event_ms = analyze_end_us / 1000;
+                    high_motion_samples_ = 0;
+                    result.motion_entered = true;
+                }
+            } else {
                 high_motion_samples_ = 0;
-                result.motion_entered = true;
             }
-        } else {
-            high_motion_samples_ = 0;
         }
     }
 
-    status_.state = CameraObserverState::kActive;
-    status_.suspend_reason = CameraObserverSuspendReason::kNone;
+    if (status_.enabled) {
+        status_.state = CameraObserverState::kActive;
+        status_.suspend_reason = CameraObserverSuspendReason::kNone;
+    }
     status_.last_sample_ms = analyze_end_us / 1000;
     status_.global_luma = global_luma;
     status_.motion_score = motion_score;

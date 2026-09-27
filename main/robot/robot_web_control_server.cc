@@ -377,7 +377,7 @@ bool RobotWebControlServer::Start(int port) {
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.backlog_conn = 2;
-    config.max_uri_handlers = 28;
+    config.max_uri_handlers = 30;
     config.stack_size = 6144;
     config.recv_wait_timeout = 2;
     config.send_wait_timeout = 2;
@@ -450,6 +450,24 @@ bool RobotWebControlServer::Start(int port) {
         .handler = HandleResetCameraSettings,
         .user_ctx = this,
     };
+    const httpd_uri_t get_camera_vision_event_frame = {
+        .uri = "/api/camera/vision/event-frame",
+        .method = HTTP_GET,
+        .handler = HandleGetCameraVisionEventFrame,
+        .user_ctx = this,
+    };
+    const httpd_uri_t set_camera_vision_event_frame = {
+        .uri = "/api/camera/vision/event-frame",
+        .method = HTTP_POST,
+        .handler = HandleSetCameraVisionEventFrame,
+        .user_ctx = this,
+    };
+    const httpd_uri_t capture_camera_vision_event_frame = {
+        .uri = "/api/camera/vision/event-frame/capture",
+        .method = HTTP_POST,
+        .handler = HandleCaptureCameraVisionEventFrame,
+        .user_ctx = this,
+    };
     const httpd_uri_t chat_probe = {
         .uri = "/api/chat",
         .method = HTTP_POST,
@@ -510,6 +528,9 @@ bool RobotWebControlServer::Start(int port) {
         httpd_register_uri_handler(server_, &get_camera_settings) != ESP_OK ||
         httpd_register_uri_handler(server_, &save_camera_settings) != ESP_OK ||
         httpd_register_uri_handler(server_, &reset_camera_settings) != ESP_OK ||
+        httpd_register_uri_handler(server_, &get_camera_vision_event_frame) != ESP_OK ||
+        httpd_register_uri_handler(server_, &set_camera_vision_event_frame) != ESP_OK ||
+        httpd_register_uri_handler(server_, &capture_camera_vision_event_frame) != ESP_OK ||
         httpd_register_uri_handler(server_, &get_conversation) != ESP_OK ||
         httpd_register_uri_handler(server_, &chat_probe) != ESP_OK ||
         httpd_register_uri_handler(server_, &clear_conversation) != ESP_OK ||
@@ -1110,6 +1131,73 @@ esp_err_t RobotWebControlServer::HandleResetCameraSettings(httpd_req_t* request)
     }
     return SendJson(request, "200 OK",
                     self->camera_settings_.Encode(true, "Camera defaults restored"));
+}
+
+esp_err_t RobotWebControlServer::HandleGetCameraVisionEventFrame(
+    httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    bool response_started = false;
+    const bool sent = self->controller_.SendCameraVisionEventFrame(
+        [&](const uint8_t* data, size_t length) {
+            response_started = true;
+            httpd_resp_set_type(request, "application/octet-stream");
+            httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+            httpd_resp_set_hdr(request, "X-Frame-Width", "160");
+            httpd_resp_set_hdr(request, "X-Frame-Height", "120");
+            httpd_resp_set_hdr(request, "X-Frame-Format", "RGB565LE");
+            return httpd_resp_send(request,
+                                   reinterpret_cast<const char*>(data),
+                                   length) == ESP_OK;
+        });
+    if (response_started) {
+        return sent ? ESP_OK : ESP_FAIL;
+    }
+    return SendJson(request, "404 Not Found",
+                    R"({"ok":false,"message":"No event frame is cached"})");
+}
+
+esp_err_t RobotWebControlServer::HandleSetCameraVisionEventFrame(
+    httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (request->content_len <= 0 || request->content_len > 64) {
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Invalid event frame request"})");
+    }
+    std::array<char, 65> body = {};
+    const size_t received = static_cast<size_t>(request->content_len);
+    if (!ReceiveRequestBody(request, body.data(), received)) {
+        return ESP_FAIL;
+    }
+    cJSON* root = cJSON_ParseWithLength(body.data(), received);
+    const cJSON* enabled = root != nullptr
+                               ? cJSON_GetObjectItemCaseSensitive(root, "enabled")
+                               : nullptr;
+    if (!cJSON_IsBool(enabled)) {
+        cJSON_Delete(root);
+        return SendJson(request, "400 Bad Request",
+                        R"({"ok":false,"message":"Missing enabled state"})");
+    }
+    const bool requested = cJSON_IsTrue(enabled);
+    cJSON_Delete(root);
+    if (!self->controller_.SetCameraVisionEventFrameEnabled(requested)) {
+        return SendJson(request, "503 Service Unavailable",
+                        R"({"ok":false,"message":"Camera is unavailable"})");
+    }
+    return SendJson(request, "200 OK",
+                    requested
+                        ? R"({"ok":true,"enabled":true})"
+                        : R"({"ok":true,"enabled":false})");
+}
+
+esp_err_t RobotWebControlServer::HandleCaptureCameraVisionEventFrame(
+    httpd_req_t* request) {
+    auto* self = static_cast<RobotWebControlServer*>(request->user_ctx);
+    if (!self->controller_.QueueCameraVisionEventFrameCapture()) {
+        return SendJson(request, "409 Conflict",
+                        R"({"ok":false,"message":"Event preview is disabled or a capture is already pending"})");
+    }
+    return SendJson(request, "200 OK",
+                    R"({"ok":true,"message":"Capture queued"})");
 }
 
 esp_err_t RobotWebControlServer::HandleCameraStream(httpd_req_t* request) {
