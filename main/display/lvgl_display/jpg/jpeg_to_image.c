@@ -17,7 +17,8 @@
 
 static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
                                       size_t* height, size_t* stride, size_t scale_width,
-                                      size_t scale_height) {
+                                      size_t scale_height, uint8_t* destination,
+                                      size_t destination_capacity) {
     ESP_LOGD(TAG, "Decoding JPEG with software decoder");
     esp_err_t ret = ESP_OK;
     jpeg_error_t jpeg_ret = JPEG_ERR_OK;
@@ -59,11 +60,21 @@ static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_
         goto jpeg_dec_failed;
     }
 
-    out_buf = jpeg_calloc_align((size_t)output_size, 16);
-    if (out_buf == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate memory for JPEG output buffer");
-        ret = ESP_ERR_NO_MEM;
-        goto jpeg_dec_failed;
+    if (destination != NULL) {
+        if ((size_t)output_size > destination_capacity) {
+            ESP_LOGE(TAG, "JPEG output buffer is too small: need=%d have=%zu",
+                     output_size, destination_capacity);
+            ret = ESP_ERR_INVALID_SIZE;
+            goto jpeg_dec_failed;
+        }
+        out_buf = destination;
+    } else {
+        out_buf = jpeg_calloc_align((size_t)output_size, 16);
+        if (out_buf == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate memory for JPEG output buffer");
+            ret = ESP_ERR_NO_MEM;
+            goto jpeg_dec_failed;
+        }
     }
 
     jpeg_io.outbuf = out_buf;
@@ -77,7 +88,9 @@ static esp_err_t decode_with_new_jpeg(const uint8_t* src, size_t src_len, uint8_
     ESP_LOG_BUFFER_HEXDUMP(TAG, out_buf, MIN(out_info.width * out_info.height * 2, 256), ESP_LOG_DEBUG);
 
     *out = out_buf;
-    out_buf = NULL;
+    if (destination == NULL) {
+        out_buf = NULL;
+    }
     *out_len = (size_t)output_size;
     *width = (size_t)out_info.width;
     *height = (size_t)out_info.height;
@@ -92,7 +105,7 @@ jpeg_dec_failed:
         jpeg_dec_close(jpeg_dec);
         jpeg_dec = NULL;
     }
-    if (out_buf) {
+    if (out_buf && destination == NULL) {
         jpeg_free_align(out_buf);
         out_buf = NULL;
     }
@@ -124,5 +137,24 @@ esp_err_t jpeg_to_image_scaled(const uint8_t* src, size_t src_len, uint8_t** out
         return ESP_ERR_INVALID_ARG;
     }
     return decode_with_new_jpeg(src, src_len, out, out_len, width, height, stride,
-                                scale_width, scale_height);
+                                scale_width, scale_height, NULL, 0);
+}
+
+esp_err_t jpeg_to_image_scaled_into(const uint8_t* src, size_t src_len,
+                                    uint8_t* destination, size_t destination_capacity,
+                                    size_t* out_len, size_t* width, size_t* height,
+                                    size_t* stride, size_t scale_width,
+                                    size_t scale_height) {
+    if (src == NULL || src_len == 0 || destination == NULL || destination_capacity == 0 ||
+        out_len == NULL || width == NULL || height == NULL || stride == NULL ||
+        scale_width == 0 || scale_height == 0 || (scale_width % 8) != 0 ||
+        (scale_height % 8) != 0 || scale_width > UINT16_MAX ||
+        scale_height > UINT16_MAX) {
+        ESP_LOGE(TAG, "Invalid caller-owned JPEG decode parameters");
+        return ESP_ERR_INVALID_ARG;
+    }
+    uint8_t* output = destination;
+    return decode_with_new_jpeg(src, src_len, &output, out_len, width, height, stride,
+                                scale_width, scale_height, destination,
+                                destination_capacity);
 }

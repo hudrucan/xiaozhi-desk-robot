@@ -53,6 +53,18 @@ esp_err_t jpeg_to_image_scaled(const uint8_t* src, size_t src_len, uint8_t** out
                                size_t* out_len, size_t* width, size_t* height,
                                size_t* stride, size_t scale_width, size_t scale_height);
 
+/**
+ * @brief Decode JPEG into caller-owned RGB565 storage.
+ *
+ * The destination is never allocated or freed by this function. Scale dimensions
+ * must be non-zero multiples of 8 and destination_capacity must fit the decoder output.
+ */
+esp_err_t jpeg_to_image_scaled_into(const uint8_t* src, size_t src_len,
+                                    uint8_t* destination, size_t destination_capacity,
+                                    size_t* out_len, size_t* width, size_t* height,
+                                    size_t* stride, size_t scale_width,
+                                    size_t scale_height);
+
 #ifdef __cplusplus
 }
 #endif

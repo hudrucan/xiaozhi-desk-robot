@@ -48,8 +48,12 @@ function populateCameraSettings(data) {
   $("#cameraLenc").checked = sensor.lens_correction;
   $("#cameraMirror").checked = sensor.mirror;
   $("#cameraFlipSetting").checked = sensor.flip;
+  const vision = data.vision || { enabled: false, interval_ms: 1000 };
+  $("#cameraObserverEnabled").checked = !!vision.enabled;
+  $("#cameraObserverInterval").value = String(vision.interval_ms || 1000);
   $("#cameraSettingsApply").disabled = false;
   $("#cameraSettingsReset").disabled = false;
+  $("#cameraObserverApply").disabled = false;
   setCameraAdvancedState();
 }
 
@@ -99,19 +103,43 @@ function collectCameraSettings() {
     mcp: { resolution: $("#cameraMcpResolution").value,
       jpeg_quality: boundedInteger("cameraMcpQuality", "MCP JPEG quality", 4, 63),
       freshness: checked("cameraMcpFresh") ? "fresh" : "latest" },
+    vision: { enabled: checked("cameraObserverEnabled"),
+      interval_ms: boundedInteger("cameraObserverInterval", "Observer interval", 500, 2000) },
   };
 }
 
-async function saveCameraSettings(reset = false) {
+async function collectCameraVisionSettings() {
+  const interval = +$("#cameraObserverInterval").value;
+  if (![500, 1000, 2000].includes(interval)) {
+    throw Error("Observer interval must be 500, 1000, or 2000 ms");
+  }
+  const response = await fetch("/api/camera/settings", { cache: "no-store" });
+  const current = await response.json();
+  if (!response.ok || !current.ok) {
+    throw Error(current.message || "Unable to load current camera settings");
+  }
+  return {
+    sensor_settings: { ...current.sensor_settings },
+    web: { ...current.web },
+    mochan: { ...current.mochan },
+    mcp: { ...current.mcp },
+    vision: { enabled: $("#cameraObserverEnabled").checked, interval_ms: interval },
+  };
+}
+
+async function saveCameraSettings(reset = false, visionOnly = false) {
   if (cameraSettingsSaving) return;
   cameraSettingsSaving = true;
   $("#cameraSettingsApply").disabled = true;
   $("#cameraSettingsReset").disabled = true;
+  $("#cameraObserverApply").disabled = true;
   try {
     const response = await fetch("/api/camera/settings", {
       method: reset ? "DELETE" : "POST",
       headers: reset ? {} : { "Content-Type": "application/json" },
-      body: reset ? undefined : JSON.stringify(collectCameraSettings()),
+      body: reset ? undefined : JSON.stringify(
+        visionOnly ? await collectCameraVisionSettings() : collectCameraSettings(),
+      ),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) throw Error(result.message || "Camera settings failed");
@@ -124,6 +152,7 @@ async function saveCameraSettings(reset = false) {
     cameraSettingsSaving = false;
     $("#cameraSettingsApply").disabled = false;
     $("#cameraSettingsReset").disabled = false;
+    $("#cameraObserverApply").disabled = false;
   }
 }
 

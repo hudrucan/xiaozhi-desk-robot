@@ -1094,6 +1094,40 @@
                 </div>
               </details>
             </section>
+            <section class="card camera-observer" data-tabs="camera">
+              <div class="section-title">
+                <strong data-caption="Idle-only local luminance and motion telemetry">Vision observer</strong
+                ><span id="cameraObserverHeaderState">Disabled</span>
+              </div>
+              <div class="camera-observer-settings">
+                <label class="camera-check"><input id="cameraObserverEnabled" type="checkbox" /><span>Enabled while Idle</span></label>
+                <label class="field"><span>Sample interval</span><select id="cameraObserverInterval">
+                  <option value="500">500 ms</option><option value="1000">1 second</option>
+                  <option value="2000">2 seconds</option>
+                </select></label>
+                <button id="cameraObserverApply" class="mini-button" disabled>Apply observer settings</button>
+              </div>
+              <div class="camera-observer-runtime" aria-label="Vision observer runtime telemetry">
+                <div><span>State</span><b id="cameraObserverState">Disabled</b></div>
+                <div><span>Suspend reason</span><b id="cameraObserverReason">Disabled</b></div>
+                <div><span>Last sample</span><b id="cameraObserverLastSample">Never</b></div>
+                <div><span>Motion state</span><b id="cameraObserverMotionState">Quiet</b></div>
+                <div><span>Global luma</span><b id="cameraObserverLuma">—</b></div>
+                <div><span>Motion score</span><b id="cameraObserverMotionScore">—</b></div>
+                <div><span>Center activity</span><b id="cameraObserverCenterScore">—</b></div>
+                <div><span>Changed pixels</span><b id="cameraObserverChangedRatio">—</b></div>
+                <div><span>Capture</span><b id="cameraObserverCapture">—</b></div>
+                <div><span>Decode</span><b id="cameraObserverDecode">—</b></div>
+                <div><span>Analyze</span><b id="cameraObserverAnalyze">—</b></div>
+                <div><span>Total</span><b id="cameraObserverTotal">—</b></div>
+                <div><span>Samples</span><b id="cameraObserverSamples">0</b></div>
+                <div><span>Skipped</span><b id="cameraObserverSkipped">0</b></div>
+                <div><span>Failures</span><b id="cameraObserverFailures">0</b></div>
+                <div><span>Events</span><b id="cameraObserverEvents">0</b></div>
+                <div><span>Last event</span><b id="cameraObserverLastEvent">Never</b></div>
+                <div><span>Scratch PSRAM</span><b id="cameraObserverScratch">0 B</b></div>
+              </div>
+            </section>
             <section class="card camera-diagnostics" data-tabs="camera">
               <div class="section-title">
                 <strong data-caption="Read-only OV5640 runtime state">Camera diagnostics</strong

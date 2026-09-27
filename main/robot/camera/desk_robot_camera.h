@@ -1,6 +1,7 @@
 #pragma once
 
 #include "camera_image_policy.h"
+#include "camera_observer.h"
 #include "camera_settings.h"
 #include "esp32_camera.h"
 
@@ -38,10 +39,12 @@ public:
         size_t response_bytes = 0;
     };
     using McpStateCallback = std::function<void(McpRequestState)>;
+    using BackgroundWakeCallback = std::function<void()>;
 
     DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
                     const CameraSettingsConfig& settings, CameraImagePolicy& image_policy,
-                    McpStateCallback mcp_state_callback);
+                    McpStateCallback mcp_state_callback,
+                    BackgroundWakeCallback background_wake_callback);
 
     bool Capture() override;
     bool StartWebLive();
@@ -49,6 +52,7 @@ public:
     bool StartMochanPreview();
     void StopMochanPreview();
     void ForceOff() override;
+    void OnIdle() override;
     PreviewMode preview_mode() const { return preview_mode_.load(); }
     bool IsWebLiveActive() const {
         return preview_mode_.load() == PreviewMode::kWebLive;
@@ -68,6 +72,11 @@ public:
     CameraImagePolicy::Status GetImagePolicyStatus() const;
     McpRequestHealth GetMcpRequestHealth() const;
     CameraDiagnostics GetDiagnostics();
+    CameraObserverStatus GetObserverStatus() const;
+    bool CaptureObserverSample();
+    void SetObserverWorkerState(CameraObserverState state,
+                                CameraObserverSuspendReason reason,
+                                bool count_skip = false);
     static const char* McpRequestStateName(McpRequestState state);
     std::expected<std::string, std::string> Explain(const std::string& question) override;
     void OnMcpResponseSent() override;
@@ -83,6 +92,7 @@ private:
     static framesize_t ToFrameSize(CameraResolution resolution);
     static gainceiling_t ToGainCeiling(CameraGainCeiling ceiling);
     static CameraSensorControls ToSensorControls(const CameraSensorSettings& settings);
+    void WakeBackgroundWorker();
 
     std::mutex ownership_mutex_;
     std::timed_mutex capture_mutex_;
@@ -100,6 +110,13 @@ private:
     std::mutex diagnostics_refresh_mutex_;
     std::mutex diagnostics_cache_mutex_;
     CameraDiagnostics diagnostics_cache_;
+    std::mutex observer_sample_gate_;
+    std::atomic_bool observer_runtime_allowed_{true};
+    std::atomic_bool observer_mode_configured_{false};
+    CameraSensorSettings observer_applied_sensor_settings_;
+    bool observer_applied_sensor_settings_valid_ = false;
+    CameraObserver observer_;
     CameraImagePolicy& image_policy_;
     McpStateCallback mcp_state_callback_;
+    BackgroundWakeCallback background_wake_callback_;
 };

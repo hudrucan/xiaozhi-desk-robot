@@ -789,6 +789,9 @@ private:
             config, primary_i2c_.mutex(), camera_settings, camera_image_policy_,
             [this](DeskRobotCamera::McpRequestState state) {
                 OnCameraMcpRequestStateChanged(state);
+            },
+            [this]() {
+                WakeLiveCameraTask();
             });
 
         camera_mirrored_.store(camera_settings.sensor.mirror);
@@ -1807,6 +1810,8 @@ private:
     }
 
     void ReturnToIdle() {
+        const bool was_idle =
+            Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
         motors_.EmergencyStop();
         if (camera_ != nullptr) {
             camera_->ForceOff();
@@ -1814,7 +1819,7 @@ private:
         if (live_camera_task_ != nullptr) {
             xTaskNotifyGive(live_camera_task_);
         }
-        Application::GetInstance().Schedule([this]() {
+        Application::GetInstance().Schedule([this, was_idle]() {
             CancelReactionForExplicitOverride();
             reaction_face_generation_.store(0, std::memory_order_release);
             temporary_emotion_generation_.fetch_add(1);
@@ -1835,6 +1840,14 @@ private:
                 app.StopListening();
             } else if (state == kDeviceStateConnecting || state == kDeviceStateNotifying) {
                 app.SetDeviceState(kDeviceStateIdle);
+            }
+            // ForceOff above also closes the idle-only observer gate. If this
+            // command began and remains in Idle there is no state transition to
+            // re-open it, so re-arm it here. Real non-Idle -> Idle transitions
+            // continue to use the Application state listener.
+            if (was_idle && app.GetDeviceState() == kDeviceStateIdle &&
+                camera_ != nullptr) {
+                camera_->OnIdle();
             }
             if (!reaction_engine_.IsActive()) {
                 display_->SetEmotion("neutral");
@@ -2123,20 +2136,59 @@ private:
         static_cast<DeskRobotBoard*>(arg)->RunLiveCameraTask();
     }
 
+    void WakeLiveCameraTask() {
+        if (live_camera_task_ != nullptr) {
+            xTaskNotifyGive(live_camera_task_);
+        }
+    }
+
     void RunLiveCameraTask() {
         while (true) {
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            while (camera_->IsMochanPreviewActive()) {
+            if (camera_->IsMochanPreviewActive()) {
+                camera_->SetObserverWorkerState(
+                    CameraObserverState::kSuspendedExplicitCamera,
+                    CameraObserverSuspendReason::kMochanPreview);
                 if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
                     camera_->CapturePreview();
-                    vTaskDelay(pdMS_TO_TICKS(250));
                 } else {
                     // Live preview is intentionally one-shot per idle session.
                     // Starting a conversation turns the mode off; returning to
                     // idle requires an explicit toggle from the local UI.
                     camera_->ForceOff();
                 }
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+                continue;
             }
+
+            const CameraSettingsConfig settings = camera_->GetSettings();
+            if (!settings.vision.enabled) {
+                camera_->SetObserverWorkerState(CameraObserverState::kDisabled,
+                                                CameraObserverSuspendReason::kDisabled);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                continue;
+            }
+            if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+                camera_->SetObserverWorkerState(
+                    CameraObserverState::kSuspendedNonIdle,
+                    CameraObserverSuspendReason::kNonIdle);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                continue;
+            }
+            if (camera_->IsMcpOperationActive()) {
+                camera_->SetObserverWorkerState(CameraObserverState::kSuspendedMcp,
+                                                CameraObserverSuspendReason::kMcp);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                continue;
+            }
+            if (camera_->IsWebLiveActive()) {
+                camera_->SetObserverWorkerState(
+                    CameraObserverState::kSuspendedExplicitCamera,
+                    CameraObserverSuspendReason::kWebLive);
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                continue;
+            }
+            camera_->CaptureObserverSample();
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(settings.vision.interval_ms));
         }
     }
 
@@ -2146,6 +2198,8 @@ private:
         if (result != pdPASS) {
             live_camera_task_ = nullptr;
             ESP_LOGE(TAG, "Failed to create live camera task");
+        } else {
+            WakeLiveCameraTask();
         }
     }
 
@@ -2396,6 +2450,10 @@ private:
 
     CameraDiagnostics GetCameraDiagnostics() override {
         return camera_ != nullptr ? camera_->GetDiagnostics() : CameraDiagnostics{};
+    }
+
+    CameraObserverStatus GetCameraObserverStatus() const override {
+        return camera_ != nullptr ? camera_->GetObserverStatus() : CameraObserverStatus{};
     }
 
     SecondaryOled::Config GetSecondaryDisplayConfig() const override {

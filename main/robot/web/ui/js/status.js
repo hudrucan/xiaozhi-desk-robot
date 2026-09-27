@@ -390,6 +390,51 @@ function renderCameraDiagnostics(status, cameraAvailable) {
   cameraDiagSet("cameraDiagRead", valid ? fmtMs(Number(status.camera_diag_read_ms) || 0) : "—");
 }
 
+function renderCameraObserver(status) {
+  const enabled = !!status.camera_vision_observer_enabled;
+  const samples = Number(status.camera_vision_observer_sample_count) || 0;
+  const events = Number(status.camera_vision_observer_event_count) || 0;
+  const label = (value, fallback) => String(value || fallback).replaceAll("_", " ");
+  const state = label(status.camera_vision_observer_state,
+    enabled ? "waiting" : "disabled");
+  const reason = label(status.camera_vision_observer_suspend_reason,
+    enabled ? "waiting first sample" : "disabled");
+  const set = (id, value) => { $("#" + id).textContent = value; };
+  const fixed = (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(1) : "—";
+
+  set("cameraObserverHeaderState", enabled ? state : "disabled");
+  set("cameraObserverState", state);
+  set("cameraObserverReason", reason);
+  set("cameraObserverLastSample", samples > 0
+    ? fmtMs(Number(status.camera_vision_observer_sample_age_ms) || 0) + " ago" : "Never");
+  set("cameraObserverMotionState",
+    status.camera_vision_observer_motion_active ? "Motion" : "Quiet");
+  set("cameraObserverLuma", samples > 0
+    ? fixed(status.camera_vision_observer_luma) : "—");
+  set("cameraObserverMotionScore", samples > 0
+    ? fixed(status.camera_vision_observer_motion_score) : "—");
+  set("cameraObserverCenterScore", samples > 0
+    ? fixed(status.camera_vision_observer_center_score) : "—");
+  set("cameraObserverChangedRatio", samples > 0
+    ? (Number(status.camera_vision_observer_changed_ratio) * 100).toFixed(1) + "%" : "—");
+  set("cameraObserverCapture", samples > 0
+    ? fmtMs(Number(status.camera_vision_observer_capture_ms) || 0) : "—");
+  set("cameraObserverDecode", samples > 0
+    ? fmtMs(Number(status.camera_vision_observer_decode_ms) || 0) : "—");
+  set("cameraObserverAnalyze", samples > 0
+    ? fmtMs(Number(status.camera_vision_observer_analyze_ms) || 0) : "—");
+  set("cameraObserverTotal", samples > 0
+    ? fmtMs(Number(status.camera_vision_observer_total_ms) || 0) : "—");
+  set("cameraObserverSamples", samples);
+  set("cameraObserverSkipped", Number(status.camera_vision_observer_skipped_count) || 0);
+  set("cameraObserverFailures", Number(status.camera_vision_observer_failure_count) || 0);
+  set("cameraObserverEvents", events);
+  set("cameraObserverLastEvent", events > 0
+    ? fmtMs(Number(status.camera_vision_observer_event_age_ms) || 0) + " ago" : "Never");
+  set("cameraObserverScratch",
+    fmtBytes(Number(status.camera_vision_observer_scratch_psram_bytes) || 0));
+}
+
 function renderCameraStatus(status) {
   Object.assign(statusCache, status);
   const idle = lastState === "idle";
@@ -454,6 +499,7 @@ function renderCameraStatus(status) {
     ].filter(Boolean);
     $("#cameraLastRequest").textContent = details.join(" · ");
   }
+  renderCameraObserver(status);
   renderCameraDiagnostics(status, available);
 }
 

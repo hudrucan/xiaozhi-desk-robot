@@ -95,11 +95,17 @@ struct McpCameraSettings {
     McpFreshFramePolicy freshness = McpFreshFramePolicy::kFresh;
 };
 
+struct CameraVisionSettings {
+    bool enabled = false;
+    int interval_ms = 1000;
+};
+
 struct CameraSettingsConfig {
     CameraSensorSettings sensor;
     WebCameraSettings web;
     MochanCameraSettings mochan;
     McpCameraSettings mcp;
+    CameraVisionSettings vision;
 };
 
 class CameraSettingsStore {

@@ -132,6 +132,10 @@ cJSON* AddSettings(cJSON* root, const CameraSettingsConfig& settings) {
     cJSON_AddStringToObject(mcp, "freshness",
                             settings.mcp.freshness == McpFreshFramePolicy::kLatest
                                 ? "latest" : "fresh");
+
+    cJSON* vision = cJSON_AddObjectToObject(root, "vision");
+    cJSON_AddBoolToObject(vision, "enabled", settings.vision.enabled);
+    cJSON_AddNumberToObject(vision, "interval_ms", settings.vision.interval_ms);
     return root;
 }
 
@@ -170,8 +174,9 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
     const cJSON* web = cJSON_GetObjectItemCaseSensitive(root, "web");
     const cJSON* mochan = cJSON_GetObjectItemCaseSensitive(root, "mochan");
     const cJSON* mcp = cJSON_GetObjectItemCaseSensitive(root, "mcp");
+    const cJSON* vision = cJSON_GetObjectItemCaseSensitive(root, "vision");
     bool valid = cJSON_IsObject(sensor) && cJSON_IsObject(web) && cJSON_IsObject(mochan) &&
-                 cJSON_IsObject(mcp);
+                 cJSON_IsObject(mcp) && cJSON_IsObject(vision);
     if (!valid) {
         error = "Missing camera settings group";
     }
@@ -237,6 +242,14 @@ bool RobotWebCameraSettings::Decode(const char* body, size_t length,
     if (valid) valid = ReadInt(mcp, "jpeg_quality", 4, 63, settings.mcp.jpeg_quality, error);
     if (valid) valid = ReadEnum(mcp, "freshness", {{"latest", McpFreshFramePolicy::kLatest},
         {"fresh", McpFreshFramePolicy::kFresh}}, settings.mcp.freshness, error);
+    if (valid) valid = ReadBool(vision, "enabled", settings.vision.enabled, error);
+    if (valid) valid = ReadInt(vision, "interval_ms", 500, 2000,
+                               settings.vision.interval_ms, error);
+    if (valid && settings.vision.interval_ms != 500 &&
+        settings.vision.interval_ms != 1000 && settings.vision.interval_ms != 2000) {
+        error = "Unsupported interval_ms";
+        valid = false;
+    }
 
     cJSON_Delete(root);
     if (!valid) {

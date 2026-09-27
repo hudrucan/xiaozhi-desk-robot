@@ -1525,6 +1525,54 @@
         gap: 8px;
         margin-top: 12px;
       }
+      .camera-observer-settings {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+        align-items: stretch;
+        gap: 10px;
+        margin-top: 13px;
+      }
+      .camera-observer-settings .camera-check {
+        min-height: 0;
+      }
+      .camera-observer-settings .mini-button {
+        min-height: 48px;
+        align-self: stretch;
+      }
+      .camera-observer-runtime {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .camera-observer-runtime > div {
+        min-width: 0;
+        padding: 9px 10px;
+        border: 1px solid var(--line2);
+        border-radius: 9px;
+        background: rgba(7, 6, 4, 0.3);
+      }
+      .camera-observer-runtime span,
+      .camera-observer-runtime b {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .camera-observer-runtime span {
+        color: var(--muted);
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .camera-observer-runtime b {
+        margin-top: 5px;
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: capitalize;
+      }
       .camera-diagnostics-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2664,6 +2712,13 @@
         .hint {
           margin-bottom: 8px;
         }
+        .camera-observer-settings,
+        .camera-observer-runtime {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .camera-observer-settings .mini-button {
+          grid-column: 1 / -1;
+        }
       }
       @media (max-width: 500px) {
         .brand strong {
@@ -2732,6 +2787,8 @@
         }
         .camera-settings-grid,
         .camera-settings-actions,
+        .camera-observer-settings,
+        .camera-observer-runtime,
         .camera-diagnostics-grid,
         .camera-diag-group dl {
           grid-template-columns: 1fr;

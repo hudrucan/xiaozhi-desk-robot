@@ -10,6 +10,7 @@
 
 #include "board.h"
 #include "display.h"
+#include "jpg/jpeg_to_image.h"
 #include "lvgl_display/lvgl_image.h"
 
 #define TAG "DeskRobotCamera"
@@ -53,16 +54,32 @@ bool SensorSettingsEqual(const CameraSensorSettings& lhs,
            lhs.flip == rhs.flip;
 }
 
+bool OperationalSettingsEqual(const CameraSettingsConfig& lhs,
+                              const CameraSettingsConfig& rhs) {
+    return SensorSettingsEqual(lhs.sensor, rhs.sensor) &&
+           lhs.web.resolution == rhs.web.resolution &&
+           lhs.web.jpeg_quality == rhs.web.jpeg_quality && lhs.web.fps == rhs.web.fps &&
+           lhs.mochan.source_resolution == rhs.mochan.source_resolution &&
+           lhs.mochan.aspect == rhs.mochan.aspect &&
+           lhs.mochan.render == rhs.mochan.render &&
+           lhs.mcp.resolution == rhs.mcp.resolution &&
+           lhs.mcp.jpeg_quality == rhs.mcp.jpeg_quality &&
+           lhs.mcp.freshness == rhs.mcp.freshness;
+}
+
 }  // namespace
 
 DeskRobotCamera::DeskRobotCamera(const camera_config_t& config, std::mutex& shared_i2c_mutex,
                                  const CameraSettingsConfig& settings,
                                  CameraImagePolicy& image_policy,
-                                 McpStateCallback mcp_state_callback)
+                                 McpStateCallback mcp_state_callback,
+                                 BackgroundWakeCallback background_wake_callback)
     : Esp32Camera(config, &shared_i2c_mutex),
       settings_(CameraSettingsStore::Normalize(settings)),
       image_policy_(image_policy),
-      mcp_state_callback_(std::move(mcp_state_callback)) {
+      mcp_state_callback_(std::move(mcp_state_callback)),
+      background_wake_callback_(std::move(background_wake_callback)) {
+    observer_.Configure(settings_.vision.enabled, settings_.vision.interval_ms);
     if (Esp32Camera::IsAvailable() &&
         !ApplyModeSensorSettings(settings_.sensor)) {
         ESP_LOGW(TAG, "Some persisted camera sensor settings were rejected");
@@ -76,6 +93,8 @@ bool DeskRobotCamera::Capture() {
         return false;
     }
     const int64_t capture_start_us = esp_timer_get_time();
+    observer_mode_configured_.store(false, std::memory_order_release);
+    WakeBackgroundWorker();
     mcp_request_started_us_.store(capture_start_us, std::memory_order_relaxed);
     mcp_capture_ms_.store(0, std::memory_order_relaxed);
     mcp_vision_ms_.store(0, std::memory_order_relaxed);
@@ -161,6 +180,7 @@ bool DeskRobotCamera::StartWebLive() {
             return false;
         }
         const CameraSettingsConfig settings = GetSettings();
+        observer_mode_configured_.store(false, std::memory_order_release);
         if (!ApplyModeCaptureSettings(settings.web.resolution, settings.web.jpeg_quality) ||
             !ApplyModeSensorSettings(settings.sensor)) {
             return false;
@@ -178,14 +198,18 @@ bool DeskRobotCamera::StartWebLive() {
     if (hide_mochan) {
         HidePreviewImage();
     }
+    WakeBackgroundWorker();
     return true;
 }
 
 void DeskRobotCamera::StopWebLive() {
-    std::lock_guard<std::mutex> lock(ownership_mutex_);
-    if (preview_mode_.load() == PreviewMode::kWebLive) {
-        preview_mode_.store(PreviewMode::kOff);
+    {
+        std::lock_guard<std::mutex> lock(ownership_mutex_);
+        if (preview_mode_.load() == PreviewMode::kWebLive) {
+            preview_mode_.store(PreviewMode::kOff);
+        }
     }
+    WakeBackgroundWorker();
 }
 
 bool DeskRobotCamera::StartMochanPreview() {
@@ -201,6 +225,7 @@ bool DeskRobotCamera::StartMochanPreview() {
         return false;
     }
     const CameraSettingsConfig settings = GetSettings();
+    observer_mode_configured_.store(false, std::memory_order_release);
     if (!ApplyModeCaptureSettings(settings.mochan.source_resolution, 12) ||
         !ApplyModeSensorSettings(settings.sensor)) {
         return false;
@@ -227,9 +252,11 @@ void DeskRobotCamera::StopMochanPreview() {
     if (hide_preview) {
         HidePreviewImage();
     }
+    WakeBackgroundWorker();
 }
 
 void DeskRobotCamera::ForceOff() {
+    observer_runtime_allowed_.store(false, std::memory_order_release);
     bool hide_preview = false;
     {
         std::lock_guard<std::mutex> lock(ownership_mutex_);
@@ -239,6 +266,31 @@ void DeskRobotCamera::ForceOff() {
     if (hide_preview) {
         HidePreviewImage();
     }
+    {
+        std::lock_guard<std::mutex> observer_gate(observer_sample_gate_);
+        observer_.ResetBaseline();
+        const CameraSettingsConfig settings = GetSettings();
+        observer_.SetState(settings.vision.enabled
+                               ? CameraObserverState::kSuspendedNonIdle
+                               : CameraObserverState::kDisabled,
+                           settings.vision.enabled
+                               ? CameraObserverSuspendReason::kNonIdle
+                               : CameraObserverSuspendReason::kDisabled);
+    }
+    WakeBackgroundWorker();
+}
+
+void DeskRobotCamera::OnIdle() {
+    if (observer_runtime_allowed_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    const CameraSettingsConfig settings = GetSettings();
+    observer_.SetState(settings.vision.enabled ? CameraObserverState::kWaiting
+                                               : CameraObserverState::kDisabled,
+                       settings.vision.enabled
+                           ? CameraObserverSuspendReason::kWaitingFirstSample
+                           : CameraObserverSuspendReason::kDisabled);
+    WakeBackgroundWorker();
 }
 
 bool DeskRobotCamera::CapturePreview() {
@@ -286,6 +338,7 @@ bool DeskRobotCamera::SendSnapshot(const JpegSender& sender) {
         return false;
     }
     const CameraSettingsConfig settings = GetSettings();
+    observer_mode_configured_.store(false, std::memory_order_release);
     if (!ApplyModeCaptureSettings(settings.web.resolution, settings.web.jpeg_quality) ||
         !ApplyModeSensorSettings(settings.sensor)) {
         return false;
@@ -304,52 +357,73 @@ bool DeskRobotCamera::IsAvailable() const { return Esp32Camera::IsAvailable(); }
 
 bool DeskRobotCamera::ApplySettings(const CameraSettingsConfig& requested) {
     const CameraSettingsConfig normalized = CameraSettingsStore::Normalize(requested);
-    std::lock_guard<std::mutex> ownership_lock(ownership_mutex_);
-    if (mcp_operation_active_.load()) {
-        return false;
+    const CameraSettingsConfig initial = GetSettings();
+    if (OperationalSettingsEqual(initial, normalized)) {
+        {
+            std::lock_guard<std::mutex> observer_gate(observer_sample_gate_);
+            std::lock_guard<std::mutex> settings_lock(settings_mutex_);
+            settings_ = normalized;
+            observer_.Configure(normalized.vision.enabled,
+                                normalized.vision.interval_ms);
+        }
+        WakeBackgroundWorker();
+        return true;
     }
-    std::unique_lock<std::timed_mutex> capture_lock(capture_mutex_, std::defer_lock);
-    if (!capture_lock.try_lock_for(std::chrono::seconds(7))) {
-        return false;
-    }
-
-    const CameraSettingsConfig previous = GetSettings();
-    const PreviewMode mode = preview_mode_.load();
-    const bool sensor_changed = !SensorSettingsEqual(previous.sensor, normalized.sensor);
-    const bool web_capture_changed =
-        mode == PreviewMode::kWebLive &&
-        (previous.web.resolution != normalized.web.resolution ||
-         previous.web.jpeg_quality != normalized.web.jpeg_quality);
-    const bool mochan_capture_changed =
-        mode == PreviewMode::kMochanPreview &&
-        previous.mochan.source_resolution != normalized.mochan.source_resolution;
-    const bool capture_changed = web_capture_changed || mochan_capture_changed;
-
-    if (web_capture_changed &&
-        !ApplyModeCaptureSettings(normalized.web.resolution, normalized.web.jpeg_quality)) {
-        return false;
-    }
-    if (mochan_capture_changed &&
-        !ApplyModeCaptureSettings(normalized.mochan.source_resolution, 12)) {
-        return false;
-    }
-    // A frame-size change can rewrite sensor state, so replay controls after a
-    // current-mode capture change even when the requested controls are equal.
-    if ((sensor_changed || capture_changed) &&
-        !ApplyModeSensorSettings(normalized.sensor)) {
-        return false;
-    }
-    if (mode != PreviewMode::kOff && (sensor_changed || capture_changed)) {
-        // CAMERA_GRAB_WHEN_EMPTY may have queued one frame using the previous
-        // mode or controls. Discard it without changing preview ownership.
-        if (!Esp32Camera::CaptureForWeb()) {
+    {
+        std::lock_guard<std::mutex> ownership_lock(ownership_mutex_);
+        if (mcp_operation_active_.load()) {
             return false;
         }
-        ReturnCurrentFrame();
-    }
+        std::unique_lock<std::timed_mutex> capture_lock(capture_mutex_, std::defer_lock);
+        if (!capture_lock.try_lock_for(std::chrono::seconds(7))) {
+            return false;
+        }
 
-    std::lock_guard<std::mutex> settings_lock(settings_mutex_);
-    settings_ = normalized;
+        const CameraSettingsConfig previous = GetSettings();
+        const PreviewMode mode = preview_mode_.load();
+        const bool sensor_changed = !SensorSettingsEqual(previous.sensor, normalized.sensor);
+        const bool web_capture_changed =
+            mode == PreviewMode::kWebLive &&
+            (previous.web.resolution != normalized.web.resolution ||
+             previous.web.jpeg_quality != normalized.web.jpeg_quality);
+        const bool mochan_capture_changed =
+            mode == PreviewMode::kMochanPreview &&
+            previous.mochan.source_resolution != normalized.mochan.source_resolution;
+        const bool capture_changed = web_capture_changed || mochan_capture_changed;
+        observer_mode_configured_.store(false, std::memory_order_release);
+
+        if (web_capture_changed &&
+            !ApplyModeCaptureSettings(normalized.web.resolution, normalized.web.jpeg_quality)) {
+            return false;
+        }
+        if (mochan_capture_changed &&
+            !ApplyModeCaptureSettings(normalized.mochan.source_resolution, 12)) {
+            return false;
+        }
+        // A frame-size change can rewrite sensor state, so replay controls after a
+        // current-mode capture change even when the requested controls are equal.
+        if ((sensor_changed || capture_changed) &&
+            !ApplyModeSensorSettings(normalized.sensor)) {
+            return false;
+        }
+        if (mode != PreviewMode::kOff && (sensor_changed || capture_changed)) {
+            // CAMERA_GRAB_WHEN_EMPTY may have queued one frame using the previous
+            // mode or controls. Discard it without changing preview ownership.
+            if (!Esp32Camera::CaptureForWeb()) {
+                return false;
+            }
+            ReturnCurrentFrame();
+        }
+
+        std::lock_guard<std::mutex> settings_lock(settings_mutex_);
+        settings_ = normalized;
+    }
+    {
+        std::lock_guard<std::mutex> observer_gate(observer_sample_gate_);
+        observer_.Configure(normalized.vision.enabled,
+                            normalized.vision.interval_ms);
+    }
+    WakeBackgroundWorker();
     return true;
 }
 
@@ -421,6 +495,126 @@ CameraDiagnostics DeskRobotCamera::GetDiagnostics() {
     return refreshed;
 }
 
+CameraObserverStatus DeskRobotCamera::GetObserverStatus() const {
+    return observer_.GetStatus();
+}
+
+void DeskRobotCamera::SetObserverWorkerState(CameraObserverState state,
+                                             CameraObserverSuspendReason reason,
+                                             bool count_skip) {
+    observer_.SetState(state, reason, count_skip);
+}
+
+bool DeskRobotCamera::CaptureObserverSample() {
+    std::unique_lock<std::mutex> observer_gate(observer_sample_gate_);
+    const CameraSettingsConfig settings = GetSettings();
+    if (!settings.vision.enabled) {
+        observer_.SetState(CameraObserverState::kDisabled,
+                           CameraObserverSuspendReason::kDisabled);
+        return false;
+    }
+    if (!observer_runtime_allowed_.load(std::memory_order_acquire)) {
+        observer_.SetState(CameraObserverState::kSuspendedNonIdle,
+                           CameraObserverSuspendReason::kNonIdle, true);
+        return false;
+    }
+    if (!observer_.EnsureScratch()) {
+        observer_.RecordFailure(CameraObserverSuspendReason::kScratchUnavailable);
+        return false;
+    }
+
+    std::unique_lock<std::mutex> ownership_lock(ownership_mutex_, std::try_to_lock);
+    if (!ownership_lock.owns_lock()) {
+        observer_.SetState(CameraObserverState::kBusy,
+                           CameraObserverSuspendReason::kCameraBusy, true);
+        return false;
+    }
+    if (mcp_operation_active_.load(std::memory_order_acquire)) {
+        observer_.SetState(CameraObserverState::kSuspendedMcp,
+                           CameraObserverSuspendReason::kMcp, true);
+        return false;
+    }
+    const PreviewMode mode = preview_mode_.load(std::memory_order_acquire);
+    if (mode != PreviewMode::kOff) {
+        observer_.SetState(CameraObserverState::kSuspendedExplicitCamera,
+                           mode == PreviewMode::kWebLive
+                               ? CameraObserverSuspendReason::kWebLive
+                               : CameraObserverSuspendReason::kMochanPreview,
+                           true);
+        return false;
+    }
+    std::unique_lock<std::timed_mutex> capture_lock(capture_mutex_, std::try_to_lock);
+    if (!capture_lock.owns_lock()) {
+        observer_.SetState(CameraObserverState::kBusy,
+                           CameraObserverSuspendReason::kCameraBusy, true);
+        return false;
+    }
+
+    const int64_t sample_start_us = esp_timer_get_time();
+    const CameraSensorSettings resolved = ResolveSensorSettings(settings.sensor);
+    const bool observer_sensor_changed =
+        !observer_applied_sensor_settings_valid_ ||
+        !SensorSettingsEqual(resolved, observer_applied_sensor_settings_);
+    if (!observer_mode_configured_.load(std::memory_order_acquire) ||
+        observer_sensor_changed) {
+        observer_.ResetBaseline();
+        const bool configured = ApplyModeCaptureSettings(CameraResolution::kQvga, 20) &&
+                                Esp32Camera::ApplySensorControls(
+                                    ToSensorControls(resolved));
+        if (!configured || !Esp32Camera::CaptureForWeb()) {
+            ReturnCurrentFrame();
+            observer_.RecordFailure(CameraObserverSuspendReason::kCaptureFailed);
+            return false;
+        }
+        ReturnCurrentFrame();
+        observer_applied_sensor_settings_ = resolved;
+        observer_applied_sensor_settings_valid_ = true;
+        observer_mode_configured_.store(true, std::memory_order_release);
+    }
+
+    if (!Esp32Camera::CaptureForWeb()) {
+        ReturnCurrentFrame();
+        observer_.RecordFailure(CameraObserverSuspendReason::kCaptureFailed);
+        return false;
+    }
+    const uint8_t* jpeg_data = nullptr;
+    size_t jpeg_length = 0;
+    if (!Esp32Camera::GetCurrentJpeg(jpeg_data, jpeg_length)) {
+        ReturnCurrentFrame();
+        observer_.RecordFailure(CameraObserverSuspendReason::kCaptureFailed);
+        return false;
+    }
+    const uint32_t capture_ms = static_cast<uint32_t>(std::max<int64_t>(
+        0, (esp_timer_get_time() - sample_start_us + 999) / 1000));
+    size_t output_length = 0;
+    size_t output_width = 0;
+    size_t output_height = 0;
+    size_t output_stride = 0;
+    const int64_t decode_start_us = esp_timer_get_time();
+    const esp_err_t decode_result = jpeg_to_image_scaled_into(
+        jpeg_data, jpeg_length, observer_.scratch_data(), observer_.scratch_capacity(),
+        &output_length, &output_width, &output_height, &output_stride,
+        CameraObserver::kDecodeWidth, CameraObserver::kDecodeHeight);
+    const uint32_t decode_ms = static_cast<uint32_t>(std::max<int64_t>(
+        0, (esp_timer_get_time() - decode_start_us + 999) / 1000));
+    ReturnCurrentFrame();
+    capture_lock.unlock();
+    ownership_lock.unlock();
+    if (decode_result != ESP_OK || output_length > observer_.scratch_capacity()) {
+        observer_.RecordFailure(CameraObserverSuspendReason::kDecodeFailed);
+        return false;
+    }
+    if (output_width != CameraObserver::kDecodeWidth ||
+        output_height != CameraObserver::kDecodeHeight ||
+        output_stride < CameraObserver::kDecodeStride || output_height == 0 ||
+        output_stride > output_length / output_height) {
+        observer_.RecordFailure(CameraObserverSuspendReason::kInvalidFrame);
+        return false;
+    }
+    return observer_.ProcessRgb565(output_width, output_height, output_stride,
+                                   capture_ms, decode_ms, sample_start_us);
+}
+
 const char* DeskRobotCamera::McpRequestStateName(McpRequestState state) {
     switch (state) {
         case McpRequestState::kCapturing:
@@ -490,8 +684,17 @@ bool DeskRobotCamera::BeginMcpOperation(bool& preview_preempted) {
 }
 
 void DeskRobotCamera::EndMcpOperation() {
-    std::lock_guard<std::mutex> lock(ownership_mutex_);
-    mcp_operation_active_.store(false);
+    {
+        std::lock_guard<std::mutex> lock(ownership_mutex_);
+        mcp_operation_active_.store(false);
+    }
+    WakeBackgroundWorker();
+}
+
+void DeskRobotCamera::WakeBackgroundWorker() {
+    if (background_wake_callback_) {
+        background_wake_callback_();
+    }
 }
 
 void DeskRobotCamera::HidePreviewImage() {

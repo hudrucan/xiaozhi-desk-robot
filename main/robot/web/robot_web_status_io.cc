@@ -98,6 +98,7 @@ cJSON* RobotWebStatus::CreateDisplay() {
 cJSON* RobotWebStatus::CreateCamera() {
     const RobotStatus status = controller_.GetStatus();
     const CameraDiagnostics diagnostics = controller_.GetCameraDiagnostics();
+    const CameraObserverStatus observer = controller_.GetCameraObserverStatus();
     cJSON* root = cJSON_CreateObject();
     if (root == nullptr) {
         return nullptr;
@@ -204,6 +205,51 @@ cJSON* RobotWebStatus::CreateCamera() {
     cJSON_AddBoolToObject(root, "camera_mirror_enabled",
                           diagnostics.mirror_enabled);
     cJSON_AddBoolToObject(root, "camera_flip_enabled", diagnostics.flip_enabled);
+
+    const int64_t observer_age_ms = observer.last_sample_ms > 0
+                                        ? std::max<int64_t>(
+                                              0, now_ms - observer.last_sample_ms)
+                                        : 0;
+    const int64_t observer_event_age_ms = observer.last_motion_event_ms > 0
+                                              ? std::max<int64_t>(
+                                                    0, now_ms - observer.last_motion_event_ms)
+                                              : 0;
+    cJSON_AddBoolToObject(root, "camera_vision_observer_enabled", observer.enabled);
+    cJSON_AddStringToObject(root, "camera_vision_observer_state",
+                            CameraObserver::StateName(observer.state));
+    cJSON_AddStringToObject(root, "camera_vision_observer_suspend_reason",
+                            CameraObserver::SuspendReasonName(observer.suspend_reason));
+    cJSON_AddNumberToObject(root, "camera_vision_observer_interval_ms",
+                            observer.interval_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_sample_age_ms",
+                            observer_age_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_luma", observer.global_luma);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_motion_score",
+                            observer.motion_score);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_center_score",
+                            observer.center_activity_score);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_changed_ratio",
+                            observer.changed_pixel_ratio);
+    cJSON_AddBoolToObject(root, "camera_vision_observer_motion_active",
+                          observer.motion_active);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_event_age_ms",
+                            observer_event_age_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_capture_ms",
+                            observer.capture_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_decode_ms", observer.decode_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_analyze_ms",
+                            observer.analyze_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_total_ms", observer.total_ms);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_sample_count",
+                            observer.sample_count);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_skipped_count",
+                            observer.skipped_count);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_failure_count",
+                            observer.failure_count);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_event_count",
+                            observer.motion_event_count);
+    cJSON_AddNumberToObject(root, "camera_vision_observer_scratch_psram_bytes",
+                            observer.scratch_psram_bytes);
     return root;
 }
 

@@ -133,6 +133,11 @@ void Application::Initialize() {
             if (camera != nullptr) {
                 camera->ForceOff();
             }
+        } else {
+            auto* camera = Board::GetInstance().GetCamera();
+            if (camera != nullptr) {
+                camera->OnIdle();
+            }
         }
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
