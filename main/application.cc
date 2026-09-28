@@ -350,6 +350,11 @@ void Application::HandleNetworkConnectedEvent() {
             "activation", 4096 * 2, this, 2, &activation_task_handle_);
     }
 
+    if (state == kDeviceStateIdle && protocol_ && protocol_->WantsPersistentConnection() &&
+        !protocol_->IsAudioChannelOpened()) {
+        protocol_->Start();
+    }
+
     // Update the status bar immediately to show the network state
     auto display = Board::GetInstance().GetDisplay();
     display->UpdateStatusBar(true);
@@ -366,8 +371,14 @@ void Application::HandleNetworkDisconnectedEvent() {
         if (gemini_asr_controller_.IsGeminiActive()) {
             gemini_asr_controller_.Stop();
         }
-        ESP_LOGI(TAG, "Closing audio channel due to network disconnection");
-        protocol_->CloseAudioChannel();
+    }
+    const bool conversation_active = state == kDeviceStateConnecting ||
+                                     state == kDeviceStateListening ||
+                                     state == kDeviceStateSpeaking;
+    if (protocol_ && protocol_->IsAudioChannelOpened() &&
+        (conversation_active || protocol_->WantsPersistentConnection())) {
+        ESP_LOGI(TAG, "Closing transport due to network disconnection");
+        protocol_->CloseTransport(false);
     }
 
     // Update the status bar immediately to show the network state
@@ -585,7 +596,7 @@ void Application::InitializeProtocol() {
         protocol_ = std::make_unique<MqttProtocol>();
         server_transport_.store(ServerTransport::kMqtt, std::memory_order_relaxed);
     } else if (ota_->HasWebsocketConfig()) {
-        protocol_ = std::make_unique<WebsocketProtocol>();
+        protocol_ = std::make_unique<WebsocketProtocol>(ota_->HasDeskRobotPersistentWsV1());
         server_transport_.store(ServerTransport::kWebSocket, std::memory_order_relaxed);
     } else {
         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
@@ -594,9 +605,16 @@ void Application::InitializeProtocol() {
     }
 
     server_connected_.store(false, std::memory_order_relaxed);
+    UpdateServerTransportDiagnostics({
+        .persistent = false,
+        .connection_state = server_transport_.load(std::memory_order_relaxed) ==
+                                    ServerTransport::kNone
+                                ? ProtocolConnectionState::kDisconnected
+                                : ProtocolConnectionState::kLegacy,
+    });
     protocol_->OnConnected([this]() {
         server_connected_.store(true, std::memory_order_relaxed);
-        DismissAlert();
+        Schedule([this]() { DismissAlert(); });
     });
     protocol_->OnDisconnected(
         [this]() { server_connected_.store(false, std::memory_order_relaxed); });
@@ -620,7 +638,9 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
-        board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        if (!protocol_->IsPersistentConnection()) {
+            board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        }
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG,
                      "Server sample rate %d does not match device output sample rate %d, "
@@ -688,6 +708,19 @@ void Application::InitializeProtocol() {
                       subtitles = std::move(subtitles)]() mutable {
                 notification_controller_.Start(std::move(url), std::move(subtitles));
             });
+        } else if (strcmp(type->valuestring, "goodbye") == 0) {
+            Schedule([this]() {
+                if (gemini_asr_controller_.IsGeminiActive()) {
+                    gemini_asr_controller_.Stop();
+                    gemini_asr_controller_.ResetTurnConfig();
+                }
+                if (protocol_) {
+                    protocol_->CloseAudioChannel(false);
+                }
+                if (GetDeviceState() != kDeviceStateIdle) {
+                    SetDeviceState(kDeviceStateIdle);
+                }
+            });
         } else if (strcmp(type->valuestring, "tts") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
             if (!cJSON_IsString(state)) {
@@ -700,7 +733,16 @@ void Application::InitializeProtocol() {
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
-                if (!text_chat_controller_.OnTtsStop()) {
+                const bool end_conversation =
+                    cJSON_IsTrue(cJSON_GetObjectItem(root, "end_conversation"));
+                if (end_conversation) {
+                    text_chat_controller_.OnTtsStop(true);
+                    Schedule([this]() {
+                        if (GetDeviceState() != kDeviceStateIdle) {
+                            SetDeviceState(kDeviceStateIdle);
+                        }
+                    });
+                } else if (!text_chat_controller_.OnTtsStop()) {
                     Schedule([this]() {
                         if (GetDeviceState() == kDeviceStateSpeaking) {
                             if (listening_mode_ == kListeningModeManualStop) {
@@ -901,6 +943,7 @@ void Application::HandleToggleChatEvent() {
             Schedule([this, mode]() { ContinueOpenAudioChannel(mode); });
             return;
         }
+        Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         if (gemini_asr_controller_.PrimeAudioChannel()) {
             SetListeningMode(mode);
         }
@@ -910,7 +953,8 @@ void Application::HandleToggleChatEvent() {
         if (gemini_asr_controller_.IsGeminiActive()) {
             gemini_asr_controller_.Stop();
         }
-        protocol_->CloseAudioChannel();
+        protocol_->EndConversation();
+        SetDeviceState(kDeviceStateIdle);
     }
 }
 
@@ -967,6 +1011,7 @@ void Application::HandleStartListeningEvent() {
             Schedule([this]() { ContinueOpenAudioChannel(kListeningModeManualStop); });
             return;
         }
+        Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         if (gemini_asr_controller_.PrimeAudioChannel()) {
             SetListeningMode(kListeningModeManualStop);
         }
@@ -1148,6 +1193,7 @@ void Application::HandleStateChangedEvent() {
             }
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
+            board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
             break;
         case kDeviceStateConnecting:
             set_device_status(Lang::Strings::CONNECTING);
@@ -1266,7 +1312,7 @@ void Application::Reboot() {
     }
     // Disconnect the audio channel
     if (protocol_ && protocol_->IsAudioChannelOpened()) {
-        protocol_->CloseAudioChannel();
+        protocol_->CloseTransport(false);
     }
     protocol_.reset();
     audio_service_.Stop();
@@ -1305,7 +1351,10 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
                 gemini_asr_controller_.Stop();
             }
             if (protocol_) {
-                protocol_->CloseAudioChannel();
+                protocol_->EndConversation();
+                if (GetDeviceState() == kDeviceStateListening) {
+                    SetDeviceState(kDeviceStateIdle);
+                }
             }
         });
     }
@@ -1378,7 +1427,7 @@ void Application::SetAecMode(AecMode mode) {
 
         // If the AEC mode is changed, close the audio channel
         if (protocol_ && protocol_->IsAudioChannelOpened()) {
-            protocol_->CloseAudioChannel();
+            protocol_->CloseTransport(true);
         }
     });
 }
@@ -1395,11 +1444,12 @@ void Application::ResetProtocol() {
         }
         // Close audio channel if opened
         if (protocol_ && protocol_->IsAudioChannelOpened()) {
-            protocol_->CloseAudioChannel();
+            protocol_->CloseTransport(false);
         }
         // Reset protocol
         server_connected_.store(false, std::memory_order_relaxed);
         server_transport_.store(ServerTransport::kNone, std::memory_order_relaxed);
+        UpdateServerTransportDiagnostics({});
         protocol_.reset();
     });
 }
@@ -1414,4 +1464,32 @@ const char* Application::GetServerTransport() const {
         default:
             return "none";
     }
+}
+
+ProtocolTransportDiagnostics Application::GetServerTransportDiagnostics() const {
+    return {
+        .persistent = server_persistent_.load(std::memory_order_relaxed),
+        .connection_state = server_connection_state_.load(std::memory_order_relaxed),
+        .connection_started_us =
+            server_connection_started_us_.load(std::memory_order_relaxed),
+        .last_server_rx_us = server_last_rx_us_.load(std::memory_order_relaxed),
+        .reconnect_count = server_reconnect_count_.load(std::memory_order_relaxed),
+        .reconnect_delay_ms =
+            server_reconnect_delay_ms_.load(std::memory_order_relaxed),
+    };
+}
+
+void Application::UpdateServerTransportDiagnostics(
+    const ProtocolTransportDiagnostics& diagnostics) {
+    server_persistent_.store(diagnostics.persistent, std::memory_order_relaxed);
+    server_connection_state_.store(diagnostics.connection_state,
+                                   std::memory_order_relaxed);
+    server_connection_started_us_.store(diagnostics.connection_started_us,
+                                        std::memory_order_relaxed);
+    server_last_rx_us_.store(diagnostics.last_server_rx_us,
+                             std::memory_order_relaxed);
+    server_reconnect_count_.store(diagnostics.reconnect_count,
+                                  std::memory_order_relaxed);
+    server_reconnect_delay_ms_.store(diagnostics.reconnect_delay_ms,
+                                     std::memory_order_relaxed);
 }

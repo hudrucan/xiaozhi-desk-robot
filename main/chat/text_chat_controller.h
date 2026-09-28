@@ -35,7 +35,7 @@ public:
     void RecordIncomingAudio();
     void OnAudioChannelClosed();
     void OnTtsStart();
-    bool OnTtsStop();
+    bool OnTtsStop(bool end_conversation = false);
     void OnAssistantText(const std::string& text);
     std::string ResolveIncomingTranscript(const std::string& text);
     void OnMcpMessage();

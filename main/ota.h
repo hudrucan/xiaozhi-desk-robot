@@ -18,6 +18,7 @@ public:
     bool HasMqttConfig() { return has_mqtt_config_; }
     bool HasWebsocketConfig() { return has_websocket_config_; }
     bool HasDeskRobotTypedTextV1() const { return has_desk_robot_typed_text_v1_; }
+    bool HasDeskRobotPersistentWsV1() const { return has_desk_robot_persistent_ws_v1_; }
     bool HasActivationCode() { return has_activation_code_; }
     bool HasServerTime() { return has_server_time_; }
     void MarkCurrentVersionValid();
@@ -32,6 +33,7 @@ private:
     bool has_mqtt_config_ = false;
     bool has_websocket_config_ = false;
     bool has_desk_robot_typed_text_v1_ = false;
+    bool has_desk_robot_persistent_ws_v1_ = false;
     bool has_server_time_ = false;
     bool has_activation_code_ = false;
     bool has_serial_number_ = false;

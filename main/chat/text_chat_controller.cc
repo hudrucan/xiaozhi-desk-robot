@@ -244,7 +244,17 @@ void TextChatController::OnTtsStart() {
     Emit("speaking");
 }
 
-bool TextChatController::OnTtsStop() {
+bool TextChatController::OnTtsStop(bool end_conversation) {
+    if (end_conversation) {
+        pending_.store(false);
+        ResetActiveState();
+        resume_listening_ = false;
+        web_chat_bridge_.Clear();
+        Emit("completed");
+        ESP_LOGI(TAG, "TTS stopped for conversation end");
+        return false;
+    }
+
     if (!pending_.load()) {
         Emit("completed");
         return false;
@@ -362,7 +372,7 @@ void TextChatController::Run(const std::string& text, bool enhanced_typed_text) 
 
         if (close_channel && application_.protocol_ &&
             application_.protocol_->IsAudioChannelOpened()) {
-            application_.protocol_->CloseAudioChannel();
+            application_.protocol_->EndConversation();
         }
         if (return_idle && application_.GetDeviceState() != kDeviceStateIdle) {
             application_.SetDeviceState(kDeviceStateIdle);
@@ -405,6 +415,8 @@ void TextChatController::Run(const std::string& text, bool enhanced_typed_text) 
             return;
         }
     }
+
+    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
     if (application_.protocol_->session_id().empty()) {
         reject("Session is not ready", true, true);

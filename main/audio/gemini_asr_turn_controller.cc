@@ -368,7 +368,7 @@ void GeminiAsrTurnController::HandleTimers() {
     Stop();
     ResetTurnConfig();
     if (application_.protocol_) {
-        application_.protocol_->CloseAudioChannel();
+        application_.protocol_->EndConversation();
     }
     if (application_.GetDeviceState() == kDeviceStateListening) {
         application_.SetDeviceState(kDeviceStateIdle);

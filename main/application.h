@@ -81,6 +81,8 @@ public:
         return server_connected_.load(std::memory_order_relaxed);
     }
     const char* GetServerTransport() const;
+    ProtocolTransportDiagnostics GetServerTransportDiagnostics() const;
+    void UpdateServerTransportDiagnostics(const ProtocolTransportDiagnostics& diagnostics);
 
     /**
      * Request state transition
@@ -153,6 +155,13 @@ private:
     enum class ServerTransport : uint8_t { kNone, kMqtt, kWebSocket };
     std::atomic<ServerTransport> server_transport_{ServerTransport::kNone};
     std::atomic_bool server_connected_{false};
+    std::atomic_bool server_persistent_{false};
+    std::atomic<ProtocolConnectionState> server_connection_state_{
+        ProtocolConnectionState::kDisconnected};
+    std::atomic<int64_t> server_connection_started_us_{0};
+    std::atomic<int64_t> server_last_rx_us_{0};
+    std::atomic<uint32_t> server_reconnect_count_{0};
+    std::atomic<uint32_t> server_reconnect_delay_ms_{0};
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;

@@ -1,6 +1,7 @@
 #include "robot_web_status.h"
 
 #include "control/robot_controller.h"
+#include "protocol.h"
 
 #include <cJSON.h>
 
@@ -42,6 +43,31 @@ cJSON* RobotWebStatus::CreateSystem() {
     cJSON_AddStringToObject(root, "reset_reason", status.reset_reason.c_str());
     cJSON_AddStringToObject(root, "server_transport", status.server_transport.c_str());
     cJSON_AddBoolToObject(root, "server_connected", status.server_connected);
+    cJSON_AddBoolToObject(root, "server_persistent", status.server_persistent);
+    const char* connection_state = "disconnected";
+    switch (static_cast<ProtocolConnectionState>(status.server_connection_state)) {
+        case ProtocolConnectionState::kLegacy:
+            connection_state = "legacy";
+            break;
+        case ProtocolConnectionState::kConnected:
+            connection_state = "connected";
+            break;
+        case ProtocolConnectionState::kReconnecting:
+            connection_state = "reconnecting";
+            break;
+        case ProtocolConnectionState::kDisconnected:
+        default:
+            break;
+    }
+    cJSON_AddStringToObject(root, "server_connection_state", connection_state);
+    cJSON_AddNumberToObject(root, "server_connection_age_sec",
+                            status.server_connection_age_sec);
+    cJSON_AddNumberToObject(root, "server_last_rx_age_sec",
+                            status.server_last_rx_age_sec);
+    cJSON_AddNumberToObject(root, "server_reconnect_count",
+                            status.server_reconnect_count);
+    cJSON_AddNumberToObject(root, "server_reconnect_delay_ms",
+                            status.server_reconnect_delay_ms);
     cJSON_AddNumberToObject(root, "free_internal_bytes", status.free_internal_bytes);
     cJSON_AddNumberToObject(root, "total_internal_bytes", status.total_internal_bytes);
     cJSON_AddNumberToObject(root, "minimum_free_internal_bytes",

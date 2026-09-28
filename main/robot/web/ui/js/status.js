@@ -603,8 +603,29 @@ function renderSystemStatus(status) {
   $("#ip").textContent = status.ip || "—";
   const transport = status.server_transport === "websocket" ? "WebSocket" :
     status.server_transport === "mqtt" ? "MQTT" : "None";
-  $("#serverConnection").textContent = transport + " · " +
-    (status.server_connected ? "connected" : "disconnected");
+  const mode = status.server_persistent ? "persistent" : "legacy";
+  const reportedState = String(status.server_connection_state || "disconnected");
+  const connectionState = reportedState === "legacy"
+    ? (status.server_connected ? "connected" : "disconnected")
+    : reportedState;
+  $("#serverConnection").textContent = transport === "None"
+    ? "None · disconnected"
+    : [transport, mode, connectionState].join(" · ");
+  $("#transportHealthSummary").textContent = transport;
+  $("#transportMode").textContent = mode[0].toUpperCase() + mode.slice(1);
+  $("#transportState").textContent =
+    connectionState[0].toUpperCase() + connectionState.slice(1);
+  const connectionAge = Number(status.server_connection_age_sec);
+  $("#transportAge").textContent = Number.isFinite(connectionAge) && connectionAge >= 0
+    ? fmtCapacityTime(connectionAge) : "—";
+  const lastRxAge = Number(status.server_last_rx_age_sec);
+  $("#transportLastRx").textContent = Number.isFinite(lastRxAge) && lastRxAge >= 0
+    ? fmtCapacityTime(lastRxAge) + " ago" : "—";
+  $("#transportReconnects").textContent = String(
+    Math.max(0, Number(status.server_reconnect_count) || 0),
+  );
+  const retryDelay = Math.max(0, Number(status.server_reconnect_delay_ms) || 0);
+  $("#transportRetry").textContent = retryDelay ? "In " + fmtMs(retryDelay) : "—";
   $("#resetReason").textContent = (status.reset_reason || "unknown").replaceAll("-", " ");
   $("#sram").textContent = internal.label + " · low " +
     fmtBytes(status.minimum_free_internal_bytes);

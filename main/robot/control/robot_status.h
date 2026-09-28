@@ -95,6 +95,12 @@ struct RobotStatus {
     std::string reset_reason = "unknown";
     std::string server_transport = "none";
     bool server_connected = false;
+    bool server_persistent = false;
+    uint8_t server_connection_state = 3;
+    int64_t server_connection_age_sec = -1;
+    int64_t server_last_rx_age_sec = -1;
+    uint32_t server_reconnect_count = 0;
+    uint32_t server_reconnect_delay_ms = 0;
     size_t free_internal_bytes = 0;
     size_t total_internal_bytes = 0;
     size_t minimum_free_internal_bytes = 0;

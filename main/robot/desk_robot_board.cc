@@ -2964,6 +2964,21 @@ private:
         status.reset_reason = SystemInfo::GetResetReasonName(esp_reset_reason());
         status.server_transport = app.GetServerTransport();
         status.server_connected = app.IsServerConnected();
+        const auto transport_diagnostics = app.GetServerTransportDiagnostics();
+        const int64_t now_us = esp_timer_get_time();
+        status.server_persistent = transport_diagnostics.persistent;
+        status.server_connection_state =
+            static_cast<uint8_t>(transport_diagnostics.connection_state);
+        status.server_connection_age_sec = transport_diagnostics.connection_started_us > 0
+            ? std::max<int64_t>(0, now_us - transport_diagnostics.connection_started_us) /
+                  1000000
+            : -1;
+        status.server_last_rx_age_sec = transport_diagnostics.last_server_rx_us > 0
+            ? std::max<int64_t>(0, now_us - transport_diagnostics.last_server_rx_us) /
+                  1000000
+            : -1;
+        status.server_reconnect_count = transport_diagnostics.reconnect_count;
+        status.server_reconnect_delay_ms = transport_diagnostics.reconnect_delay_ms;
         status.free_internal_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         status.total_internal_bytes = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
         status.minimum_free_internal_bytes =

@@ -1427,6 +1427,20 @@
             </div>
             <pre id="cameraLogOutput" class="log-output">No camera logs yet</pre>
           </section>
+          <section class="card" data-tabs="diagnostics">
+            <div class="section-title">
+              <strong data-caption="Persistent WebSocket transport">Transport health</strong>
+              <span id="transportHealthSummary">—</span>
+            </div>
+            <div class="device-grid">
+              <div class="device-row"><span>Mode</span><b id="transportMode">—</b></div>
+              <div class="device-row"><span>State</span><b id="transportState">—</b></div>
+              <div class="device-row"><span>Connection age</span><b id="transportAge">—</b></div>
+              <div class="device-row"><span>Last control RX</span><b id="transportLastRx">—</b></div>
+              <div class="device-row"><span>Reconnects</span><b id="transportReconnects">0</b></div>
+              <div class="device-row"><span>Next retry</span><b id="transportRetry">—</b></div>
+            </div>
+          </section>
           <section class="card log-card" data-tabs="diagnostics">
             <div class="log-head">
               <div class="log-state">

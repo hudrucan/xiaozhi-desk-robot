@@ -296,6 +296,9 @@ function bindCameraAndLogControls() {
   $("#downloadLog").onclick = downloadLogs;
   $("#logSearch").oninput = () => renderLogs(true);
   $("#logFilter").onchange = () => renderLogs(true);
+  autoScroll.onchange = () => {
+    if (autoScroll.checked) logOutput.scrollTop = logOutput.scrollHeight;
+  };
 }
 
 bindChatAndAsrControls();

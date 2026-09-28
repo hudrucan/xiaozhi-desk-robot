@@ -3,6 +3,7 @@
 
 #include <cJSON.h>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -40,6 +41,22 @@ enum ListeningMode {
     kListeningModeRealtime  // 需要 AEC 支持
 };
 
+enum class ProtocolConnectionState : uint8_t {
+    kLegacy,
+    kConnected,
+    kReconnecting,
+    kDisconnected,
+};
+
+struct ProtocolTransportDiagnostics {
+    bool persistent = false;
+    ProtocolConnectionState connection_state = ProtocolConnectionState::kDisconnected;
+    int64_t connection_started_us = 0;
+    int64_t last_server_rx_us = 0;
+    uint32_t reconnect_count = 0;
+    uint32_t reconnect_delay_ms = 0;
+};
+
 class Protocol {
 public:
     static constexpr int kChannelInactivityTimeoutSeconds = 120;
@@ -61,6 +78,15 @@ public:
     virtual bool Start() = 0;
     virtual bool OpenAudioChannel() = 0;
     virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
+    // Logical conversation end and physical transport teardown are separate
+    // for transports that can remain authenticated while the robot is idle.
+    virtual void EndConversation() { CloseAudioChannel(); }
+    virtual void CloseTransport(bool reconnect = false) {
+        (void)reconnect;
+        CloseAudioChannel();
+    }
+    virtual bool IsPersistentConnection() const { return false; }
+    virtual bool WantsPersistentConnection() const { return false; }
     virtual bool IsAudioChannelOpened() const = 0;
     virtual bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) = 0;
     // Prepare a transport's return-audio path without capturing microphone audio.

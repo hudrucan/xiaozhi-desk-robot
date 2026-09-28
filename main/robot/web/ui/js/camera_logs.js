@@ -416,6 +416,9 @@ function setLogPollingEnabled(enabled) {
   logPollingEnabled = enabled;
   clearInterval(logPollTimer);
   logPollTimer = null;
+  if (enabled && !document.hidden && !logOutput.closest("[hidden]")) {
+    renderLogs(true);
+  }
   if (!enabled || logPaused || document.hidden) return;
   fetchLogs();
   logPollTimer = setInterval(fetchLogs, 1000);
@@ -449,14 +452,13 @@ function renderLogs(force = false) {
     (filter === "all" || logLevel(line) === filter) &&
     (!query || line.toLowerCase().includes(query)),
   );
-  const pinned = logOutput.scrollHeight - logOutput.scrollTop - logOutput.clientHeight < 30;
   logOutput.textContent = visible.join("\n") || "No matching logs";
   const errors = lines.filter((line) => logLevel(line) === "error").length;
   const badge = $("#errorBadge");
   badge.textContent = errors;
   badge.classList.toggle("show", errors > 0);
   $("#logSize").textContent = Math.round(allLogs.length / 1024) + " KB cached · 16 KB device";
-  if (autoScroll.checked && pinned) logOutput.scrollTop = logOutput.scrollHeight;
+  if (autoScroll.checked) logOutput.scrollTop = logOutput.scrollHeight;
   logRenderPending = false;
 }
 

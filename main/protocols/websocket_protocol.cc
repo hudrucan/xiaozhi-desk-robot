@@ -8,16 +8,84 @@
 #include <arpa/inet.h>
 #include <cJSON.h>
 #include <cstring>
+#include <algorithm>
 #include "assets/lang_config.h"
 
 #define TAG "WS"
 
-WebsocketProtocol::WebsocketProtocol() { event_group_handle_ = xEventGroupCreate(); }
+namespace {
+constexpr uint64_t kHeartbeatIntervalUs = 30ULL * 1000 * 1000;
+constexpr uint32_t kMaxReconnectDelayMs = 30000;
+}
 
-WebsocketProtocol::~WebsocketProtocol() { vEventGroupDelete(event_group_handle_); }
+WebsocketProtocol::WebsocketProtocol(bool persistent_candidate) {
+    persistent_candidate_.store(persistent_candidate);
+    event_group_handle_ = xEventGroupCreate();
+
+    esp_timer_create_args_t reconnect_args = {
+        .callback = [](void* arg) {
+            auto* protocol = static_cast<WebsocketProtocol*>(arg);
+            protocol->reconnect_scheduled_.store(false);
+            protocol->reconnect_retry_delay_ms_.store(0);
+            auto alive = protocol->alive_;
+            Application::GetInstance().Schedule([protocol, alive]() {
+                if (*alive && protocol->reconnect_allowed_.load() &&
+                    !protocol->IsAudioChannelOpened()) {
+                    if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+                        protocol->reconnect_count_.fetch_add(1);
+                        protocol->PublishDiagnostics();
+                        protocol->OpenAudioChannel();
+                    } else {
+                        protocol->ScheduleReconnect();
+                    }
+                }
+            });
+        },
+        .arg = this,
+        .name = "ws_reconnect",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&reconnect_args, &reconnect_timer_));
+
+    esp_timer_create_args_t heartbeat_args = {
+        .callback = [](void* arg) {
+            auto* protocol = static_cast<WebsocketProtocol*>(arg);
+            auto alive = protocol->alive_;
+            Application::GetInstance().Schedule([protocol, alive]() {
+                if (*alive) {
+                    protocol->HandleHeartbeat();
+                }
+            });
+        },
+        .arg = this,
+        .name = "ws_heartbeat",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&heartbeat_args, &heartbeat_timer_));
+}
+
+WebsocketProtocol::~WebsocketProtocol() {
+    *alive_ = false;
+    reconnect_allowed_.store(false);
+    if (reconnect_timer_ != nullptr) {
+        esp_timer_stop(reconnect_timer_);
+        esp_timer_delete(reconnect_timer_);
+    }
+    StopHeartbeat();
+    if (heartbeat_timer_ != nullptr) {
+        esp_timer_delete(heartbeat_timer_);
+    }
+    websocket_.reset();
+    vEventGroupDelete(event_group_handle_);
+}
 
 bool WebsocketProtocol::Start() {
-    // Only connect to server when audio channel is needed
+    if (!persistent_candidate_.load()) {
+        // Legacy WebSocket lifecycle remains turn-scoped.
+        return true;
+    }
+    reconnect_allowed_.store(true);
+    if (!OpenAudioChannel()) {
+        ScheduleReconnect();
+    }
     return true;
 }
 
@@ -72,11 +140,64 @@ bool WebsocketProtocol::IsAudioChannelOpened() const {
 }
 
 void WebsocketProtocol::CloseAudioChannel(bool send_goodbye) {
-    (void)send_goodbye;  // Websocket doesn't need to send goodbye message
+    if (persistent_negotiated_.load()) {
+        if (send_goodbye) {
+            EndConversation();
+        }
+        return;
+    }
+    CloseTransport(false);
+}
+
+void WebsocketProtocol::EndConversation() {
+    if (!persistent_negotiated_.load()) {
+        CloseTransport(false);
+        return;
+    }
+    std::string message =
+        "{\"session_id\":\"" + session_id_ + "\",\"type\":\"goodbye\"}";
+    if (!SendText(message)) {
+        CloseTransport(true);
+    }
+}
+
+void WebsocketProtocol::CloseTransport(bool reconnect) {
+    reconnect_allowed_.store(reconnect && persistent_candidate_.load());
+    StopHeartbeat();
+    connecting_.store(false);
+    connection_started_us_.store(0);
+    connection_state_.store(reconnect_allowed_.load()
+                                ? ProtocolConnectionState::kReconnecting
+                                : persistent_candidate_.load()
+                                    ? ProtocolConnectionState::kDisconnected
+                                    : ProtocolConnectionState::kLegacy);
+    PublishDiagnostics();
     websocket_.reset();
+    if (reconnect_allowed_.load()) {
+        ScheduleReconnect();
+    }
 }
 
 bool WebsocketProtocol::OpenAudioChannel() {
+    if (IsAudioChannelOpened()) {
+        return true;
+    }
+    bool expected = false;
+    if (!connecting_.compare_exchange_strong(expected, true)) {
+        ESP_LOGW(TAG, "Websocket connection attempt already in progress");
+        return false;
+    }
+    if (reconnect_timer_ != nullptr) {
+        esp_timer_stop(reconnect_timer_);
+    }
+    reconnect_scheduled_.store(false);
+    reconnect_retry_delay_ms_.store(0);
+    connection_state_.store(persistent_candidate_.load()
+                                ? ProtocolConnectionState::kReconnecting
+                                : ProtocolConnectionState::kLegacy);
+    PublishDiagnostics();
+    xEventGroupClearBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
+
     Settings settings("websocket", false);
     std::string url = settings.GetString("url");
     std::string token = settings.GetString("token");
@@ -86,11 +207,18 @@ bool WebsocketProtocol::OpenAudioChannel() {
     }
 
     error_occurred_ = false;
+    last_incoming_time_ = std::chrono::steady_clock::now();
 
     auto network = Board::GetInstance().GetNetwork();
+    const uint32_t generation = connection_generation_.fetch_add(1) + 1;
+    websocket_.reset();
     websocket_ = network->CreateWebSocket(1);
     if (websocket_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create websocket");
+        connecting_.store(false);
+        if (reconnect_allowed_.load()) {
+            ScheduleReconnect();
+        }
         return false;
     }
 
@@ -105,7 +233,14 @@ bool WebsocketProtocol::OpenAudioChannel() {
     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
 
-    websocket_->OnData([this](const char* data, size_t len, bool binary) {
+    websocket_->OnData([this, generation](const char* data, size_t len, bool binary) {
+        if (generation != connection_generation_.load()) {
+            return;
+        }
+        if (!binary) {
+            last_server_rx_us_.store(esp_timer_get_time());
+            PublishDiagnostics();
+        }
         if (binary) {
             if (on_incoming_audio_ != nullptr) {
                 if (version_ == 2) {
@@ -141,10 +276,16 @@ bool WebsocketProtocol::OpenAudioChannel() {
         } else {
             // Parse JSON data
             auto root = cJSON_ParseWithLength(data, len);
+            if (root == nullptr) {
+                ESP_LOGW(TAG, "Ignoring invalid JSON message");
+                return;
+            }
             auto type = cJSON_GetObjectItem(root, "type");
             if (cJSON_IsString(type)) {
                 if (strcmp(type->valuestring, "hello") == 0) {
                     ParseServerHello(root);
+                } else if (strcmp(type->valuestring, "pong") == 0) {
+                    ESP_LOGD(TAG, "Received websocket heartbeat pong");
                 } else {
                     if (on_incoming_json_ != nullptr) {
                         on_incoming_json_(root);
@@ -158,13 +299,28 @@ bool WebsocketProtocol::OpenAudioChannel() {
         last_incoming_time_ = std::chrono::steady_clock::now();
     });
 
-    websocket_->OnDisconnected([this]() {
+    websocket_->OnDisconnected([this, generation]() {
+        if (!*alive_ || generation != connection_generation_.load()) {
+            return;
+        }
         ESP_LOGI(TAG, "Websocket disconnected");
+        connecting_.store(false);
+        connection_started_us_.store(0);
+        connection_state_.store(reconnect_allowed_.load()
+                                    ? ProtocolConnectionState::kReconnecting
+                                    : persistent_candidate_.load()
+                                        ? ProtocolConnectionState::kDisconnected
+                                        : ProtocolConnectionState::kLegacy);
+        PublishDiagnostics();
+        StopHeartbeat();
         if (on_disconnected_ != nullptr) {
             on_disconnected_();
         }
         if (on_audio_channel_closed_ != nullptr) {
             on_audio_channel_closed_();
+        }
+        if (reconnect_allowed_.load()) {
+            ScheduleReconnect();
         }
     });
 
@@ -173,12 +329,19 @@ bool WebsocketProtocol::OpenAudioChannel() {
         ESP_LOGE(TAG, "Failed to connect to websocket server: %s",
                  connected.error().ToString().c_str());
         SetError(Lang::Strings::SERVER_NOT_CONNECTED, url);
+        connecting_.store(false);
+        if (reconnect_allowed_.load()) {
+            ScheduleReconnect();
+        }
         return false;
     }
+    connection_started_us_.store(esp_timer_get_time());
 
     // Send hello message to describe the client
     auto message = GetHelloMessage();
     if (!SendText(message)) {
+        connecting_.store(false);
+        CloseTransport(reconnect_allowed_.load());
         return false;
     }
 
@@ -189,7 +352,30 @@ bool WebsocketProtocol::OpenAudioChannel() {
     if (!(bits & WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT)) {
         ESP_LOGE(TAG, "Failed to receive server hello");
         SetError(Lang::Strings::SERVER_TIMEOUT);
+        connecting_.store(false);
+        CloseTransport(reconnect_allowed_.load());
         return false;
+    }
+
+    connecting_.store(false);
+    if (persistent_candidate_.load() && !persistent_negotiated_.load()) {
+        ESP_LOGW(TAG, "Server did not negotiate persistent WebSocket; using legacy lifecycle");
+        persistent_candidate_.store(false);
+        reconnect_allowed_.store(false);
+        connection_state_.store(ProtocolConnectionState::kLegacy);
+        PublishDiagnostics();
+        CloseTransport(false);
+        return true;
+    }
+
+    if (persistent_negotiated_.load()) {
+        reconnect_allowed_.store(true);
+        reconnect_delay_ms_ = 1000;
+        reconnect_retry_delay_ms_.store(0);
+        connection_state_.store(ProtocolConnectionState::kConnected);
+        PublishDiagnostics();
+        esp_timer_stop(heartbeat_timer_);
+        esp_timer_start_periodic(heartbeat_timer_, kHeartbeatIntervalUs);
     }
 
     if (on_audio_channel_opened_ != nullptr) {
@@ -213,6 +399,8 @@ std::string WebsocketProtocol::GetHelloMessage() {
 #endif
     cJSON_AddBoolToObject(features, "mcp", true);
     cJSON_AddBoolToObject(features, "status", true);
+    cJSON_AddBoolToObject(features, "desk_robot_persistent_ws_v1",
+                          persistent_candidate_.load());
     cJSON_AddItemToObject(root, "features", features);
     AddTextFontCapabilities(root);
     cJSON_AddStringToObject(root, "transport", "websocket");
@@ -240,6 +428,13 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
         return;
     }
 
+    persistent_negotiated_.store(false);
+    auto features = cJSON_GetObjectItem(root, "features");
+    if (persistent_candidate_.load() && cJSON_IsObject(features)) {
+        auto persistent = cJSON_GetObjectItem(features, "desk_robot_persistent_ws_v1");
+        persistent_negotiated_.store(cJSON_IsTrue(persistent));
+    }
+
     auto session_id = cJSON_GetObjectItem(root, "session_id");
     if (cJSON_IsString(session_id)) {
         session_id_ = session_id->valuestring;
@@ -259,4 +454,52 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
     }
 
     xEventGroupSetBits(event_group_handle_, WEBSOCKET_PROTOCOL_SERVER_HELLO_EVENT);
+}
+
+void WebsocketProtocol::ScheduleReconnect() {
+    if (!reconnect_allowed_.load() || reconnect_timer_ == nullptr || !*alive_) {
+        return;
+    }
+    bool expected = false;
+    if (!reconnect_scheduled_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    esp_timer_stop(reconnect_timer_);
+    const uint32_t delay_ms = reconnect_delay_ms_;
+    reconnect_retry_delay_ms_.store(delay_ms);
+    reconnect_delay_ms_ = std::min(reconnect_delay_ms_ * 2, kMaxReconnectDelayMs);
+    connection_state_.store(ProtocolConnectionState::kReconnecting);
+    PublishDiagnostics();
+    ESP_LOGI(TAG, "Scheduling websocket reconnect in %u ms", delay_ms);
+    esp_timer_start_once(reconnect_timer_, static_cast<uint64_t>(delay_ms) * 1000);
+}
+
+void WebsocketProtocol::HandleHeartbeat() {
+    if (!persistent_negotiated_.load() || !IsAudioChannelOpened()) {
+        if (persistent_negotiated_.load()) {
+            ESP_LOGW(TAG, "Persistent websocket heartbeat timed out; reconnecting");
+            CloseTransport(true);
+        }
+        return;
+    }
+    if (!SendText("{\"type\":\"ping\"}")) {
+        CloseTransport(true);
+    }
+}
+
+void WebsocketProtocol::StopHeartbeat() {
+    if (heartbeat_timer_ != nullptr) {
+        esp_timer_stop(heartbeat_timer_);
+    }
+}
+
+void WebsocketProtocol::PublishDiagnostics() const {
+    Application::GetInstance().UpdateServerTransportDiagnostics({
+        .persistent = persistent_negotiated_.load(),
+        .connection_state = connection_state_.load(),
+        .connection_started_us = connection_started_us_.load(),
+        .last_server_rx_us = last_server_rx_us_.load(),
+        .reconnect_count = reconnect_count_.load(),
+        .reconnect_delay_ms = reconnect_retry_delay_ms_.load(),
+    });
 }
