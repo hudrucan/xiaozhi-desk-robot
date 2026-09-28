@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <cJSON.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -704,9 +705,63 @@ void Application::InitializeProtocol() {
                 }
             }
 
+            NotificationOptions options;
+            auto display_hold_ms = cJSON_GetObjectItem(root, "display_hold_ms");
+            if (display_hold_ms != nullptr) {
+                if (cJSON_IsNumber(display_hold_ms) &&
+                    std::floor(display_hold_ms->valuedouble) == display_hold_ms->valuedouble &&
+                    display_hold_ms->valuedouble >= 0 &&
+                    display_hold_ms->valuedouble <= 10000) {
+                    options.display_hold_ms =
+                        static_cast<uint32_t>(display_hold_ms->valuedouble);
+                } else {
+                    ESP_LOGW(TAG, "Ignoring invalid notify display_hold_ms");
+                }
+            }
+
+            auto presentation_duration_ms =
+                cJSON_GetObjectItem(root, "presentation_duration_ms");
+            if (presentation_duration_ms != nullptr) {
+                if (cJSON_IsNumber(presentation_duration_ms) &&
+                    std::floor(presentation_duration_ms->valuedouble) ==
+                        presentation_duration_ms->valuedouble &&
+                    presentation_duration_ms->valuedouble >= 250 &&
+                    presentation_duration_ms->valuedouble <= 30000) {
+                    options.presentation_duration_ms =
+                        static_cast<int>(presentation_duration_ms->valuedouble);
+                } else {
+                    ESP_LOGW(TAG, "Ignoring invalid notify presentation_duration_ms");
+                }
+            }
+
+            auto chime = cJSON_GetObjectItem(root, "chime");
+            if (chime != nullptr) {
+                if (cJSON_IsBool(chime)) {
+                    options.chime = cJSON_IsTrue(chime);
+                } else {
+                    ESP_LOGW(TAG, "Ignoring invalid notify chime");
+                }
+            }
+
+            const auto parse_optional_string = [root](const char* name, std::string& target) {
+                auto value = cJSON_GetObjectItem(root, name);
+                if (value == nullptr) {
+                    return;
+                }
+                if (cJSON_IsString(value)) {
+                    target = value->valuestring;
+                } else {
+                    ESP_LOGW(TAG, "Ignoring invalid notify %s", name);
+                }
+            };
+            parse_optional_string("reaction", options.reaction);
+            parse_optional_string("emotion", options.emotion);
+            parse_optional_string("oled_text", options.oled_text);
+
             Schedule([this, url = std::string(audio_url->valuestring),
-                      subtitles = std::move(subtitles)]() mutable {
-                notification_controller_.Start(std::move(url), std::move(subtitles));
+                      subtitles = std::move(subtitles), options = std::move(options)]() mutable {
+                notification_controller_.Start(std::move(url), std::move(subtitles),
+                                               std::move(options));
             });
         } else if (strcmp(type->valuestring, "goodbye") == 0) {
             Schedule([this]() {
@@ -863,6 +918,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 void Application::Alert(const char* status, const char* message, const char* emotion,
                         const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
+    notification_controller_.InvalidateHeldSubtitleForDisplayOverride();
     auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
     display->SetEmotion(emotion);
@@ -875,6 +931,7 @@ void Application::Alert(const char* status, const char* message, const char* emo
 void Application::DismissAlert() {
     last_error_message_.clear();
     if (GetDeviceState() == kDeviceStateIdle) {
+        notification_controller_.InvalidateHeldSubtitleForDisplayOverride();
         auto& board = Board::GetInstance();
         auto display = board.GetDisplay();
         display->SetStatus(Lang::Strings::STANDBY);
@@ -1167,6 +1224,7 @@ void Application::HandleStateChangedEvent() {
     // the Listening case below re-arms it when needed.
     pending_listening_start_ = false;
     gemini_asr_controller_.HandleApplicationStateChanged(new_state);
+    notification_controller_.OnDeviceStateChanged(new_state);
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
@@ -1187,7 +1245,9 @@ void Application::HandleStateChangedEvent() {
             // otherwise wipe the status, emotion, and chat message.
             if (last_error_message_.empty()) {
                 set_device_status(Lang::Strings::STANDBY);
-                display->ClearChatMessages();  // Clear messages first
+                if (!notification_controller_.HasHeldSubtitle()) {
+                    display->ClearChatMessages();
+                }
                 board.ApplyDeviceStateEmotion(
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }

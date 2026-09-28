@@ -3148,6 +3148,42 @@ public:
         display_->SetEmotion(emotion);
     }
 
+    bool ApplyNotificationPresentation(const std::string& reaction,
+                                       const std::string& emotion,
+                                       const std::string& oled_text,
+                                       int duration_ms) override {
+        NotifyAmbientInteraction(duration_ms);
+        const std::string normalized_oled = NormalizeTemporaryText(oled_text, 48);
+        if (!reaction.empty()) {
+            if (!ReactionEngine::IsSupported(reaction)) {
+                ESP_LOGW(TAG, "Ignoring unsupported notification reaction: %s",
+                         reaction.c_str());
+                return false;
+            }
+            return reaction_engine_.Start(reaction, duration_ms, normalized_oled,
+                                          ReactionEngine::Source::kExternal);
+        }
+
+        bool applied = false;
+        if (!emotion.empty()) {
+            if (!MochanDisplay::IsSupportedEmotion(emotion)) {
+                ESP_LOGW(TAG, "Ignoring unsupported notification emotion: %s",
+                         emotion.c_str());
+            } else {
+                applied = QueueTemporaryEmotion(emotion, duration_ms,
+                                                EmotionSource::kPreview, true);
+            }
+        }
+#ifdef SECONDARY_OLED_I2C_ADDRESS
+        if (!normalized_oled.empty() && secondary_display_.IsAvailable()) {
+            applied = QueueTemporaryOledText(normalized_oled, duration_ms) || applied;
+        }
+#else
+        (void)normalized_oled;
+#endif
+        return applied;
+    }
+
     void ApplyEmotion(const char* emotion) override {
         if (emotion == nullptr) {
             return;

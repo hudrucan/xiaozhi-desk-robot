@@ -55,6 +55,17 @@ void Board::ApplyEmotion(const char* emotion) { GetDisplay()->SetEmotion(emotion
 
 void Board::ApplyDeviceStateEmotion(const char* emotion) { GetDisplay()->SetEmotion(emotion); }
 
+bool Board::ApplyNotificationPresentation(const std::string& reaction,
+                                          const std::string& emotion,
+                                          const std::string& oled_text,
+                                          int duration_ms) {
+    (void)reaction;
+    (void)emotion;
+    (void)oled_text;
+    (void)duration_ms;
+    return false;
+}
+
 Camera* Board::GetCamera() { return nullptr; }
 
 Led* Board::GetLed() {

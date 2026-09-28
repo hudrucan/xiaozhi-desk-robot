@@ -72,6 +72,11 @@ public:
     // Update the base face for an application state without replacing a
     // board-owned temporary/reaction face.
     virtual void ApplyDeviceStateEmotion(const char* emotion);
+    // Optional coordinated presentation for server-pushed notifications.
+    virtual bool ApplyNotificationPresentation(const std::string& reaction,
+                                               const std::string& emotion,
+                                               const std::string& oled_text,
+                                               int duration_ms);
     // Narrow interaction hook; boards without proactive behavior ignore it.
     virtual void OnUserAttention() {}
     virtual Camera* GetCamera();
