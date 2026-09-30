@@ -231,13 +231,20 @@ void TextChatController::RecordIncomingAudio() {
 }
 
 void TextChatController::OnAudioChannelClosed() {
+    ResetActiveState();
     resume_listening_ = false;
 }
 
 void TextChatController::OnTtsStart() {
+    // pending_ owns Web/TextChat requests. tts_active_ instead tracks the
+    // server stream itself, including fixed wake greetings, so audio arriving
+    // before the scheduled Speaking transition is accepted and preserved.
+    tts_active_.store(true);
+    tts_stopped_.store(false);
+    tts_stop_us_.store(0);
+    audio_packets_.store(0);
+    last_audio_us_.store(0);
     if (pending_.load()) {
-        tts_active_.store(true);
-        tts_stopped_.store(false);
         RefreshDeadline();
         ESP_LOGI(TAG, "TTS started");
     }
@@ -256,6 +263,9 @@ bool TextChatController::OnTtsStop(bool end_conversation) {
     }
 
     if (!pending_.load()) {
+        tts_active_.store(false);
+        tts_stopped_.store(false);
+        tts_stop_us_.store(0);
         Emit("completed");
         return false;
     }
