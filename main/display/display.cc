@@ -42,6 +42,10 @@ void Display::ClearChatMessages() {
     // Default empty implementation, override in subclasses if needed
 }
 
+void Display::SetLiveUserTranscript(const char* content) { (void)content; }
+
+void Display::ClearLiveUserTranscript() {}
+
 void Display::SetTheme(Theme* theme) {
     current_theme_ = theme;
     Settings settings("display", true);

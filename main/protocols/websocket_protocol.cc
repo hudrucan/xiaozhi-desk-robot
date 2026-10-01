@@ -399,6 +399,7 @@ std::string WebsocketProtocol::GetHelloMessage() {
 #endif
     cJSON_AddBoolToObject(features, "mcp", true);
     cJSON_AddBoolToObject(features, "status", true);
+    cJSON_AddBoolToObject(features, "desk_robot_stt_partial_v1", true);
     cJSON_AddBoolToObject(features, "desk_robot_persistent_ws_v1",
                           persistent_candidate_.load());
     cJSON_AddItemToObject(root, "features", features);

@@ -33,6 +33,8 @@ public:
     void ShowNotification(const char* notification, int duration_ms = 3000) override;
     void SetEmotion(const char* emotion) override;
     void SetChatMessage(const char* role, const char* content) override;
+    void SetLiveUserTranscript(const char* content) override;
+    void ClearLiveUserTranscript() override;
     void ClearChatMessages() override;
     void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
     void SetTheme(Theme* theme) override;
@@ -236,8 +238,9 @@ private:
     void StartTyping(const char* content);
     void UpdateTyping(int64_t now_us);
     void FinishTyping();
-    void ResetTyping();
+    void ResetTyping(bool reset_scroll = true);
     void RenderTypingText();
+    void UpdateResponseTextScroll();
     bool CanShowDeskModeLocked() const;
     void HideDeskModeLocked();
     bool CanCameraAttentionOwnFaceLocked() const;
@@ -267,6 +270,8 @@ private:
     std::unique_ptr<LvglImage> camera_image_cached_;
     std::string typing_text_;
     std::string typing_rendered_text_;
+    std::string live_user_rendered_text_;
+    bool live_user_transcript_active_ = false;
     size_t typing_window_start_ = 0;
     size_t typing_position_ = 0;
     int32_t response_scroll_target_ = 0;

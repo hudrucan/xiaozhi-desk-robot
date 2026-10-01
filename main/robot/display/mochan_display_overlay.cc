@@ -36,6 +36,21 @@ constexpr int64_t kTypingMaxElapsedUs = 100000;
 constexpr int kTypingCreditLimitGlyphs = 6;
 constexpr char kTag[] = "MochanDisplay";
 
+size_t ResponseTailWindowStart(const std::string& text, size_t position, size_t window_start) {
+    if (position - window_start > 1024) {
+        window_start = position - 768;
+        while (window_start < position &&
+               (static_cast<uint8_t>(text[window_start]) & 0xc0) == 0x80) {
+            ++window_start;
+        }
+        const size_t word_end = text.find_first_of(" \n", window_start);
+        if (word_end != std::string::npos && word_end < position) {
+            window_start = word_end + 1;
+        }
+    }
+    return window_start;
+}
+
 std::string ResponseDisplayText(const char* content) {
     std::string text(content);
     constexpr char kBridgeTool[] = "self.web_chat.consume_pending";
@@ -295,23 +310,14 @@ void MochanDisplay::RestoreActivityFace() {
 }
 
 void MochanDisplay::RenderTypingText() {
-    if (subtitle_ == nullptr) {
+    if (subtitle_ == nullptr || live_user_transcript_active_) {
         return;
     }
 
     // Keep the label/layout workload bounded during long answers. Retain the
     // full transcript for cumulative server updates, but only render its tail.
-    if (typing_position_ - typing_window_start_ > 1024) {
-        typing_window_start_ = typing_position_ - 768;
-        while (typing_window_start_ < typing_position_ &&
-               (static_cast<uint8_t>(typing_text_[typing_window_start_]) & 0xc0) == 0x80) {
-            ++typing_window_start_;
-        }
-        const size_t word_end = typing_text_.find_first_of(" \n", typing_window_start_);
-        if (word_end != std::string::npos && word_end < typing_position_) {
-            typing_window_start_ = word_end + 1;
-        }
-    }
+    typing_window_start_ = ResponseTailWindowStart(typing_text_, typing_position_,
+                                                 typing_window_start_);
     std::string rendered = typing_window_start_ == 0 ? "> " : "… ";
     rendered.append(typing_text_, typing_window_start_, typing_position_ - typing_window_start_);
     if (typing_cursor_visible_) {
@@ -322,6 +328,13 @@ void MochanDisplay::RenderTypingText() {
     }
     typing_rendered_text_ = std::move(rendered);
     lv_label_set_text(subtitle_, typing_rendered_text_.c_str());
+    UpdateResponseTextScroll();
+}
+
+void MochanDisplay::UpdateResponseTextScroll() {
+    if (subtitle_ == nullptr || response_box_ == nullptr) {
+        return;
+    }
     lv_obj_update_layout(response_box_);
 
     // LVGL calculates scrolling from the label's unscaled height, while the
@@ -475,7 +488,7 @@ void MochanDisplay::FinishTyping() {
     RenderTypingText();
 }
 
-void MochanDisplay::ResetTyping() {
+void MochanDisplay::ResetTyping(bool reset_scroll) {
     typing_text_.clear();
     typing_rendered_text_.clear();
     typing_window_start_ = 0;
@@ -487,9 +500,11 @@ void MochanDisplay::ResetTyping() {
     typing_cursor_visible_ = false;
     typing_active_ = false;
     typing_finishing_ = false;
-    response_scroll_target_ = 0;
-    if (response_box_ != nullptr) {
-        lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
+    if (reset_scroll) {
+        response_scroll_target_ = 0;
+        if (response_box_ != nullptr) {
+            lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
+        }
     }
 }
 
@@ -667,6 +682,74 @@ bool MochanDisplay::IsSupportedEmotion(const std::string& emotion) {
            kSupportedEmotions.end();
 }
 
+void MochanDisplay::SetLiveUserTranscript(const char* content) {
+    if (subtitle_ == nullptr || response_box_ == nullptr || content == nullptr ||
+        content[0] == '\0') {
+        return;
+    }
+    const std::string incoming(content);
+    const size_t window_start = ResponseTailWindowStart(incoming, incoming.size(), 0);
+    std::string rendered = window_start == 0 ? "" : "… ";
+    rendered.append(incoming, window_start, incoming.size() - window_start);
+    rendered.push_back('|');
+
+    DisplayLockGuard lock(this);
+    if (!lock) {
+        return;
+    }
+    if (live_user_transcript_active_ && rendered == live_user_rendered_text_) {
+        return;
+    }
+    if (!live_user_transcript_active_) {
+        ResetTyping();
+    }
+    // Live text takes ownership of the existing viewport, including a pending
+    // preview overlay. Camera capture/attention policy remains unchanged.
+    if (camera_image_ != nullptr &&
+        (preview_show_pending_ || !lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN))) {
+        esp_timer_stop(preview_timer_);
+        preview_show_pending_ = false;
+        lv_obj_add_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
+        camera_image_cached_.reset();
+    }
+    live_user_transcript_active_ = true;
+    live_user_rendered_text_ = std::move(rendered);
+    CancelCameraAttentionLocked();
+    HideDeskModeLocked();
+    FreezeMouthForExit();
+    CancelAmbientAnimations();
+    lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
+    lv_label_set_text(subtitle_, live_user_rendered_text_.c_str());
+    if (notification_ != nullptr) {
+        lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
+    }
+    ShowResponseBox();
+    lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
+    UpdateResponseTextScroll();
+}
+
+void MochanDisplay::ClearLiveUserTranscript() {
+    DisplayLockGuard lock(this);
+    if (!lock || !live_user_transcript_active_) {
+        return;
+    }
+    live_user_transcript_active_ = false;
+    live_user_rendered_text_.clear();
+    lv_label_set_text(subtitle_, "");
+    lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
+    const bool notification_visible = notification_ != nullptr &&
+                                      !lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN);
+    const bool preview_visible = preview_show_pending_ ||
+                                 (camera_image_ != nullptr &&
+                                  !lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN));
+    if (!notification_visible && !preview_visible) {
+        response_scroll_target_ = 0;
+        lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
+        HideResponseBox();
+    }
+}
+
 void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     if (subtitle_ == nullptr || content == nullptr) {
         return;
@@ -678,6 +761,10 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     }
     content = visible_text.c_str();
     DisplayLockGuard lock(this);
+    const bool commits_live_user = live_user_transcript_active_ && role != nullptr &&
+                                   std::strcmp(role, "user") == 0;
+    live_user_transcript_active_ = false;
+    live_user_rendered_text_.clear();
     if (content[0] != '\0') {
         CancelCameraAttentionLocked();
         HideDeskModeLocked();
@@ -697,12 +784,23 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
         if (is_assistant) {
             StartTyping(content);
         } else {
-            ResetTyping();
-            lv_label_set_text(subtitle_, content);
+            ResetTyping(!commits_live_user);
+            if (commits_live_user) {
+                const size_t window_start =
+                    ResponseTailWindowStart(visible_text, visible_text.size(), 0);
+                std::string rendered = window_start == 0 ? "" : "… ";
+                rendered.append(visible_text, window_start, visible_text.size() - window_start);
+                lv_label_set_text(subtitle_, rendered.c_str());
+            } else {
+                lv_label_set_text(subtitle_, content);
+            }
         }
         lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
         ShowResponseBox();
         lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
+        if (commits_live_user) {
+            UpdateResponseTextScroll();
+        }
     }
 }
 

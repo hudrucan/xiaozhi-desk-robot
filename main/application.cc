@@ -826,8 +826,18 @@ void Application::InitializeProtocol() {
                 }
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
+            auto state = cJSON_GetObjectItem(root, "state");
             auto text = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(text)) {
+            if (cJSON_IsString(state) && strcmp(state->valuestring, "partial") == 0) {
+                if (cJSON_IsString(text)) {
+                    Schedule([display, message = std::string(text->valuestring)]() {
+                        display->SetLiveUserTranscript(message.c_str());
+                    });
+                }
+            } else if (cJSON_IsString(state) && strcmp(state->valuestring, "clear") == 0) {
+                Schedule([display]() { display->ClearLiveUserTranscript(); });
+            } else if (cJSON_IsString(text)) {
+                // Missing/unknown states retain the legacy final transcript path.
                 std::string visible_text =
                     text_chat_controller_.ResolveIncomingTranscript(text->valuestring);
                 std::vector<TextGlyph> glyphs;
