@@ -88,6 +88,7 @@ list(APPEND SOURCES
     "robot/control/robot_settings.cc"
     "robot/display/desk_mode_view.cc"
     "robot/display/desk_mode_montserrat_52.cc"
+    "robot/display/mochan_response_font_16.cc"
     "robot/display/face_geometry.cc"
     "robot/display/mochan_display.cc"
     "robot/display/mochan_face_renderer.cc"

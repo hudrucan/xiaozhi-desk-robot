@@ -5,6 +5,7 @@
 #include "face_geometry.h"
 
 #include <atomic>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -240,7 +241,14 @@ private:
     void FinishTyping();
     void ResetTyping(bool reset_scroll = true);
     void RenderTypingText();
+    void RenderResponseText(const std::string& text, size_t position, size_t window_start,
+                            const char* prefix, size_t dropped_bytes = 0);
+    void UpdateResponseCursor(bool visible, bool update_position = false);
     void UpdateResponseTextScroll();
+    void AdvanceResponseTextScroll(int64_t now_us);
+    void ResetResponseTextScroll();
+    void UpdateLiveUserTranscript(int64_t now_us);
+    void ResetLiveUserTranscript();
     bool CanShowDeskModeLocked() const;
     void HideDeskModeLocked();
     bool CanCameraAttentionOwnFaceLocked() const;
@@ -256,6 +264,7 @@ private:
     lv_obj_t* sleepy_zz_ = nullptr;
     lv_obj_t* response_box_ = nullptr;
     lv_obj_t* subtitle_ = nullptr;
+    lv_obj_t* response_cursor_ = nullptr;
     lv_obj_t* notification_ = nullptr;
     lv_obj_t* camera_image_ = nullptr;
     lv_obj_t* splash_ = nullptr;
@@ -268,13 +277,25 @@ private:
     lv_timer_t* notification_timer_ = nullptr;
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> camera_image_cached_;
+    lv_font_t response_font_{};
+    lv_font_t response_fallback_font_{};
+    // LVGL borrows this storage. It stays at a fixed address until UI teardown.
+    std::array<char, 1032> response_text_buffer_{};
+    size_t response_text_length_ = 0;
+    size_t response_prefix_length_ = 0;
+    uint32_t response_text_codepoints_ = 0;
     std::string typing_text_;
-    std::string typing_rendered_text_;
-    std::string live_user_rendered_text_;
+    std::string live_user_text_;
     bool live_user_transcript_active_ = false;
+    size_t live_user_position_ = 0;
+    size_t live_user_window_start_ = 0;
+    int64_t live_user_last_update_us_ = 0;
+    int64_t live_user_reveal_deadline_us_ = 0;
     size_t typing_window_start_ = 0;
     size_t typing_position_ = 0;
+    size_t typing_pending_glyphs_ = 0;
     int32_t response_scroll_target_ = 0;
+    int64_t response_scroll_last_update_us_ = 0;
     int64_t typing_last_update_us_ = 0;
     uint32_t typing_output_clock_us_ = 0;
     int64_t typing_glyph_credit_ = 0;

@@ -14,6 +14,7 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -22,26 +23,41 @@ const lv_color_t kFaceBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
 const lv_color_t kBrass = LV_COLOR_MAKE(0xc6, 0xa1, 0x5b);
 const lv_color_t kBrassHighlight = LV_COLOR_MAKE(0xe3, 0xc2, 0x7b);
 const lv_color_t kSpinnerTrack = LV_COLOR_MAKE(0x4b, 0x3b, 0x25);
-constexpr int kResponseTextScale = 210;
-// Sentence messages carry no word timestamps: use a conservative playback-
-// paced reveal, with faster catch-up only after the voice has drained.
+// Sentence messages carry no word timestamps. Pace text with played audio,
+// allowing delayed frames to catch up and finishing faster once audio drains.
 constexpr int kTypingGlyphsPerSecond = 28;
-constexpr int kTypingFinishingGlyphsPerSecond = 48;
+constexpr int kTypingFinishingGlyphsPerSecond = 96;
 // Sample text progress on every 30 FPS face frame. Audio commonly advances in
 // larger PCM chunks, so spread accumulated glyph credit across frames instead
 // of revealing several characters in a single 66 ms step.
 constexpr int64_t kTypingUpdateIntervalUs = 33000;
 constexpr int64_t kTypingCreditScale = 1000000;
 constexpr int64_t kTypingMaxElapsedUs = 100000;
-constexpr int kTypingCreditLimitGlyphs = 6;
+constexpr int kLiveMaxPendingGlyphs = 6;
+constexpr int64_t kLiveRevealMaxLagUs = 120000;
+constexpr int64_t kResponseScrollSmoothingUs = 120000;
 constexpr char kTag[] = "MochanDisplay";
 
+bool IsResponseCombiningMark(const std::string& text, size_t position) {
+    if (position + 1 >= text.size()) {
+        return false;
+    }
+    const auto first = static_cast<uint8_t>(text[position]);
+    const auto second = static_cast<uint8_t>(text[position + 1]);
+    return second >= 0x80 &&
+           ((first == 0xcc && second <= 0xbf) || (first == 0xcd && second <= 0xaf));
+}
+
 size_t ResponseTailWindowStart(const std::string& text, size_t position, size_t window_start) {
+    window_start = std::min(window_start, position);
     if (position - window_start > 1024) {
         window_start = position - 768;
         while (window_start < position &&
                (static_cast<uint8_t>(text[window_start]) & 0xc0) == 0x80) {
             ++window_start;
+        }
+        while (window_start < position && IsResponseCombiningMark(text, window_start)) {
+            window_start += 2;
         }
         const size_t word_end = text.find_first_of(" \n", window_start);
         if (word_end != std::string::npos && word_end < position) {
@@ -49,6 +65,31 @@ size_t ResponseTailWindowStart(const std::string& text, size_t position, size_t 
         }
     }
     return window_start;
+}
+
+size_t NextResponseGlyph(const std::string& text, size_t position) {
+    if (position >= text.size()) {
+        return text.size();
+    }
+    do {
+        ++position;
+        while (position < text.size() &&
+               (static_cast<uint8_t>(text[position]) & 0xc0) == 0x80) {
+            ++position;
+        }
+        // Keep Vietnamese decomposed accents with their base character.
+    } while (IsResponseCombiningMark(text, position));
+    return position;
+}
+
+uint32_t CountResponseCodepoints(const char* text, size_t length) {
+    uint32_t count = 0;
+    for (size_t i = 0; i < length; ++i) {
+        if ((static_cast<uint8_t>(text[i]) & 0xc0) != 0x80) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 std::string ResponseDisplayText(const char* content) {
@@ -106,14 +147,6 @@ constexpr std::array<const char*, 34> kSupportedEmotions = {
     "suspicious", "shake",       "speaking",  "listening", "left",       "right",   "up",
     "down",       "up_left",     "up_right",  "down_left", "down_right", "bored",
 };
-
-bool EndsWithSentencePunctuation(const std::string& text) {
-    if (text.empty()) {
-        return false;
-    }
-    const char last = text.back();
-    return last == '.' || last == '!' || last == '?' || last == ':' || last == ';';
-}
 
 }  // namespace
 
@@ -310,25 +343,81 @@ void MochanDisplay::RestoreActivityFace() {
 }
 
 void MochanDisplay::RenderTypingText() {
-    if (subtitle_ == nullptr || live_user_transcript_active_) {
+    if (subtitle_ == nullptr || typing_text_.empty() || live_user_transcript_active_) {
         return;
     }
 
     // Keep the label/layout workload bounded during long answers. Retain the
     // full transcript for cumulative server updates, but only render its tail.
-    typing_window_start_ = ResponseTailWindowStart(typing_text_, typing_position_,
-                                                 typing_window_start_);
-    std::string rendered = typing_window_start_ == 0 ? "> " : "… ";
-    rendered.append(typing_text_, typing_window_start_, typing_position_ - typing_window_start_);
-    if (typing_cursor_visible_) {
-        rendered.push_back('|');
+    const size_t previous_start = typing_window_start_;
+    typing_window_start_ = ResponseTailWindowStart(typing_text_, typing_position_, previous_start);
+    RenderResponseText(typing_text_, typing_position_, typing_window_start_,
+                       typing_window_start_ == 0 ? "> " : "… ",
+                       typing_window_start_ - previous_start);
+    UpdateResponseCursor(typing_cursor_visible_);
+}
+
+void MochanDisplay::RenderResponseText(const std::string& text, size_t position,
+                                      size_t window_start, const char* prefix,
+                                      size_t dropped_bytes) {
+    const size_t prefix_length = std::strlen(prefix);
+    const size_t text_length = position - window_start;
+    const size_t length = prefix_length + text_length;
+    if (length >= response_text_buffer_.size()) {
+        return;  // Callers retain a UTF-8-safe tail of at most 1024 bytes.
     }
-    if (rendered == typing_rendered_text_) {
+    if (length == response_text_length_ &&
+        std::memcmp(response_text_buffer_.data(), prefix, prefix_length) == 0 &&
+        std::memcmp(response_text_buffer_.data() + prefix_length,
+                    text.data() + window_start, text_length) == 0) {
         return;
     }
-    typing_rendered_text_ = std::move(rendered);
-    lv_label_set_text(subtitle_, typing_rendered_text_.c_str());
+
+    // When dropping an off-screen prefix, retain the first surviving line's
+    // screen position instead of animating backward over removed content.
+    int32_t anchor_y = 0;
+    const int32_t old_scroll = lv_obj_get_scroll_y(response_box_);
+    if (dropped_bytes != 0 && response_text_length_ != 0) {
+        const size_t anchor_byte =
+            std::min(response_text_length_, response_prefix_length_ + dropped_bytes);
+        lv_point_t anchor{};
+        lv_label_get_letter_pos(subtitle_,
+            CountResponseCodepoints(response_text_buffer_.data(), anchor_byte), &anchor);
+        anchor_y = anchor.y;
+    }
+
+    std::memcpy(response_text_buffer_.data(), prefix, prefix_length);
+    std::memcpy(response_text_buffer_.data() + prefix_length,
+                text.data() + window_start, text_length);
+    response_text_buffer_[length] = '\0';
+    response_text_length_ = length;
+    response_prefix_length_ = prefix_length;
+    response_text_codepoints_ = CountResponseCodepoints(response_text_buffer_.data(), length);
+    lv_label_set_text_static(subtitle_, response_text_buffer_.data());
     UpdateResponseTextScroll();
+    if (anchor_y != 0) {
+        lv_obj_scroll_to_y(response_box_, std::max<int32_t>(0, old_scroll - anchor_y), LV_ANIM_OFF);
+    }
+    UpdateResponseCursor(false, true);
+}
+
+void MochanDisplay::UpdateResponseCursor(bool visible, bool update_position) {
+    if (response_cursor_ == nullptr || subtitle_ == nullptr) {
+        return;
+    }
+    if (update_position) {
+        lv_point_t position{};
+        lv_label_get_letter_pos(subtitle_, response_text_codepoints_, &position);
+        const int32_t max_x = std::max<int32_t>(0, lv_obj_get_content_width(subtitle_) - 2);
+        lv_obj_set_pos(response_cursor_, std::min(position.x, max_x), position.y + 2);
+        lv_obj_set_height(response_cursor_,
+                          std::max<int32_t>(1, response_font_.line_height - response_font_.base_line - 2));
+    }
+    if (visible) {
+        lv_obj_remove_flag(response_cursor_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(response_cursor_, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void MochanDisplay::UpdateResponseTextScroll() {
@@ -337,22 +426,40 @@ void MochanDisplay::UpdateResponseTextScroll() {
     }
     lv_obj_update_layout(response_box_);
 
-    // LVGL calculates scrolling from the label's unscaled height, while the
-    // response font is rendered smaller with a transform. Scrolling to the
-    // normal bottom therefore lifts the final visible line toward the middle
-    // of the panel. Use the transformed visual height so the last line rests
-    // on the bottom edge of the response viewport.
+    // Native font geometry agrees with LVGL layout; cursor is a floating child
+    // of the label and never changes wrapping or the scrollable content size.
     const int32_t label_height = lv_obj_get_height(subtitle_);
-    const int32_t visual_height =
-        (label_height * kResponseTextScale + LV_SCALE_NONE - 1) / LV_SCALE_NONE;
     const int32_t viewport_height = lv_obj_get_content_height(response_box_);
-    const int32_t scroll_target = std::max<int32_t>(0, visual_height - viewport_height);
-    if (scroll_target != response_scroll_target_) {
-        const bool moves_forward = scroll_target > response_scroll_target_;
-        response_scroll_target_ = scroll_target;
-        // A new wrapped line should glide into view. Backward/reset movement
-        // remains immediate so stale content never flashes during a new turn.
-        lv_obj_scroll_to_y(response_box_, scroll_target, moves_forward ? LV_ANIM_ON : LV_ANIM_OFF);
+    response_scroll_target_ = std::max<int32_t>(0, label_height - viewport_height);
+}
+
+void MochanDisplay::AdvanceResponseTextScroll(int64_t now_us) {
+    const int64_t elapsed_us = response_scroll_last_update_us_ == 0 ? kTypingUpdateIntervalUs :
+        std::clamp(now_us - response_scroll_last_update_us_, int64_t{0}, kTypingMaxElapsedUs);
+    response_scroll_last_update_us_ = now_us;
+    if (response_box_ == nullptr || subtitle_ == nullptr ||
+        lv_obj_has_flag(subtitle_, LV_OBJ_FLAG_HIDDEN) || !response_box_requested_) {
+        return;
+    }
+    const int32_t current = lv_obj_get_scroll_y(response_box_);
+    const int32_t delta = response_scroll_target_ - current;
+    if (delta == 0 || elapsed_us == 0) {
+        return;
+    }
+    const int32_t distance = std::abs(delta);
+    const int32_t step = std::min<int32_t>(distance,
+        std::max<int32_t>(1, (distance * elapsed_us + kResponseScrollSmoothingUs - 1) /
+                              kResponseScrollSmoothingUs));
+    // Retarget the same motion each frame, in either direction, without
+    // restarting LVGL animations whenever a new glyph changes the line count.
+    lv_obj_scroll_to_y(response_box_, current + (delta > 0 ? step : -step), LV_ANIM_OFF);
+}
+
+void MochanDisplay::ResetResponseTextScroll() {
+    response_scroll_target_ = 0;
+    response_scroll_last_update_us_ = 0;
+    if (response_box_ != nullptr) {
+        lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
     }
 }
 
@@ -365,6 +472,10 @@ void MochanDisplay::StartTyping(const char* content) {
     const bool was_typing = typing_active_;
 
     if (typing_text_.empty()) {
+        // A new assistant response starts a new viewport. Do not interpolate
+        // backward through the preceding user's transcript or preview scroll.
+        ResetResponseTextScroll();
+        RenderResponseText("", 0, 0, "");
         typing_text_ = incoming;
         typing_position_ = 0;
     } else if (incoming == typing_text_) {
@@ -381,11 +492,18 @@ void MochanDisplay::StartTyping(const char* content) {
         // text that is still being typed and continue from the same cursor.
         if (!std::isspace(static_cast<unsigned char>(typing_text_.back())) &&
             !std::isspace(static_cast<unsigned char>(incoming.front()))) {
-            typing_text_ += EndsWithSentencePunctuation(typing_text_) ? " " : ". ";
+            // Preserve server punctuation, including comma/soft boundaries.
+            // The Web transcript also joins segments with a space only.
+            typing_text_ += " ";
         }
         typing_text_ += incoming;
     }
 
+    typing_pending_glyphs_ = 0;
+    for (size_t position = typing_position_; position < typing_text_.size();
+         position = NextResponseGlyph(typing_text_, position)) {
+        ++typing_pending_glyphs_;
+    }
     typing_cursor_phase_ = 0;
     typing_cursor_visible_ = true;
     typing_active_ = true;
@@ -424,30 +542,27 @@ void MochanDisplay::UpdateTyping(int64_t now_us) {
     const bool finishing_after_audio = typing_finishing_ && audio.IsPlaybackIdle();
     const int64_t progress_us = finishing_after_audio ? elapsed_us : played_us;
     const int rate = finishing_after_audio ? kTypingFinishingGlyphsPerSecond : kTypingGlyphsPerSecond;
-    // Normal playback reveals at most one glyph per display frame. Preserve a
-    // small credit backlog so coarse audio-buffer updates catch up smoothly on
-    // subsequent frames rather than appearing as a visible burst.
-    const int max_glyphs_per_frame = finishing_after_audio ? 6 : 3;
+    // At 30 FPS allow up to two glyphs only when played audio earned them.
+    // Increase the frame budget when delayed; never discard earned audio progress
+    // because the face renderer was busy. Credit cannot exceed pending text.
+    const int max_glyphs_per_frame = static_cast<int>(std::clamp<int64_t>(
+        (elapsed_us * rate + kTypingCreditScale - 1) / kTypingCreditScale,
+        2, finishing_after_audio ? 6 : 4));
     typing_glyph_credit_ = std::min<int64_t>(
         typing_glyph_credit_ + progress_us * rate,
-        kTypingCreditLimitGlyphs * kTypingCreditScale);
-    int glyphs_to_reveal = static_cast<int>(typing_glyph_credit_ / kTypingCreditScale);
-    glyphs_to_reveal = std::min(glyphs_to_reveal, max_glyphs_per_frame);
+        static_cast<int64_t>(typing_pending_glyphs_) * kTypingCreditScale);
+    const int glyphs_to_reveal = static_cast<int>(std::min<int64_t>(
+        typing_glyph_credit_ / kTypingCreditScale, max_glyphs_per_frame));
     typing_glyph_credit_ -= static_cast<int64_t>(glyphs_to_reveal) * kTypingCreditScale;
 
     bool visual_changed = false;
     if (typing_position_ < typing_text_.size()) {
-        // Advance one complete UTF-8 code point so Vietnamese glyphs never
-        // appear as temporarily corrupted byte sequences. A longer sentence
-        // must not accelerate the reveal ahead of audio playback.
+        // Reveal complete UTF-8 glyphs, including their combining accents.
         for (int glyph = 0;
              glyph < glyphs_to_reveal && typing_position_ < typing_text_.size();
              ++glyph) {
-            ++typing_position_;
-            while (typing_position_ < typing_text_.size() &&
-                   (static_cast<uint8_t>(typing_text_[typing_position_]) & 0xc0) == 0x80) {
-                ++typing_position_;
-            }
+            typing_position_ = NextResponseGlyph(typing_text_, typing_position_);
+            --typing_pending_glyphs_;
             visual_changed = true;
         }
     }
@@ -478,8 +593,6 @@ void MochanDisplay::FinishTyping() {
         typing_active_ = true;
         typing_cursor_visible_ = true;
         typing_last_update_us_ = esp_timer_get_time();
-        typing_output_clock_us_ = Application::GetInstance().GetAudioService().GetOutputClockUs();
-        typing_glyph_credit_ = 0;
     } else {
         typing_finishing_ = false;
         typing_cursor_visible_ = false;
@@ -490,9 +603,9 @@ void MochanDisplay::FinishTyping() {
 
 void MochanDisplay::ResetTyping(bool reset_scroll) {
     typing_text_.clear();
-    typing_rendered_text_.clear();
     typing_window_start_ = 0;
     typing_position_ = 0;
+    typing_pending_glyphs_ = 0;
     typing_last_update_us_ = 0;
     typing_output_clock_us_ = 0;
     typing_glyph_credit_ = 0;
@@ -500,11 +613,9 @@ void MochanDisplay::ResetTyping(bool reset_scroll) {
     typing_cursor_visible_ = false;
     typing_active_ = false;
     typing_finishing_ = false;
+    UpdateResponseCursor(false);
     if (reset_scroll) {
-        response_scroll_target_ = 0;
-        if (response_box_ != nullptr) {
-            lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
-        }
+        ResetResponseTextScroll();
     }
 }
 
@@ -534,7 +645,12 @@ void MochanDisplay::SetTheme(Theme* theme) {
         lv_obj_set_style_text_font(container_, text_font, 0);
     }
     if (subtitle_ != nullptr) {
-        lv_obj_set_style_text_font(subtitle_, text_font, 0);
+        // Keep response text at native 16px. Preserve asset/dynamic fallback
+        // for characters outside its Latin/Vietnamese and basic 16px coverage.
+        response_fallback_font_.fallback = text_font;
+        lv_obj_set_style_text_font(subtitle_, &response_font_, 0);
+        UpdateResponseTextScroll();
+        UpdateResponseCursor(live_user_transcript_active_ || typing_cursor_visible_, true);
     }
     if (notification_ != nullptr) {
         lv_obj_set_style_text_font(notification_, text_font, 0);
@@ -687,21 +803,24 @@ void MochanDisplay::SetLiveUserTranscript(const char* content) {
         content[0] == '\0') {
         return;
     }
-    const std::string incoming(content);
-    const size_t window_start = ResponseTailWindowStart(incoming, incoming.size(), 0);
-    std::string rendered = window_start == 0 ? "" : "… ";
-    rendered.append(incoming, window_start, incoming.size() - window_start);
-    rendered.push_back('|');
+    std::string incoming(content);
 
     DisplayLockGuard lock(this);
     if (!lock) {
         return;
     }
-    if (live_user_transcript_active_ && rendered == live_user_rendered_text_) {
+    if (live_user_transcript_active_ && incoming == live_user_text_) {
         return;
     }
-    if (!live_user_transcript_active_) {
+    const bool first_partial = !live_user_transcript_active_;
+    const bool pending_before_update = live_user_position_ < live_user_text_.size();
+    const bool correction = !first_partial &&
+        (incoming.size() < live_user_text_.size() ||
+         incoming.compare(0, live_user_text_.size(), live_user_text_) != 0);
+    if (first_partial) {
         ResetTyping();
+        ResetLiveUserTranscript();
+        RenderResponseText("", 0, 0, "");
     }
     // Live text takes ownership of the existing viewport, including a pending
     // preview overlay. Camera capture/attention policy remains unchanged.
@@ -713,20 +832,80 @@ void MochanDisplay::SetLiveUserTranscript(const char* content) {
         camera_image_cached_.reset();
     }
     live_user_transcript_active_ = true;
-    live_user_rendered_text_ = std::move(rendered);
+    live_user_text_ = std::move(incoming);
+    const int64_t now_us = esp_timer_get_time();
+    if (correction) {
+        // Hypotheses can revise earlier words. Replace those immediately;
+        // never append a correction to an obsolete version or animate it twice.
+        live_user_position_ = live_user_text_.size();
+        live_user_window_start_ = 0;
+        live_user_reveal_deadline_us_ = 0;
+    } else {
+        size_t pending = 0;
+        for (size_t pos = live_user_position_; pos < live_user_text_.size();
+             pos = NextResponseGlyph(live_user_text_, pos)) {
+            ++pending;
+        }
+        // Animate only a short suffix: a model chunk may deliver a whole word
+        // at once, but the UI must never build a growing transcript backlog.
+        while (pending > kLiveMaxPendingGlyphs) {
+            live_user_position_ = NextResponseGlyph(live_user_text_, live_user_position_);
+            --pending;
+        }
+        const int64_t deadline = now_us + kLiveRevealMaxLagUs;
+        live_user_reveal_deadline_us_ = pending_before_update && !first_partial
+            ? std::min(live_user_reveal_deadline_us_, deadline) : deadline;
+    }
     CancelCameraAttentionLocked();
     HideDeskModeLocked();
     FreezeMouthForExit();
     CancelAmbientAnimations();
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
-    lv_label_set_text(subtitle_, live_user_rendered_text_.c_str());
     if (notification_ != nullptr) {
         lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
     }
     ShowResponseBox();
     lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
-    UpdateResponseTextScroll();
+    if (correction) {
+        live_user_window_start_ = ResponseTailWindowStart(live_user_text_, live_user_position_, 0);
+        RenderResponseText(live_user_text_, live_user_position_, live_user_window_start_,
+                           live_user_window_start_ == 0 ? "" : "… ");
+        UpdateResponseCursor(true);
+    }
+}
+
+void MochanDisplay::UpdateLiveUserTranscript(int64_t now_us) {
+    if (now_us - live_user_last_update_us_ < kTypingUpdateIntervalUs) {
+        return;
+    }
+    if (esp_timer_get_time() - now_us > 18000 &&
+        now_us - live_user_last_update_us_ < kTypingMaxElapsedUs &&
+        now_us < live_user_reveal_deadline_us_) {
+        return;
+    }
+    live_user_last_update_us_ = now_us;
+    if (now_us >= live_user_reveal_deadline_us_) {
+        live_user_position_ = live_user_text_.size();
+    } else {
+        for (int glyph = 0; glyph < 2 && live_user_position_ < live_user_text_.size(); ++glyph) {
+            live_user_position_ = NextResponseGlyph(live_user_text_, live_user_position_);
+        }
+    }
+    const size_t previous_start = live_user_window_start_;
+    live_user_window_start_ = ResponseTailWindowStart(live_user_text_, live_user_position_, previous_start);
+    RenderResponseText(live_user_text_, live_user_position_, live_user_window_start_,
+                       live_user_window_start_ == 0 ? "" : "… ",
+                       live_user_window_start_ - previous_start);
+    UpdateResponseCursor((now_us / 500000) % 2 == 0);
+}
+
+void MochanDisplay::ResetLiveUserTranscript() {
+    live_user_transcript_active_ = false;
+    live_user_text_.clear();
+    live_user_position_ = 0;
+    live_user_window_start_ = 0;
+    live_user_last_update_us_ = 0;
+    live_user_reveal_deadline_us_ = 0;
 }
 
 void MochanDisplay::ClearLiveUserTranscript() {
@@ -734,9 +913,9 @@ void MochanDisplay::ClearLiveUserTranscript() {
     if (!lock || !live_user_transcript_active_) {
         return;
     }
-    live_user_transcript_active_ = false;
-    live_user_rendered_text_.clear();
-    lv_label_set_text(subtitle_, "");
+    ResetLiveUserTranscript();
+    RenderResponseText("", 0, 0, "");
+    UpdateResponseCursor(false);
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     const bool notification_visible = notification_ != nullptr &&
                                       !lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN);
@@ -744,8 +923,7 @@ void MochanDisplay::ClearLiveUserTranscript() {
                                  (camera_image_ != nullptr &&
                                   !lv_obj_has_flag(camera_image_, LV_OBJ_FLAG_HIDDEN));
     if (!notification_visible && !preview_visible) {
-        response_scroll_target_ = 0;
-        lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
+        ResetResponseTextScroll();
         HideResponseBox();
     }
 }
@@ -761,10 +939,15 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     }
     content = visible_text.c_str();
     DisplayLockGuard lock(this);
+    if (!lock) {
+        return;
+    }
     const bool commits_live_user = live_user_transcript_active_ && role != nullptr &&
                                    std::strcmp(role, "user") == 0;
-    live_user_transcript_active_ = false;
-    live_user_rendered_text_.clear();
+    const size_t previous_live_window = live_user_window_start_;
+    const bool extends_live_text = commits_live_user && visible_text.size() >= live_user_text_.size() &&
+                                  visible_text.compare(0, live_user_text_.size(), live_user_text_) == 0;
+    ResetLiveUserTranscript();
     if (content[0] != '\0') {
         CancelCameraAttentionLocked();
         HideDeskModeLocked();
@@ -772,10 +955,9 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
     }
     CancelAmbientAnimations();
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
     if (content[0] == '\0') {
         ResetTyping();
-        lv_label_set_text(subtitle_, "");
+        RenderResponseText("", 0, 0, "");
         lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
         if (lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) {
             HideResponseBox();
@@ -785,20 +967,19 @@ void MochanDisplay::SetChatMessage(const char* role, const char* content) {
             StartTyping(content);
         } else {
             ResetTyping(!commits_live_user);
-            if (commits_live_user) {
-                const size_t window_start =
-                    ResponseTailWindowStart(visible_text, visible_text.size(), 0);
-                std::string rendered = window_start == 0 ? "" : "… ";
-                rendered.append(visible_text, window_start, visible_text.size() - window_start);
-                lv_label_set_text(subtitle_, rendered.c_str());
-            } else {
-                lv_label_set_text(subtitle_, content);
-            }
+            const size_t window_start = ResponseTailWindowStart(visible_text, visible_text.size(), 0);
+            const size_t dropped_bytes = extends_live_text && window_start > previous_live_window
+                ? window_start - previous_live_window : 0;
+            // Final is authoritative: cancel pending partial reveal and replace
+            // immediately, keeping scroll continuity for the accepted turn.
+            RenderResponseText(visible_text, visible_text.size(), window_start,
+                               window_start == 0 ? "" : "… ", dropped_bytes);
+            UpdateResponseCursor(false);
         }
         lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
         ShowResponseBox();
         lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
-        if (commits_live_user) {
+        if (!is_assistant) {
             UpdateResponseTextScroll();
         }
     }
@@ -822,10 +1003,12 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
         preview_show_pending_ = false;
         lv_obj_add_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
         camera_image_cached_.reset();
-        if (lv_label_get_text(subtitle_)[0] != '\0') {
+        if (lv_label_get_text(subtitle_)[0] != '\0' ||
+            live_user_transcript_active_ || typing_active_) {
             RenderTypingText();
             ShowResponseBox();
             lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
+            UpdateResponseTextScroll();
         } else if (lv_obj_has_flag(notification_, LV_OBJ_FLAG_HIDDEN)) {
             HideResponseBox();
         }
@@ -846,8 +1029,7 @@ void MochanDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     }
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
-    response_scroll_target_ = 0;
-    lv_obj_scroll_to_y(response_box_, 0, LV_ANIM_OFF);
+    ResetResponseTextScroll();
     ShowResponseBox();
     if (response_box_progress_ < 256) {
         lv_obj_add_flag(camera_image_, LV_OBJ_FLAG_HIDDEN);
@@ -863,11 +1045,13 @@ void MochanDisplay::HideNotification() {
         lv_obj_add_flag(notification_, LV_OBJ_FLAG_HIDDEN);
     }
     if (response_box_ != nullptr && subtitle_ != nullptr &&
-        lv_label_get_text(subtitle_)[0] == '\0') {
+        lv_label_get_text(subtitle_)[0] == '\0' &&
+        !live_user_transcript_active_ && !typing_active_) {
         lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
         HideResponseBox();
     } else if (subtitle_ != nullptr) {
         lv_obj_remove_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
+        UpdateResponseTextScroll();
     }
     notification_timer_ = nullptr;
 }

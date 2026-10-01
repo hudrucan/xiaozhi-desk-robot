@@ -15,6 +15,9 @@
 #include <cstdlib>
 #include <ctime>
 
+LV_FONT_DECLARE(font_noto_sans_basic_16_4);
+extern const lv_font_t mochan_response_font_16;
+
 namespace {
 const lv_color_t kFaceBackground = LV_COLOR_MAKE(0x00, 0x00, 0x00);
 const lv_color_t kBrass = LV_COLOR_MAKE(0xc6, 0xa1, 0x5b);
@@ -22,7 +25,7 @@ const lv_color_t kBrassHighlight = LV_COLOR_MAKE(0xe3, 0xc2, 0x7b);
 const lv_color_t kEyelidShadow = LV_COLOR_MAKE(0x72, 0x55, 0x2b);
 const lv_color_t kSpinnerTrack = LV_COLOR_MAKE(0x4b, 0x3b, 0x25);
 constexpr int kPreviewDurationMs = 5000;
-constexpr int kResponseTextScale = 210;
+constexpr int kNotificationTextScale = 210;
 // Keep full-face animation curves together for hardware iteration. AmbientBehavior owns cadence.
 constexpr int kFaceAnimationPeriodMs = 33;
 constexpr int kFaceLayoutTransitionMs = 450;
@@ -105,6 +108,15 @@ MochanDisplay::~MochanDisplay() {
     }
     if (notification_timer_ != nullptr) {
         lv_timer_delete(notification_timer_);
+    }
+    // Delete labels before the borrowed text buffer and per-display font copies
+    // are destroyed. The face timer has already been removed above.
+    {
+        DisplayLockGuard lock(this);
+        if (lock && response_box_ != nullptr) {
+            lv_obj_delete(response_box_);
+            response_box_ = subtitle_ = response_cursor_ = notification_ = camera_image_ = nullptr;
+        }
     }
     for (auto* raster : {&left_raster_, &right_raster_}) {
         if (raster->pixels != nullptr) {
@@ -384,26 +396,42 @@ void MochanDisplay::SetupUI() {
     lv_obj_add_flag(response_box_, LV_OBJ_FLAG_HIDDEN);
 
     subtitle_ = lv_label_create(response_box_);
-    // Transforms do not participate in LVGL layout. Compensate the logical
-    // width so the visually scaled label still fills the response viewport.
-    const int response_text_width =
-        ((width_ - 38) * LV_SCALE_NONE + kResponseTextScale - 1) / kResponseTextScale;
-    lv_obj_set_width(subtitle_, response_text_width);
+    response_font_ = mochan_response_font_16;
+    response_fallback_font_ = font_noto_sans_basic_16_4;
+    response_font_.fallback = &response_fallback_font_;
+    auto* response_theme = static_cast<LvglTheme*>(current_theme_);
+    if (response_theme != nullptr && response_theme->text_font() != nullptr) {
+        response_fallback_font_.fallback = response_theme->text_font()->font();
+    }
+    // Native glyph size avoids a transform layer and makes layout/scroll use
+    // the same pixel geometry as the rendered text. Reserve space for a caret.
+    lv_obj_set_width(subtitle_, width_ - 44);
     lv_obj_set_height(subtitle_, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_font(subtitle_, &response_font_, 0);
     lv_obj_set_style_text_color(subtitle_, kBrassHighlight, 0);
     lv_obj_set_style_text_align(subtitle_, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_transform_scale(subtitle_, kResponseTextScale, 0);
-    lv_obj_set_style_transform_pivot_x(subtitle_, 0, 0);
-    lv_obj_set_style_transform_pivot_y(subtitle_, 0, 0);
     lv_label_set_long_mode(subtitle_, LV_LABEL_LONG_WRAP);
+    lv_label_set_text_static(subtitle_, response_text_buffer_.data());
     lv_obj_align(subtitle_, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_add_flag(subtitle_, LV_OBJ_FLAG_HIDDEN);
 
+    response_cursor_ = lv_obj_create(subtitle_);
+    lv_obj_remove_style_all(response_cursor_);
+    lv_obj_set_size(response_cursor_, 2, 14);
+    lv_obj_set_style_bg_color(response_cursor_, kBrassHighlight, 0);
+    lv_obj_set_style_bg_opa(response_cursor_, LV_OPA_COVER, 0);
+    lv_obj_add_flag(response_cursor_, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(response_cursor_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(response_cursor_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(response_cursor_, LV_OBJ_FLAG_CLICKABLE);
+
     notification_ = lv_label_create(response_box_);
-    lv_obj_set_width(notification_, response_text_width);
+    const int notification_text_width =
+        ((width_ - 38) * LV_SCALE_NONE + kNotificationTextScale - 1) / kNotificationTextScale;
+    lv_obj_set_width(notification_, notification_text_width);
     lv_obj_set_style_text_color(notification_, kBrassHighlight, 0);
     lv_obj_set_style_text_align(notification_, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_style_transform_scale(notification_, 210, 0);
+    lv_obj_set_style_transform_scale(notification_, kNotificationTextScale, 0);
     lv_obj_set_style_transform_pivot_x(notification_, 0, 0);
     lv_obj_set_style_transform_pivot_y(notification_, 0, 0);
     lv_label_set_long_mode(notification_, LV_LABEL_LONG_WRAP);
@@ -1131,11 +1159,16 @@ void MochanDisplay::AdvanceEyeAnimation() {
     max_face_work_us_ = std::max(max_face_work_us_, esp_timer_get_time() - face_work_started_us);
     // Keep typewriter work on the face frame clock. Time-based glyph credit
     // preserves a steady reveal when an occasional display frame arrives late.
-    if (typing_active_) {
+    if (typing_active_ || live_user_transcript_active_) {
         const int64_t text_work_started_us = esp_timer_get_time();
-        UpdateTyping(callback_started_us);
+        if (live_user_transcript_active_) {
+            UpdateLiveUserTranscript(callback_started_us);
+        } else {
+            UpdateTyping(callback_started_us);
+        }
         max_text_work_us_ = std::max(max_text_work_us_, esp_timer_get_time() - text_work_started_us);
     }
+    AdvanceResponseTextScroll(callback_started_us);
     RecordAnimationTiming(callback_started_us, frame_interval_us);
 }
 
