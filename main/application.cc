@@ -853,6 +853,22 @@ void Application::InitializeProtocol() {
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
+            auto llm_state = cJSON_GetObjectItem(root, "state");
+            auto llm_text = cJSON_GetObjectItem(root, "text");
+            if (cJSON_IsString(llm_state) && strcmp(llm_state->valuestring, "final") == 0 &&
+                cJSON_IsString(llm_text) && strlen(llm_text->valuestring) <= 65536) {
+                Schedule([this, display, message = std::string(llm_text->valuestring)]() {
+                    text_chat_controller_.OnAssistantText(message);
+                    display->SetChatMessage("assistant", message.c_str());
+                });
+            } else if (cJSON_IsString(llm_state) && strcmp(llm_state->valuestring, "complete") == 0 &&
+                       cJSON_IsTrue(cJSON_GetObjectItem(root, "text_only"))) {
+                Schedule([this]() {
+                    if (GetDeviceState() == kDeviceStateListening) {
+                        SetDeviceState(kDeviceStateIdle);
+                    }
+                });
+            }
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
                 Schedule([emotion_str = std::string(emotion->valuestring)]() {
