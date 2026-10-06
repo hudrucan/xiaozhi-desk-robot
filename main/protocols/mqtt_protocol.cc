@@ -39,15 +39,18 @@ MqttProtocol::MqttProtocol() {
             [](void* arg) {
                 MqttProtocol* protocol = (MqttProtocol*)arg;
                 auto& app = Application::GetInstance();
-                if (app.GetDeviceState() == kDeviceStateIdle) {
+                auto alive = protocol->alive_;
+                app.Schedule([protocol, alive]() {
+                    if (!*alive || (protocol->mqtt_ != nullptr && protocol->mqtt_->IsConnected())) {
+                        return;
+                    }
+                    if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+                        esp_timer_start_once(protocol->reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
+                        return;
+                    }
                     ESP_LOGI(TAG, "Reconnecting to MQTT server");
-                    auto alive = protocol->alive_;  // Capture alive flag
-                    app.Schedule([protocol, alive]() {
-                        if (*alive) {
-                            protocol->StartMqttClient(false);
-                        }
-                    });
-                }
+                    protocol->StartMqttClient(false);
+                });
             },
         .arg = this,
     };
@@ -115,15 +118,42 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
     mqtt_->SetKeepAlive(keepalive_interval);
 
     mqtt_->OnDisconnected([this]() {
+        xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_DISCONNECTED_EVENT);
         if (on_disconnected_ != nullptr) {
             on_disconnected_();
         }
+        // A reconnect cannot restore the old gateway's UDP session. Close it
+        // on the application task, without affecting a newer channel.
+        std::weak_ptr<Udp> disconnected_channel;
+        {
+            std::lock_guard<std::mutex> lock(channel_mutex_);
+            disconnected_channel = udp_;
+        }
+        if (!disconnected_channel.expired()) {
+            auto alive = alive_;
+            Application::GetInstance().Schedule([this, alive, disconnected_channel]() {
+                if (!*alive) {
+                    return;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(channel_mutex_);
+                    auto channel = disconnected_channel.lock();
+                    if (channel == nullptr || channel != udp_) {
+                        return;
+                    }
+                }
+                CloseAudioChannel(false);
+            });
+        }
         ESP_LOGI(TAG, "MQTT disconnected, schedule reconnect in %d seconds",
                  MQTT_RECONNECT_INTERVAL_MS / 1000);
+        esp_timer_stop(reconnect_timer_);
         esp_timer_start_once(reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
     });
 
     mqtt_->OnConnected([this]() {
+        // Keep disconnect latched until the next hello attempt. The SDK may
+        // reconnect before the previous hello waiter has consumed the event.
         if (on_connected_ != nullptr) {
             on_connected_();
         }
@@ -199,6 +229,9 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
         ESP_LOGE(TAG, "Failed to connect to endpoint: %s", connected.error().ToString().c_str());
         SetError(Lang::Strings::SERVER_NOT_CONNECTED,
                  broker_address + ":" + std::to_string(broker_port));
+        // A failed initial/recovery CONNECT must keep retrying through VIP election.
+        esp_timer_stop(reconnect_timer_);
+        esp_timer_start_once(reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
         return false;
     }
 
@@ -315,16 +348,27 @@ bool MqttProtocol::OpenAudioChannel() {
 
     error_occurred_ = false;
     session_id_ = "";
-    xEventGroupClearBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
+    xEventGroupClearBits(event_group_handle_,
+                         MQTT_PROTOCOL_SERVER_HELLO_EVENT | MQTT_PROTOCOL_DISCONNECTED_EVENT);
+    if (!mqtt_->IsConnected()) {
+        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        return false;
+    }
 
     auto message = GetHelloMessage();
     if (!SendText(message)) {
         return false;
     }
 
-    // 等待服务器响应
-    EventBits_t bits = xEventGroupWaitBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT,
-                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
+    // A lost MQTT socket cannot deliver hello; do not wait for the full timeout.
+    EventBits_t bits = xEventGroupWaitBits(
+        event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT | MQTT_PROTOCOL_DISCONNECTED_EVENT,
+        pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
+    if ((bits & MQTT_PROTOCOL_DISCONNECTED_EVENT) || !mqtt_->IsConnected()) {
+        ESP_LOGW(TAG, "MQTT disconnected while waiting for server hello");
+        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        return false;
+    }
     if (!(bits & MQTT_PROTOCOL_SERVER_HELLO_EVENT)) {
         ESP_LOGE(TAG, "Failed to receive server hello");
         SetError(Lang::Strings::SERVER_TIMEOUT);
