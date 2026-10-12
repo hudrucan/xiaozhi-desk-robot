@@ -15,6 +15,11 @@
 
 #define TAG "Esp32Camera"
 
+namespace {
+// Cluster Vision: 35s job + relay overhead; MCP camera budget is 50s.
+constexpr int kVisionHttpTimeoutMs = 45000;
+}
+
 std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& question) {
     OwnedJpeg owned_snapshot;
     {
@@ -40,7 +45,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
         const int jpeg_height = owned_snapshot ? owned_snapshot.height : current_fb_->height;
         auto network = Board::GetInstance().GetNetwork();
         auto http = network->CreateHttp(3);
-        http->SetTimeout(20000);
+        http->SetTimeout(kVisionHttpTimeoutMs);
 
         auto close_http = [&]() { http->Close(); };
 
@@ -261,7 +266,7 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(3);
-    http->SetTimeout(20000);
+    http->SetTimeout(kVisionHttpTimeoutMs);
     std::string boundary = "----ESP32_CAMERA_BOUNDARY";
 
     http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
